@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lctrend"
+version = "0.1.0"
+description = "Ingestion and graph layer for weak technology signal discovery"
+requires-python = ">=3.9"
+dependencies = [
+    "neo4j>=5.26,<6",
+    "pydantic>=2.9,<3",
+]
+
+[project.optional-dependencies]
+ner = ["gliner>=0.2.22,<1"]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+lctrend = "lctrend.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
