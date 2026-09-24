@@ -7,11 +7,11 @@
 Первичная запись — не прямое ребро `Technology -> SOLVES -> Problem`, а узел
 `Assertion`, связанный с участниками и буквальным фрагментом-основанием.
 
-Основные узлы: `Source`, `Document`, `DocumentVersion`, `Chunk`, `Mention`,
-`Concept`, `ConceptName`, `Assertion`, `ResolutionDecision`, `ClaimGroup`,
-`EvidenceFamily`, `Contributor`, `ExternalId`, `ProcessingRun`.
+Основные узлы: `Source`, `Document`, `DocumentVersion`, `Chunk`, `Technology`,
+`Method`, `Company`, `Country`, `Assertion`, `Contributor`,
+`Organization`, `Country`, `Domain`, `ProcessingRun`.
 
-`Concept.kind`: `Technology`, `TechnicalSystem`, `Method`, `Task`, `Problem`,
+Типы извлекаемых сущностей: `Technology`, `Method`, `Task`, `Problem`,
 `ApplicationContext`, `Metric`, `Material`, `Domain`, `MarketSegment`,
 `ConceptCandidate`.
 
@@ -52,13 +52,45 @@ GLiNER подключён тонким адаптером `lctrend.ner.extract_m
 python -m pip install -e ".[ner]"
 ```
 
-NER создаёт только кандидаты `Mention`. Объединение технологий выполняется
-отдельными `ResolutionDecision`; похожесть embeddings сама по себе не означает
-идентичность.
+NER создаёт внутренние записи упоминаний, которые после разрешения сохраняются
+как связи `Chunk-[:MENTIONS]->Technology|Method|...`. Страны, университеты и компании
+не извлекаются из чанков: они берутся из структурированных метаданных и связываются
+непосредственно с `Document` через `WRITTEN_IN` и `HAS_AFFILIATION`. Координаты, исходное написание,
+confidence и способ дедупликации находятся в свойствах связи.
 
-Базовый resolver принимает автоматически только точное нормализованное
-совпадение с проверенным именем совместимого типа. Всё остальное сохраняется как
-`provisional` либо `ambiguous`, поэтому близкие технологии не сливаются молча.
+`Domain` — одна широкая нормализованная предметная область документа, например
+bioinformatics или edge computing. Она выбирается из короткого канонического
+словаря по темам источника, а не извлекается из чанков.
+Когда технология и задача явно связаны в одном предложении, создаётся
+`Technology-[:SOLVES]->Task` с цитатой-доказательством. Для отображения в Neo4j Browser
+у технологии также записывается свойство `name` с её каноническим названием.
+
+Экономические сведения создаются только для предложения, где одновременно явно
+упомянуты технология и стоимость, инвестиции, рынок, экономия или коммерциализация.
+Они хранятся как `Technology-[:HAS_ECONOMIC_EVIDENCE]->Chunk`; цитата, категория,
+сумма и валюта находятся в свойствах связи.
+
+Resolver сначала приводит имена к нижнему регистру, удаляет символы, выполняет
+лемматизацию и сопоставляет сокращения (`NLP` ↔ `natural language processing`).
+Только для оставшихся кандидатов вычисляется cosine similarity embeddings; пару
+выше `DEDUP_COSINE_THRESHOLD` дополнительно проверяет cross-encoder. Порог его
+решения задаётся `DEDUP_DECISION_THRESHOLD`.
+
+Каждая типизированная сущность хранит каноническое имя и варианты написания в
+свойствах `aliases` и `normalized_aliases`. Общего label `Concept` и отдельных
+служебных узлов `Mention`,
+`ConceptName` и `ResolutionDecision` в графе нет.
+
+Чтобы запустить NER вместе с загрузкой материала:
+
+```powershell
+python -m lctrend fetch pypi gliner --ingest --extract
+```
+
+Markdown делится по заголовкам и абзацам; длинные секции ограничиваются 1000
+символами и получают overlap до 150 символов внутри одной секции. Внешние
+идентификаторы (`doi`, `openalex`, `pypi` и другие) хранятся
+в свойстве `external_ids` документа, а не как отдельные узлы графа.
 
 ## Проверка
 

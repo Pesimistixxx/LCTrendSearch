@@ -1,5 +1,5 @@
 from lctrend.models import Concept, ConceptKind, ConceptName, Mention
-from lctrend.resolver import normalize_name, resolve_exact_mentions
+from lctrend.resolver import alias_keys, normalize_name, resolve_exact_mentions
 
 
 def mention(text="Натрий-ионный аккумулятор"):
@@ -28,7 +28,7 @@ def test_reviewed_exact_name_is_resolved():
         ],
     )
     new, decisions = resolve_exact_mentions([mention("  НАТРИЙ-ИОННЫЙ   аккумулятор ")], [concept])
-    assert not new
+    assert new == [concept]
     assert decisions[0].concept_id == "tech:sodium"
     assert decisions[0].status == "accepted"
 
@@ -44,3 +44,27 @@ def test_similar_but_distinct_technology_is_not_merged():
     assert new[0].preferred_label == "Натрий-ионный аккумулятор"
     assert new[0].status == "provisional"
     assert decisions[0].concept_id != "tech:lithium"
+
+
+def test_repeated_exact_mentions_share_one_provisional_concept():
+    first = mention("GLiNER")
+    second = mention("gliner")
+    second.mention_id = "m2"
+    new, decisions = resolve_exact_mentions([first, second], [])
+    assert len(new) == 1
+    assert decisions[0].concept_id == decisions[1].concept_id
+
+
+def test_abbreviation_and_full_name_share_one_concept():
+    first = mention("NLP")
+    second = mention("natural language processing")
+    second.mention_id = "m2"
+    concepts, decisions = resolve_exact_mentions([first, second], [])
+    assert len(concepts) == 1
+    assert decisions[0].concept_id == decisions[1].concept_id
+    assert {name.text for name in concepts[0].names} == {"NLP", "natural language processing"}
+
+
+def test_normalization_removes_symbols_and_lemmatizes():
+    assert normalize_name("  Graph-based_NER™ ") == "graph based ner"
+    assert alias_keys("models") & alias_keys("model")

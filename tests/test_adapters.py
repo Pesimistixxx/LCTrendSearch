@@ -12,7 +12,28 @@ def test_openalex_reconstructs_abstract_and_stable_identity():
         "language": "en",
         "publication_date": "2026-01-02",
         "abstract_inverted_index": {"A": [0], "new": [1], "sensor": [2]},
-        "authorships": [{"author": {"id": "https://openalex.org/A1", "display_name": "Ada"}}],
+        "authorships": [
+            {
+                "author": {"id": "https://openalex.org/A1", "display_name": "Ada"},
+                "countries": ["GB"],
+                "institutions": [
+                    {
+                        "id": "https://openalex.org/I1",
+                        "display_name": "Example University",
+                        "type": "education",
+                        "country_code": "GB",
+                    }
+                ],
+            }
+        ],
+        "topics": [
+            {
+                "domain": {
+                    "id": "https://openalex.org/domains/3",
+                    "display_name": "Physical Sciences",
+                }
+            }
+        ],
     }
     raw = json.dumps(payload, sort_keys=True).encode()
     first = parse_openalex(payload, raw)
@@ -21,6 +42,24 @@ def test_openalex_reconstructs_abstract_and_stable_identity():
     assert first.document_id == second.document_id
     assert first.document_version_id == second.document_version_id
     assert first.chunks[0].text == "A new sensor"
+    assert first.organizations[0].organization_type == "university"
+    assert first.countries[0].code == "GB"
+    assert first.domains == []
+    assert first.contributors[0].affiliation_ids == [first.organizations[0].organization_id]
+
+
+def test_openalex_maps_one_canonical_domain_from_topics():
+    document = parse_openalex(
+        {
+            "id": "https://openalex.org/W2",
+            "title": "NER for bioinformatics",
+            "topics": [
+                {"display_name": "Named entity recognition", "field": {"display_name": "Computer Science"}},
+                {"display_name": "Computational biology", "field": {"display_name": "Life Sciences"}},
+            ],
+        }
+    )
+    assert [domain.name for domain in document.domains] == ["Bioinformatics"]
 
 
 def test_github_decodes_readme_and_release():
@@ -39,7 +78,7 @@ def test_github_decodes_readme_and_release():
     document = parse_github(payload)
     assert document.document_type == DocumentType.REPOSITORY
     assert [chunk.kind for chunk in document.chunks] == ["readme", "release"]
-    assert document.contributors[0].kind == "organization"
+    assert document.organizations[0].name == "org"
 
 
 def test_pypi_extracts_description():
@@ -49,13 +88,33 @@ def test_pypi_extracts_description():
                 "name": "example-package",
                 "version": "1.2.3",
                 "description": "Package documentation",
-                "author": "Ada",
+                "author": "Ada, Grace",
+                "maintainer": "Ada",
             }
         }
     )
     assert document.document_type == DocumentType.PACKAGE
     assert document.metadata["version"] == "1.2.3"
     assert document.chunks[0].text == "Package documentation"
+    assert [person.name for person in document.contributors] == ["Ada", "Grace", "Ada"]
+    assert document.contributors[0].contributor_id == document.contributors[2].contributor_id
+
+
+def test_pypi_chunks_markdown_by_section_and_size():
+    document = parse_pypi(
+        {
+            "info": {
+                "name": "example-package",
+                "version": "1",
+                "description": "# Intro\n\nShort.\n\n## Details\n\n" + "word " * 600,
+            }
+        }
+    )
+    assert len(document.chunks) > 2
+    assert document.chunks[0].section_path == ["description", "Intro"]
+    assert document.chunks[-1].section_path == ["description", "Intro", "Details"]
+    assert all(len(chunk.text) <= 1000 for chunk in document.chunks)
+    assert any(chunk.locator["overlap_chars"] > 0 for chunk in document.chunks)
 
 
 def test_epo_parses_namespaced_xml():

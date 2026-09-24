@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ner = ["gliner>=0.2.22,<1"]
+ner = ["gliner>=0.2.22,<1", "protobuf>=5,<7", "simplemma>=1.1,<2"]
 dev = ["pytest>=8,<9"]
 
 [project.scripts]

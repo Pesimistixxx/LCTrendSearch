@@ -25,7 +25,6 @@ class DocumentType(str, Enum):
 
 class ConceptKind(str, Enum):
     TECHNOLOGY = "Technology"
-    TECHNICAL_SYSTEM = "TechnicalSystem"
     METHOD = "Method"
     TASK = "Task"
     PROBLEM = "Problem"
@@ -34,6 +33,10 @@ class ConceptKind(str, Enum):
     MATERIAL = "Material"
     DOMAIN = "Domain"
     MARKET_SEGMENT = "MarketSegment"
+    ORGANIZATION = "Organization"
+    COMPANY = "Company"
+    UNIVERSITY = "University"
+    COUNTRY = "Country"
     CANDIDATE = "ConceptCandidate"
 
 
@@ -68,6 +71,29 @@ class Contributor(BaseModel):
     kind: str = "person"
     role: str = "author"
     external_ids: List[ExternalId] = Field(default_factory=list)
+    affiliation_ids: List[str] = Field(default_factory=list)
+
+
+class Organization(BaseModel):
+    organization_id: str
+    name: str
+    organization_type: str = "other"
+    country_code: Optional[str] = None
+    role: str = "associated"
+    external_ids: List[ExternalId] = Field(default_factory=list)
+
+
+class Country(BaseModel):
+    country_id: str
+    code: str
+    name: Optional[str] = None
+    role: str = "associated"
+
+
+class Domain(BaseModel):
+    domain_id: str
+    name: str
+    external_ids: List[ExternalId] = Field(default_factory=list)
 
 
 class Chunk(BaseModel):
@@ -99,6 +125,9 @@ class DocumentEnvelope(BaseModel):
     artifact: Artifact
     identifiers: List[ExternalId] = Field(default_factory=list)
     contributors: List[Contributor] = Field(default_factory=list)
+    organizations: List[Organization] = Field(default_factory=list)
+    countries: List[Country] = Field(default_factory=list)
+    domains: List[Domain] = Field(default_factory=list)
     chunks: List[Chunk] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     coverage: str = "metadata_only"
@@ -109,6 +138,8 @@ class DocumentEnvelope(BaseModel):
         ids = [chunk.chunk_id for chunk in self.chunks]
         if len(ids) != len(set(ids)):
             raise ValueError("chunk_id must be unique within a document version")
+        if len(self.domains) > 1:
+            raise ValueError("a document may have at most one domain")
         return self
 
 
@@ -195,6 +226,20 @@ class ProcessingRun(BaseModel):
     status: str = "succeeded"
 
 
+class EconomicEvidence(BaseModel):
+    evidence_id: str
+    technology_concept_id: str
+    chunk_id: str
+    category: str
+    quote: str
+    start: int
+    end: int
+    amount_text: Optional[str] = None
+    currency: Optional[str] = None
+    confidence: float = 1.0
+    status: str = "candidate"
+
+
 class ExtractionResult(BaseModel):
     document_version_id: str
     run: ProcessingRun
@@ -202,6 +247,7 @@ class ExtractionResult(BaseModel):
     concepts: List[Concept] = Field(default_factory=list)
     assertions: List[Assertion] = Field(default_factory=list)
     resolutions: List[ResolutionDecision] = Field(default_factory=list)
+    economic_evidence: List[EconomicEvidence] = Field(default_factory=list)
 
 
 def json_value(value: Any) -> str:
@@ -237,3 +283,15 @@ def validate_extraction(document: DocumentEnvelope, result: ExtractionResult) ->
             chunk = chunks.get(evidence.chunk_id)
             if chunk is None or chunk.text[evidence.start : evidence.end] != evidence.quote:
                 raise ValueError(f"assertion {assertion.assertion_id} has invalid evidence anchor")
+
+    concept_kinds = {concept.concept_id: concept.kind for concept in result.concepts}
+    for evidence in result.economic_evidence:
+        if concept_kinds.get(evidence.technology_concept_id) != ConceptKind.TECHNOLOGY:
+            raise ValueError(
+                f"economic evidence {evidence.evidence_id} must reference a technology"
+            )
+        chunk = chunks.get(evidence.chunk_id)
+        if chunk is None or chunk.text[evidence.start : evidence.end] != evidence.quote:
+            raise ValueError(
+                f"economic evidence {evidence.evidence_id} has invalid evidence anchor"
+            )

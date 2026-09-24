@@ -7,7 +7,6 @@ from .models import ConceptKind, DocumentEnvelope, Mention, stable_id
 
 DEFAULT_LABELS: Dict[str, ConceptKind] = {
     "technology": ConceptKind.TECHNOLOGY,
-    "technical system": ConceptKind.TECHNICAL_SYSTEM,
     "method": ConceptKind.METHOD,
     "task": ConceptKind.TASK,
     "technical problem": ConceptKind.PROBLEM,
