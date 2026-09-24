@@ -82,13 +82,15 @@ class GraphStore:
             MERGE (d:Document {document_id: $document_id})
             SET d.document_type = $document_type, d.title = $title,
                 d.language = $language, d.published_at = $published_at,
+                d.created_at = $published_at,
                 d.canonical_url = $source.canonical_url,
                 d.external_ids = $external_ids
             MERGE (v:DocumentVersion {document_version_id: $version_id})
             SET v.raw_sha256 = $artifact.sha256, v.raw_uri = $artifact.uri,
                 v.media_type = $artifact.media_type, v.byte_length = $artifact.byte_length,
                 v.access_status = $artifact.access_status, v.coverage = $coverage,
-                v.quality_status = $quality_status, v.metadata_json = $metadata_json
+                v.quality_status = $quality_status, v.metadata_json = $metadata_json,
+                v.created_at = $published_at
             MERGE (d)-[:HAS_VERSION]->(v)
             MERGE (v)-[:FROM_SOURCE {record_id: $source.record_id}]->(s)
             """,
@@ -136,11 +138,16 @@ class GraphStore:
                 f"""
                 MATCH (d:Document {{document_id: $document_id}})
                 MERGE (c:Country {{country_id: $country_id}})
-                SET c.code = $code, c.name = $name
+                SET c.code = $code, c.name = $code,
+                    c.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN c.first_seen_at
+                        WHEN c.first_seen_at IS NULL OR $observed_at < c.first_seen_at THEN $observed_at
+                        ELSE c.first_seen_at END
                 MERGE (d)-[r:{relationship}]->(c)
-                SET r.source_role = $role
+                SET r.source_role = $role, r.country_code = $code, r.observed_at = $observed_at
                 """,
                 document_id=document.document_id,
+                observed_at=document.published_at,
                 **country.model_dump(),
             ).consume()
 
@@ -149,10 +156,16 @@ class GraphStore:
                 """
                 MATCH (d:Document {document_id: $document_id})
                 MERGE (x:Domain {domain_id: $domain_id})
-                SET x.name = $name, x.external_ids = $external_ids
-                MERGE (d)-[:ABOUT_DOMAIN]->(x)
+                SET x.name = $name, x.external_ids = $external_ids,
+                    x.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN x.first_seen_at
+                        WHEN x.first_seen_at IS NULL OR $observed_at < x.first_seen_at THEN $observed_at
+                        ELSE x.first_seen_at END
+                MERGE (d)-[r:ABOUT_DOMAIN]->(x)
+                SET r.observed_at = $observed_at
                 """,
                 document_id=document.document_id,
+                observed_at=document.published_at,
                 domain_id=domain.domain_id,
                 name=domain.name,
                 external_ids=[item.external_id for item in domain.external_ids],
@@ -172,11 +185,16 @@ class GraphStore:
                 MATCH (d:Document {{document_id: $document_id}})
                 MERGE (o:Organization {{organization_id: $organization_id}})
                 SET o.name = $name, o.organization_type = $organization_type,
-                    o.external_ids = $external_ids
+                    o.external_ids = $external_ids,
+                    o.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN o.first_seen_at
+                        WHEN o.first_seen_at IS NULL OR $observed_at < o.first_seen_at THEN $observed_at
+                        ELSE o.first_seen_at END
                 MERGE (d)-[r:{relationship}]->(o)
-                SET r.source_role = $role
+                SET r.source_role = $role, r.observed_at = $observed_at
                 """,
                 document_id=document.document_id,
+                observed_at=document.published_at,
                 organization_id=organization.organization_id,
                 name=organization.name,
                 organization_type=organization.organization_type,
@@ -214,16 +232,21 @@ class GraphStore:
             query = """
                 MATCH (d:Document {document_id: $document_id})
                 MERGE (c:Contributor {contributor_id: $contributor_id})
-                SET c.name = $name, c.kind = $kind, c.external_ids = $external_ids
+                SET c.name = $name, c.kind = $kind, c.external_ids = $external_ids,
+                    c.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN c.first_seen_at
+                        WHEN c.first_seen_at IS NULL OR $observed_at < c.first_seen_at THEN $observed_at
+                        ELSE c.first_seen_at END
                 MERGE (d)-[r:CONTRIBUTED_BY]->(c)
                 SET r.roles = CASE
                     WHEN $role IN coalesce(r.roles, []) THEN r.roles
-                    ELSE coalesce(r.roles, []) + $role
-                END
+                    ELSE coalesce(r.roles, []) + $role END,
+                    r.observed_at = $observed_at
                 """
             tx.run(
                 query,
                 document_id=document.document_id,
+                observed_at=document.published_at,
                 external_ids=[item.external_id for item in contributor.external_ids],
                 **contributor.model_dump(exclude={"external_ids", "affiliation_ids"}),
             ).consume()
@@ -232,10 +255,12 @@ class GraphStore:
                     """
                     MATCH (c:Contributor {contributor_id: $contributor_id})
                     MATCH (o:Organization {organization_id: $organization_id})
-                    MERGE (c)-[:AFFILIATED_WITH]->(o)
+                    MERGE (c)-[r:AFFILIATED_WITH]->(o)
+                    SET r.observed_at = $observed_at
                     """,
                     contributor_id=contributor.contributor_id,
                     organization_id=organization_id,
+                    observed_at=document.published_at,
                 ).consume()
 
         for chunk in document.chunks:
@@ -245,10 +270,12 @@ class GraphStore:
                 MERGE (c:Chunk {chunk_id: $chunk_id})
                 SET c.kind = $kind, c.text = $text, c.order = $order,
                     c.section_path = $section_path, c.locator_json = $locator_json,
-                    c.content_hash = $content_hash, c.parse_status = $parse_status
+                    c.content_hash = $content_hash, c.parse_status = $parse_status,
+                    c.created_at = $observed_at
                 MERGE (v)-[:HAS_CHUNK]->(c)
                 """,
                 version_id=document.document_version_id,
+                observed_at=document.published_at,
                 chunk_id=chunk.chunk_id,
                 kind=chunk.kind,
                 text=chunk.text,
@@ -382,12 +409,17 @@ class GraphStore:
                 SET c.kind = $kind, c.preferred_label = $preferred_label,
                     c.name = $preferred_label,
                     c.definition = $definition, c.language = $language, c.status = $status,
-                    c.aliases = $aliases, c.normalized_aliases = $normalized_aliases
+                    c.aliases = $aliases, c.normalized_aliases = $normalized_aliases,
+                    c.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN c.first_seen_at
+                        WHEN c.first_seen_at IS NULL OR $observed_at < c.first_seen_at THEN $observed_at
+                        ELSE c.first_seen_at END
                 """.replace("__LABEL__", label),
                 aliases=list(dict.fromkeys([concept.preferred_label, *(name.text for name in concept.names)])),
                 normalized_aliases=list(
                     dict.fromkeys(name.normalized_text for name in concept.names)
                 ),
+                observed_at=document.published_at,
                 **concept.model_dump(exclude={"names"}, mode="json"),
             ).consume()
 
@@ -430,9 +462,10 @@ class GraphStore:
                 SET r.surface_text = $surface_text, r.start = $start, r.end = $end,
                     r.type_candidates = $type_candidates, r.confidence = $confidence,
                     r.status = $status, r.method = $method, r.score = $score,
-                    r.basis = $basis, r.run_id = $run_id
+                    r.basis = $basis, r.run_id = $run_id, r.observed_at = $observed_at
                 """,
                 run_id=run.run_id,
+                observed_at=document.published_at,
                 concept_id=decision.concept_id,
                 method=decision.method,
                 score=decision.score,
@@ -449,7 +482,8 @@ class GraphStore:
                 MATCH (task:Task {concept_id: $task_id})
                 MERGE (technology)-[r:SOLVES {document_version_id: $version_id}]->(task)
                 SET r.chunk_id = $chunk_id, r.quote = $quote, r.start = $start, r.end = $end,
-                    r.method = 'explicit_same_sentence', r.run_id = $run_id
+                    r.method = 'explicit_same_sentence', r.run_id = $run_id,
+                    r.observed_at = $observed_at
                 """,
                 technology_id=technology_id,
                 task_id=task_id,
@@ -459,6 +493,7 @@ class GraphStore:
                 end=end,
                 version_id=document.document_version_id,
                 run_id=run.run_id,
+                observed_at=document.published_at,
             ).consume()
 
         for evidence in result.economic_evidence:
@@ -470,9 +505,11 @@ class GraphStore:
                 SET r.category = $category, r.quote = $quote,
                     r.start = $start, r.end = $end,
                     r.amount_text = $amount_text, r.currency = $currency,
-                    r.confidence = $confidence, r.status = $status, r.run_id = $run_id
+                    r.confidence = $confidence, r.status = $status, r.run_id = $run_id,
+                    r.observed_at = $observed_at
                 """,
                 run_id=run.run_id,
+                observed_at=document.published_at,
                 **evidence.model_dump(),
             ).consume()
 
@@ -487,12 +524,14 @@ class GraphStore:
                     a.modality = $modality, a.attribution_kind = $attribution_kind,
                     a.evidence_kind = $evidence_kind,
                     a.extraction_confidence = $extraction_confidence,
-                    a.verification_status = $verification_status, a.status = $status
+                    a.verification_status = $verification_status, a.status = $status,
+                    a.observed_at = $observed_at
                 MERGE (v)-[:HAS_ASSERTION]->(a)
                 MERGE (r)-[:CREATED]->(a)
                 """,
                 version_id=document.document_version_id,
                 run_id=run.run_id,
+                observed_at=document.published_at,
                 qualifiers_json=json_value(assertion.qualifiers),
                 values_json=json_value(assertion.values),
                 **assertion.model_dump(

@@ -14,7 +14,7 @@ from lctrend.models import (
     SourceRef,
     validate_extraction,
 )
-from lctrend.ner import extract_mentions
+from lctrend.ner import DEFAULT_LABELS, extract_mentions
 
 
 def document():
@@ -79,3 +79,7 @@ def test_gliner_adapter_anchors_model_output():
     mentions = extract_mentions(document(), FakeModel())
     assert mentions[0].surface_text == "Сенсор S"
     assert mentions[0].type_candidates == [ConceptKind.TECHNOLOGY]
+
+
+def test_chunk_ner_does_not_extract_document_metadata_domains():
+    assert "domain" not in DEFAULT_LABELS

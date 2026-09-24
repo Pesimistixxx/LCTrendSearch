@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 USER_AGENT = "LCTrendSearch/0.1 (+local research project)"
@@ -25,8 +25,25 @@ def fetch_openalex(work_id: str, mailto: Optional[str] = None) -> Dict[str, Any]
     return fetch_json(url)
 
 
+def fetch_openalex_page(
+    search: str, cursor: str = "*", per_page: int = 100, mailto: Optional[str] = None
+) -> Dict[str, Any]:
+    params = {"search": search, "cursor": cursor, "per-page": per_page}
+    if mailto:
+        params["mailto"] = mailto
+    return fetch_json("https://api.openalex.org/works?" + urllib.parse.urlencode(params))
+
+
 def fetch_pypi(package: str) -> Dict[str, Any]:
     return fetch_json(f"https://pypi.org/pypi/{urllib.parse.quote(package, safe='')}/json")
+
+
+def fetch_pypi_projects() -> List[str]:
+    payload = fetch_json(
+        "https://pypi.org/simple/",
+        {"Accept": "application/vnd.pypi.simple.v1+json"},
+    )
+    return [str(project["name"]) for project in payload["projects"]]
 
 
 def fetch_github(repository: str, token: Optional[str] = None) -> Dict[str, Any]:

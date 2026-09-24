@@ -56,6 +56,8 @@ def test_document_projection_builds_queries_without_dynamic_cypher_errors():
     assert any("HAS_AFFILIATION" in query for query, _ in tx.queries)
     assert any("WRITTEN_IN" in query for query, _ in tx.queries)
     assert any("SET o:University" in query for query, _ in tx.queries)
+    assert any("first_seen_at" in query for query, _ in tx.queries)
+    assert any("observed_at" in query for query, _ in tx.queries)
     document_query = next(parameters for query, parameters in tx.queries if "MERGE (d:Document" in query)
     assert document_query["external_ids"] == ["openalex:w1"]
 
@@ -101,7 +103,11 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
         ],
     )
     GraphStore._write_extraction(
-        tx, type("Doc", (), {"document_version_id": "v1", "chunks": []})(), result
+        tx,
+        type(
+            "Doc", (), {"document_version_id": "v1", "published_at": None, "chunks": []}
+        )(),
+        result,
     )
     queries = "\n".join(query for query, _ in tx.queries)
     assert "ConceptName" not in queries
@@ -110,6 +116,8 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
     assert "MERGE (chunk)-[r:MENTIONS" in queries
     assert "MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE" in queries
     assert "c.name = $preferred_label" in queries
+    assert "c.first_seen_at" in queries
+    assert "r.observed_at" in queries
     assert ":Mention" not in queries
 
 

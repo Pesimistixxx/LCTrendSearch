@@ -81,10 +81,11 @@ Resolver сначала приводит имена к нижнему регис
 служебных узлов `Mention`,
 `ConceptName` и `ResolutionDecision` в графе нет.
 
-Чтобы запустить NER вместе с загрузкой материала:
+NER запускается вместе с `--ingest` для любого поддержанного типа документа.
+Для быстрого импорта только метаданных используйте `--no-extract`:
 
 ```powershell
-python -m lctrend fetch pypi gliner --ingest --extract
+python -m lctrend fetch pypi gliner --ingest --no-extract
 ```
 
 Markdown делится по заголовкам и абзацам; длинные секции ограничиваются 1000

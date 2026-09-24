@@ -24,7 +24,7 @@ from .models import (
 DOMAIN_RULES = (
     ("Bioinformatics", ("bioinformatics", "computational biology", "genomics")),
     ("Edge computing", ("edge computing", "fog computing", "edge ai")),
-    ("Artificial intelligence", ("artificial intelligence", "machine learning", "natural language", "computer vision", "deep learning")),
+    ("Artificial intelligence", ("artificial intelligence", "machine learning", "natural language", "computer vision", "deep learning", "named entity recognition", "ner")),
     ("Robotics", ("robotics", "robotic")),
     ("Cybersecurity", ("cybersecurity", "computer security", "information security")),
     ("Quantum computing", ("quantum computing", "quantum information")),
@@ -33,15 +33,22 @@ DOMAIN_RULES = (
 )
 
 
+def _domain_from_values(values: Iterable[Any]) -> Optional[Domain]:
+    text = " ".join(str(value).casefold() for value in values)
+    for name, aliases in DOMAIN_RULES:
+        if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases):
+            return Domain(domain_id=stable_id("domain", name), name=name)
+    return None
+
+
 def _domain_from_topics(topics: Iterable[Mapping[str, Any]]) -> Optional[Domain]:
     """Choose one canonical broad domain from source-ranked OpenAlex topics."""
     for topic in topics:
         values = [topic.get("display_name", "")]
         values.extend((topic.get(key) or {}).get("display_name", "") for key in ("subfield", "field", "domain"))
-        text = " ".join(str(value).casefold() for value in values)
-        for name, aliases in DOMAIN_RULES:
-            if any(alias in text for alias in aliases):
-                return Domain(domain_id=stable_id("domain", name), name=name)
+        domain = _domain_from_values(values)
+        if domain:
+            return domain
     return None
 
 
@@ -346,6 +353,20 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
     document_id = stable_id("document", "pypi", name.lower())
     version_id = stable_id("version", document_id, version, _bytes_hash(raw))
     canonical_url = info.get("package_url") or f"https://pypi.org/project/{name}/"
+    uploaded_at = sorted(
+        item["upload_time_iso_8601"]
+        for item in payload.get("urls") or []
+        if item.get("upload_time_iso_8601")
+    )
+    domain = _domain_from_values(
+        [name, info.get("summary") or "", *(info.get("classifiers") or [])]
+    )
+    country_code = str(info.get("country_code") or info.get("country") or "").upper()
+    countries = (
+        [Country(country_id=stable_id("country", country_code), code=country_code, role="metadata")]
+        if re.fullmatch(r"[A-Z]{2}", country_code)
+        else []
+    )
     description = info.get("description") or info.get("summary") or ""
     chunks = _markdown_chunks(version_id, "description", description) if description else []
     for chunk in chunks:
@@ -371,6 +392,7 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
         document_version_id=version_id,
         document_type=DocumentType.PACKAGE,
         title=name,
+        published_at=uploaded_at[0] if uploaded_at else None,
         source=SourceRef(
             source_id="source:pypi",
             name="PyPI",
@@ -381,6 +403,8 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
         artifact=_artifact(canonical_url, raw, "application/json"),
         identifiers=[ExternalId(scheme="pypi", value=name)],
         contributors=contributors,
+        countries=countries,
+        domains=[domain] if domain else [],
         chunks=chunks,
         metadata={
             "version": version,
@@ -388,6 +412,7 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
             "classifiers": info.get("classifiers") or [],
             "project_urls": info.get("project_urls") or {},
             "requires_python": info.get("requires_python"),
+            "country_status": "provided" if countries else "unavailable",
         },
         coverage="full_text" if chunks else "metadata_only",
     )
