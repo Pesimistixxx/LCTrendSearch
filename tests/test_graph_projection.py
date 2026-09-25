@@ -56,6 +56,7 @@ def test_document_projection_builds_queries_without_dynamic_cypher_errors():
     assert any("HAS_AFFILIATION" in query for query, _ in tx.queries)
     assert any("WRITTEN_IN" in query for query, _ in tx.queries)
     assert any("SET o:University" in query for query, _ in tx.queries)
+    assert any("metrics_json" in query for query, _ in tx.queries)
     assert any("first_seen_at" in query for query, _ in tx.queries)
     assert any("observed_at" in query for query, _ in tx.queries)
     document_query = next(parameters for query, parameters in tx.queries if "MERGE (d:Document" in query)

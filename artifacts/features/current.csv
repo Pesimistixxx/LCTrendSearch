@@ -1,0 +1,228 @@
+technology_id,technology,snapshot_date,first_seen_date,technology_age_days,document_count,mention_count,documents_last_year,publication_growth,citation_count,country_count,company_count,university_count,domain_count,source_type_diversity,independence_group_diversity,task_count,new_relation_count,patent_data_available,repository_data_available,economic_data_available
+concept:757483a9b69f44332b4ffb81,Robotics,2026-09-25,1995-11-01,11286,1,1,0,0.0,22186.0,1,0,2,1,1,1,0,0,False,False,False
+concept:507f940f099664824246f37f,Intelligent Agents,2026-09-25,1995-11-01,11286,2,2,1,1.0,22186.0,1,0,2,1,2,2,0,0,False,False,False
+concept:232517a8a0a3ff8e47f2b4b7,Logical Reasoning Systems,2026-09-25,1995-11-01,11286,1,1,0,0.0,22186.0,1,0,2,1,1,1,0,0,False,False,False
+concept:a58cc94e24bfdc2541b45a6c,artificial intelligence,2026-09-25,1995-11-01,11286,18,21,0,0.0,76471.0,17,6,41,2,1,1,0,0,False,False,False
+concept:68f294dcff0efbc362cf0fb6,Probabilistic Reasoning Systems,2026-09-25,1995-11-01,11286,1,1,0,0.0,22186.0,1,0,2,1,1,1,0,0,False,False,False
+concept:989a4aab666f6b441385f150,embedded computer systems,2026-09-25,2020-01-01,2459,1,1,0,0.0,3954.0,1,0,2,1,1,1,0,0,False,False,False
+concept:e82564997643b101c4362ed9,AI,2026-09-25,1995-01-01,11590,20,108,0,0.0,60069.0,18,6,45,3,1,1,4,0,False,False,False
+concept:9b4ca3812bac77180fe8ef5e,web-based chatbots,2026-09-25,2020-01-01,2459,1,1,0,0.0,3954.0,1,0,2,1,1,1,0,0,False,False,False
+concept:8a6318de5ab8c0518cb871f9,humanoid robots,2026-09-25,2020-01-01,2459,1,1,0,0.0,3954.0,1,0,2,1,1,1,0,0,False,False,False
+concept:4e60095b96effc1b6bc39ac1,web-based and online intelligent education systems,2026-09-25,2020-01-01,2459,1,1,0,0.0,3954.0,1,0,2,1,1,1,0,0,False,False,False
+concept:7b006eb9d6c816dbab332157,AIEd,2026-09-25,2019-10-27,2525,1,5,0,0.0,6730.0,1,0,1,1,1,1,0,0,False,False,False
+concept:8a87a2a5aa4c0627791eef10,Artificial Intelligence in Education,2026-09-25,2019-10-27,2525,1,1,0,0.0,6730.0,1,0,1,1,1,1,0,0,False,False,False
+concept:2b361ef6b0b56f5fbd443528,intelligent tutoring systems,2026-09-25,2019-10-27,2525,1,1,0,0.0,6730.0,1,0,1,1,1,1,0,0,False,False,False
+concept:edc88a12627914eaaf2d8d7e,AI-based systems,2026-09-25,2018-01-01,3189,2,3,0,0.0,8433.0,4,0,3,1,1,1,1,0,False,False,False
+concept:a621113fec271b7521517a16,multiagent systems,2026-09-25,2000-07-31,9552,1,1,0,0.0,3470.0,1,0,1,1,1,1,0,0,False,False,False
+concept:f57ee390f865bed9e02e0ca6,contemporary distributed artificial intelligence,2026-09-25,2000-07-31,9552,1,1,0,0.0,3470.0,1,0,1,1,1,1,0,0,False,False,False
+concept:af60a358f5fafc529be0109d,automation,2026-09-25,2021-01-01,2093,1,5,0,0.0,2479.0,2,0,2,0,1,1,1,0,False,False,False
+concept:a9905c83cba1e32c852164f4,robot,2026-09-25,2020-03-26,2374,1,1,0,0.0,2758.0,2,0,2,1,1,1,0,0,False,False,False
+concept:c33d81184f664affc48f859a,embedded,2026-09-25,2020-03-26,2374,1,1,0,0.0,2758.0,2,0,2,1,1,1,0,0,False,False,False
+concept:15a4f96c4c7e030500d42a46,evolutionary computation,2026-09-25,2001-01-01,9398,2,2,0,0.0,4608.0,2,0,2,2,1,1,0,0,False,False,False
+concept:3f9732df41133f5720b94512,rule-based expert systems,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:5f9c57a691fbf3b54840588e,frame-based expert systems,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:e0de227ef07b77ea82e27c8a,artificail neural networks,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:432c2c9f2de944b0cccb035f,knowledge engineering,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:39d7c976a1a021dbfb7c91de,fuzzy expert systems,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:e6955161262e3c6710d72260,data mining,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:ed90c09a05fafc70ae1d3030,hybrid intelligent systems,2026-09-25,2001-01-01,9398,1,1,0,0.0,2208.0,0,0,0,1,1,1,0,0,False,False,False
+concept:92e665c9b4288a7d9df6151f,mechanical AI,2026-09-25,2020-11-04,2151,2,8,0,0.0,4081.0,5,0,4,1,1,1,0,0,False,False,False
+concept:08a310b96213c7c3b6313af7,feeling AI,2026-09-25,2020-11-04,2151,1,2,0,0.0,1913.0,2,0,2,1,1,1,0,0,False,False,False
+concept:ee81d1e657170e01d92420b6,mobile computing,2026-09-25,2019-06-12,2662,1,1,0,0.0,2400.0,2,0,2,1,1,1,0,0,False,False,False
+concept:895cb5682803c91d2a48f8b7,clinical decision support systems,2026-09-25,2020-11-30,2125,1,2,0,0.0,2168.0,3,0,2,1,1,1,0,0,False,False,False
+concept:38002d9f16e5cb7bce53dd35,GMAI,2026-09-25,2023-04-12,1262,1,2,0,0.0,1938.0,2,0,4,1,1,1,0,0,False,False,False
+concept:27fac0505f204745d9152794,deep learning,2026-09-25,2019-11-19,2502,3,6,0,0.0,2424.0,2,1,1,2,2,2,0,0,False,False,False
+concept:c95a75b746a0b3c047a2f3ef,mcp,2026-09-25,2026-08-13,43,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:fdf0703ffd1d6a892072b8d7,PaddleOCR,2026-09-25,2026-07-21,66,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d71b7abe0a910a936e88bffb,GPU,2026-09-25,2026-02-27,210,2,4,2,2.0,0.0,0,0,0,2,1,1,0,2,False,False,False
+concept:e19fb903ddaf4fadaf4b7b05,git,2026-09-25,2024-12-15,649,3,3,1,0.5,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:10a9bb8cde6d3610af3d3003,cv2,2026-09-25,2026-07-21,66,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:45b44ed1f364816cebe86fba,bilateral pre-filtering,2026-09-25,2026-07-21,66,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:ed36666d9e7a0bff721d5580,Config,2026-09-25,2026-07-21,66,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:cbe8c9f4c07eae25778cf701,analytics,2026-09-25,2019-11-19,2502,1,2,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:2741ef952ca4c9c97c829365,XGBoost,2026-09-25,2019-11-19,2502,1,2,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:5c7eb4aa29d7ae718141765e,NLP,2026-09-25,2019-11-19,2502,1,1,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:c9206a65d41d0e312117334f,Feature Learning,2026-09-25,2019-11-19,2502,1,1,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:046071781d18d624c0cec55d,Big Data,2026-09-25,2019-11-19,2502,1,1,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:d0ad012d4e7d91d988e44b17,machine learning,2026-09-25,2019-11-19,2502,2,2,1,1.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:8b641a28ba35ae3dbd7368f2,Travis-CI,2026-09-25,2019-11-19,2502,2,2,1,1.0,0.0,0,0,0,2,1,1,0,1,False,False,False
+concept:3c79891a4d2eecb69684fefd,CI,2026-09-25,2019-11-19,2502,1,1,0,0.0,0.0,0,0,0,1,1,1,0,0,False,False,False
+concept:1e4196bee0d3b50cc5ef9518,Go,2026-09-25,2026-09-12,13,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:e695269e1b074f8082fc7cfc,Java,2026-09-25,2026-09-12,13,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:462e2bd34dfaa433babcff9f,Python,2026-09-25,2021-09-13,1838,6,8,2,2.0,0.0,0,0,0,1,1,1,1,1,False,False,False
+concept:ea330832f74a70e7e08e6d10,Typescript,2026-09-25,2026-09-12,13,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:50a9c7ee6832b9b0b326769f,NPM,2026-09-25,2026-09-12,13,1,3,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:218a4908bd98d14f9c1404ab,npmjs,2026-09-25,2026-09-12,13,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:acc04edf4a868557e52c7f9a,PyPI,2026-09-25,2020-09-14,2202,10,41,4,4.0,0.0,0,0,0,3,1,1,0,2,False,False,False
+concept:3dab09f175ca16240c7aa5da,MongoClient,2026-09-25,2016-05-18,3782,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d12d62e94e636df1a231cf64,Mongodb,2026-09-25,2016-05-18,3782,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f5f3cceef6eccfb98889f74b,SQLite,2026-09-25,2022-05-31,1578,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:3b4aaf976283c5213fe8de04,datetime,2026-09-25,2022-05-31,1578,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:71f20cf72137ccc2fea4d20d,C#,2026-09-25,2026-07-02,85,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:90125bc4dd696bfce618837b,.NET,2026-09-25,2026-07-02,85,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6af3359eb32ce52fc1cd101a,s3fs,2026-09-25,2022-12-23,1372,3,15,2,2.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:71d199cfa24807d16468bb07,bash,2026-09-25,2026-08-28,28,3,3,3,3.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:eaf9b23153b5758e4cfd15c3,EzSort,2026-09-25,2026-09-16,9,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:3b2d4da5d2ccb83b691d5627,HBT_IP Messaging Protocol,2026-09-25,2020-10-08,2178,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:ec64b5101e5ec7f3c30109f1,IBM VPC infrastructure,2026-09-25,2023-02-25,1308,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d2f6699a7982b3ebcecf2d4f,Ray cluster,2026-09-25,2023-02-25,1308,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:81519dc72dc462a2fddd2da9,Redis,2026-09-25,2023-02-25,1308,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:21c6f8f8e7b5c004bf6d0041,vpc,2026-09-25,2023-02-25,1308,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:c49a0688fdd5bb599ae71b77,ipycanvas,2026-09-25,2025-12-11,288,1,14,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:33ba7657fc9a29ca87cef500,Interactive Canvas,2026-09-25,2025-12-11,288,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d9bfce3c10bde4c8859c651a,Canvas API,2026-09-25,2025-12-11,288,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:0d72973ec204b2de114079d2,NumPy,2026-09-25,2022-04-27,1612,2,8,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:84e2f59a2da0e5349c6afc9c,ipycanvas_sprites,2026-09-25,2025-12-11,288,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:b70fc8bcf23f19ef4a94a176,OpenAI,2026-09-25,2026-01-09,259,2,10,2,2.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:aa099bb0c65af656be26f7b9,Google,2026-09-25,2026-01-09,259,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:ef03975a84aa5cc2813ebe09,webserver,2026-09-25,2024-12-15,649,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:70bc6b0ee0ca9c7c0d58a68c,conda,2026-09-25,2024-12-15,649,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:767769863bf8ec547a481ff7,pip,2026-09-25,2022-04-27,1612,8,17,4,4.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:827c9269ab5737f7fe63eabf,Linux,2026-09-25,2024-12-15,649,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d7373f464a79dabff394c15e,Docker,2026-09-25,2021-12-10,1750,3,11,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d0ebcd728f893da8bb148461,venv,2026-09-25,2024-01-15,984,2,7,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:7f4672c4c02ee6db236169ec,SMBFS,2026-09-25,2024-01-15,984,1,3,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:22e8b74dabc51117c68bde4e,TCP,2026-09-25,2024-01-15,984,1,3,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:0f3c527ffe17d0c1a1a32f3f,NetBIOS,2026-09-25,2024-01-15,984,1,4,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:269e00fbb47f0f5efcc3ae7c,SMB,2026-09-25,2024-01-15,984,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6b7e8b4fef1e69b5a9df3726,Web Components,2026-09-25,2026-08-28,28,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:5ab6a5186a80babf1dcfadd5,Shadow DOM,2026-09-25,2026-08-28,28,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f4c5b80e9071f8bc18c1f934,Panda3D,2026-09-25,2023-05-28,1216,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d9c0e0553205d787ab4e72ee,WASD,2026-09-25,2023-05-28,1216,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:daa1d0916553bfce79e6b1ba,USB HIDs,2026-09-25,2023-05-28,1216,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d8e761112904921a1525ba02,ML Platform,2026-09-25,2025-08-11,410,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6e8939b8422b6490506b770a,Word2Vec,2026-09-25,2020-08-11,2236,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:3289e84873947fbea3d59102,fastText embeddings,2026-09-25,2020-08-11,2236,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d70c437f9a5568cc2b835bf5,GloVe,2026-09-25,2020-08-11,2236,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:727053f0d8f6dcceae66a30a,AllenNLP,2026-09-25,2020-08-11,2236,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:4f15985293d35e0b0d7e8847,python package,2026-09-25,2024-03-19,920,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:32df07164c685fc84f07d54c,Rucio server,2026-09-25,2024-12-06,658,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d62c5d4a63cf608e2cf75d57,TecoRoute Proxy,2026-09-25,2021-12-10,1750,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6844625efd9d1f65df2eb6e3,tecoroute-proxy.cze.tech,2026-09-25,2021-12-10,1750,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:bc1f7550eb5ed63af4eaab81,Docker Hub,2026-09-25,2021-12-10,1750,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:b1a258fbe45ce3121b7eb113,Kubernetes,2026-09-25,2021-12-10,1750,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:b1c2e00aac28893c81a3e603,xarray,2026-09-25,2026-09-21,4,1,8,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:02261ea3a1b968ea16377a48,FastAPI,2026-09-25,2026-09-21,4,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:416b9c7a6dff08829a5f711d,api,2026-09-25,2026-09-21,4,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6e8c68df65120fd290c13acc,Zarr,2026-09-25,2026-09-21,4,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:6c8720e13b58c317e7794e16,NetCDF,2026-09-25,2026-09-21,4,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:bcf5e0fdc60b14d2c86b5670,gcsfs,2026-09-25,2026-09-21,4,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:bdd79e4e7f84a862365d9dcf,fsspec,2026-09-25,2026-09-21,4,1,2,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f90aa6ba99b493e2e2da13c5,h5netcdf,2026-09-25,2026-09-21,4,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f57ad1879868eb982fed3240,aiohttp,2026-09-25,2026-09-21,4,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f326c0e55a106d007da1e6a7,ktransformers,2026-09-25,2026-09-06,19,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a767a414d68c07802aab7dfa,lktransformers,2026-09-25,2026-09-06,19,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:11f0a43211b7c7d6c9fb3096,avx2,2026-09-25,2026-09-06,19,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:3062bad364d011289ff6d483,avx512_base,2026-09-25,2026-09-06,19,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:e9ebd0051eb7838c1c340958,Apache-2.0,2026-09-25,2026-09-06,19,2,2,2,2.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:ac7740564288b6b79ee33507,amc,2026-09-25,2021-09-13,1838,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:7598a4911ab11dbc4ca11c5c,Pygame-ce,2026-09-25,2026-08-05,51,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:13928445ddbb769d3ed4bfed,Tiled,2026-09-25,2026-08-05,51,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:3e6b9f548eb43a6c37da4170,Hypermodern Python,2026-09-25,2024-07-21,796,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:235d5fd465b44fe2615a604a,flask,2026-09-25,2024-09-23,732,1,6,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:d28e76383d5896432e493b8a,Apache Maven,2026-09-25,2026-01-16,252,1,1,1,1.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:606c41e71cbe8f12f4a1e713,Matplotlib,2026-09-25,2022-04-27,1612,2,7,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:29401a92663579d4bf355792,Tensor-Graph-based Network,2026-09-25,2022-04-27,1612,1,2,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:55f738b189eb5ff5138f8352,Loss Functions,2026-09-25,2022-04-27,1612,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:5bf297cff6cb2bcdca24724c,Auto-Encoder,2026-09-25,2022-04-27,1612,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:f2ee01e8a0e882b03f976b20,WebP,2026-09-25,2025-03-16,558,1,1,0,0.0,0.0,0,0,0,0,1,1,0,0,False,False,False
+concept:9e7b176ae2e1bbc42b6ea740,Transformer-based computer vision,2026-09-25,2020-10-22,2164,5,11,0,0.0,67185.0,7,3,12,1,1,1,3,0,False,False,False
+concept:125d91631c0d99470a7b4053,convolutional networks,2026-09-25,2020-10-22,2164,2,4,0,0.0,25180.0,5,1,5,1,1,1,0,0,False,False,False
+concept:def96c1fcd910c9522897619,CNNs,2026-09-25,2020-10-22,2164,1,1,0,0.0,22039.0,2,1,0,1,1,1,1,0,False,False,False
+concept:468878ff62f21c2e9d5feda6,Transformer architecture,2026-09-25,2020-10-22,2164,1,1,0,0.0,22039.0,2,1,0,1,1,1,1,0,False,False,False
+concept:9adf374629dc942b272b8c47,Transformer-based natural language processing,2026-09-25,2020-10-22,2164,2,2,0,0.0,26218.0,4,2,1,1,1,1,1,0,False,False,False
+concept:19a00ed07f9ae97caff1a764,Transformer,2026-09-25,2022-01-06,1723,3,22,1,1.0,7320.0,5,1,6,2,2,2,1,1,False,False,False
+concept:380734e22ee95fa71d7eb8c7,Transformer models,2026-09-25,2022-01-06,1723,1,1,0,0.0,3141.0,4,0,5,1,1,1,0,0,False,False,False
+concept:f72439ab37d38180970b5bb2,recurrent networks,2026-09-25,2022-01-06,1723,1,1,0,0.0,3141.0,4,0,5,1,1,1,0,0,False,False,False
+concept:263389bb904c8d7e5fdfd58f,Transformer networks,2026-09-25,2022-01-06,1723,1,1,0,0.0,3141.0,4,0,5,1,1,1,0,0,False,False,False
+concept:27986ddde3cf5a31b8494255,Long short-term memory,2026-09-25,2022-01-06,1723,1,1,0,0.0,3141.0,4,0,5,1,1,1,0,0,False,False,False
+concept:6a45c9e873bf22361c443ea7,"computer
+vision",2026-09-25,2026-09-09,16,2,2,2,2.0,0.0,0,0,0,2,1,1,0,2,False,False,False
+concept:c44afe51403faaf58e53e68f,torch,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a419b371ee96edc2ee3b3d3f,VideoMAE,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:55abf6f46c226badaaf8ac0f,uv,2026-09-25,2026-09-09,16,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:f67e67667425d2a4dbde4948,PyTorch,2026-09-25,2026-02-27,210,4,25,4,4.0,0.0,0,0,0,3,1,1,0,3,False,False,False
+concept:950b2a566e82a7ed9ac1ac55,GLM-ASR,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:250ef49cb9ac0959655baace,JAX,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d9a08df542322af77dbf76ad,TF2.0,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d8121dc4b5309dbb1756a9a1,Apache,2026-09-25,2026-09-09,16,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:86f739a1013ae787c53ce5e2,Pipeline,2026-09-25,2026-09-09,16,1,4,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:282e28872c9d43c1e23fd8ca,Muon,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:99facd3994c03dd7d4c15e04,EfficientNet-X,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:4c64cc7e0e8dcf8a67dc10cc,GhostNet-V2,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:adc59cd97dc159bc5b42d411,GCViT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:2cb89a78351e13e96f135c78,GhostNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:fd7697609a0f63fcee2c4feb,gMLP,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:7d9e6edc4e661b6934890f43,GPU-Efficient Networks,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:c85c8791e3655716bfa6e099,FocalNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a9c10ef32be440c2442dc47e,LayerScale,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:cdafcdf122bcab868538bea7,LayerScale2d,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:06c377cac32dea5f0092d092,XLA,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:82cfff87ff536076cf1e492c,ImageNet,2026-09-25,2026-02-27,210,3,15,3,3.0,0.0,0,0,0,2,1,1,0,2,False,False,False
+concept:31c42dda21f2c7cffef78556,SSL,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:31febaa01a49b1e7a5dbbf01,ViT,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:696afdb9b93aa4ac784d84c3,DINO,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a2b0b31c9a5a96d1220d896d,SigLIP,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a1e3a2ab48965d51c734332f,MAE,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:e72c5220931fe8f04992d541,AIMv2,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:945a33c0d6fe190fb91097cb,DINOv2,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:813d08d9649fae0b749e8adb,BEiT3,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a25111bdc76227fbc405465b,DropBlock,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:9eef867f980763f505986a63,DropPath,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:0203b979ba0545524f3a5170,Blur Pooling,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:bf616e8f98fc9f33a8b605bb,logits,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,1,1,False,False,False
+concept:2b4608da60072e27fccc3108,layers,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:81d726c055d100c201a4bf48,tensorflow,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:702a691772421af14acb92b5,XCiT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:159ec68ecb199506e75475cb,Xception,2026-09-25,2026-09-22,3,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:47edfcc709a7f74eb65132a1,ViTamin,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d3706052fbfaa0bb0b500e6a,Python 3.13,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d3d2f24ace6e8bec70cb389a,fastai,2026-09-25,2026-09-22,3,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:5d93ccdde2b2fecce0d1b49e,ResNet,2026-09-25,2026-09-22,3,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:0192210ae860a42f2bd32c07,ONNX,2026-09-25,2026-09-22,3,2,2,2,2.0,0.0,0,0,0,2,1,1,0,2,False,False,False
+concept:5bcc013cec7503114b1a265d,TensorRT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:213d1ae89d4b656a2de8231a,LiteRT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:68327316d296e804d49e6763,CoreML,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:2ebe632e1da424f93a75bf62,timmx,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:2608070ca7e0651ae331fda3,Semantic,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:13527e82ebb0f389cfc6d85e,Detectron2,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:37b6d578acf247ee9623726c,ConvNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:98847056029a1a691f615821,Lambda Networks,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:3733eec5658e637dce8fd27b,HGNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:e01d39ad3c4e5fce659af4d2,LCNet-V2,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:2411b760ad30f11a62096546,NVIDIA DDP,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:8580e0a0f2807c9bf8769fdc,CPUBone,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:dd30147a510e6b6c70623f26,MobileNetV5,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:860e78c380c201b65517308b,MobileViT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:60d346f9a6c79ffa860f7312,MBConvNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:e8d467b36cd5547a6bfca44a,LCNet,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:1223e2ac9a4a35af198eef76,NASNet-A,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:22bdfc64d14d7cad9f8e6d0b,MobileNet-V3,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:b578f7a13338715eb3c75539,MobileNetV4,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:6f335209babe8e9e49b669a5,adamc,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:584aa5e8fbaaa279bc1d43bc,adam,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:830e1c55afb79b6475d24289,adadelta,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:9f84916ce9427620566474ac,adamw,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:d9dda0f88de6318257738de2,rmsprop,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:bf6a669725a8f84ab9031d5c,adagrad,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:3de54578645dc9489d74df06,sgd,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:c3c1ca97dbd783000a92b265,DINOv3-style,2026-09-25,2026-09-22,3,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:5fd9d36e1ed66c823cbe7592,MIT,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:a4de4ce01b5d24ddd6dd05d8,DiffParallelScalingBlock,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:e20bccbbff3cf78313db050f,ParallelScalingBlock,2026-09-25,2026-09-22,3,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:0b7aaf3351b11b1affb14bae,CLI,2026-09-25,2026-09-25,0,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:36312e6cc20fc4abe29afbc0,OBB,2026-09-25,2026-09-25,0,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:049e9e65a7ca379f9f9b8060,YOLO,2026-09-25,2026-09-25,0,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:4fe8b504125853e9d8f6feaf,Ultralytics active learning integrations,2026-09-25,2026-09-25,0,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:2bf065908972adc6368c99c7,Ultralytics Integrations,2026-09-25,2026-09-25,0,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:6f523117258268602013ea37,Cityscapes,2026-09-25,2026-09-25,0,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:29ec6668580148d800974d84,model,2026-09-25,2026-09-25,0,1,2,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:85f263772bd3383fb46da1f3,DOTAv1,2026-09-25,2026-09-25,0,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:522ebb5c00be844702c7da64,text encoder,2026-09-25,2026-02-27,210,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:635ad00a86663c5cac2dd4e6,pre-trained language models,2026-09-25,2026-02-27,210,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:71e38b45a54905edc3d46d03,OpenCLIP,2026-09-25,2026-02-27,210,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:12d73737aaa57df6e3aabc52,YFCC,2026-09-25,2026-02-27,210,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:ffa324799151fda4b2ad854c,CoCa,2026-09-25,2026-02-27,210,1,4,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:ead457e5d565e585335b1b2c,tensorboard,2026-09-25,2026-02-27,210,1,3,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:17e44767683019682e72f41f,SLURM,2026-09-25,2026-02-27,210,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False
+concept:8d80c936d959c1084765eb91,SLURM clusters,2026-09-25,2026-02-27,210,1,1,1,1.0,0.0,0,0,0,1,1,1,0,1,False,False,False

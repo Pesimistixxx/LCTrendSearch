@@ -59,7 +59,8 @@ def test_openalex_maps_one_canonical_domain_from_topics():
             ],
         }
     )
-    assert [domain.name for domain in document.domains] == ["Artificial intelligence"]
+    assert [domain.name for domain in document.domains] == ["Natural language processing"]
+    assert document.domains[0].parent_name == "Artificial intelligence"
 
 
 def test_github_decodes_readme_and_release():
@@ -99,7 +100,7 @@ def test_pypi_extracts_description():
     assert document.document_type == DocumentType.PACKAGE
     assert document.metadata["version"] == "1.2.3"
     assert document.published_at == "2026-01-02T03:04:05Z"
-    assert [domain.name for domain in document.domains] == ["Artificial intelligence"]
+    assert [domain.name for domain in document.domains] == ["Natural language processing"]
     assert [country.code for country in document.countries] == ["US"]
     assert document.chunks[0].text == "Package documentation"
     assert [person.name for person in document.contributors] == ["Ada", "Grace", "Ada"]

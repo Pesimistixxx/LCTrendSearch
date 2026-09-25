@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .adapters import parse_epo, parse_github, parse_openalex, parse_pypi
 from .connectors import (
@@ -21,6 +21,7 @@ from .graph import GraphStore
 from .models import ExtractionResult, ProcessingRun, stable_id
 from .ner import extract_mentions
 from .resolver import SemanticDeduplicator, resolve_mentions
+from .training import build_feature_rows, build_training_rows, write_feature_rows, write_training_rows
 
 
 PARSERS = {
@@ -128,16 +129,17 @@ def _crawl_openalex(query: str, limit: int, per_page: int, checkpoint: Path, ext
             print(f"processed={processed}/{limit} elapsed={elapsed:.1f}s rate={processed / elapsed:.2f} works/s", flush=True)
 
 
-def _uniform_sample(names: List[str], limit: int) -> List[str]:
+def _uniform_sample(names: List[str], limit: int, phase: float = 0.0) -> List[str]:
     if limit > len(names):
         raise RuntimeError(f"PyPI has only {len(names)} projects")
-    return [names[index * len(names) // limit] for index in range(limit)]
+    return [names[min(len(names) - 1, int((index + phase) * len(names) / limit))] for index in range(limit)]
 
 
-def _crawl_pypi(limit: int, checkpoint: Path, extract: bool, model_name: str) -> None:
+def _crawl_pypi(limit: int, checkpoint: Path, extract: bool, model_name: str, sample_phase: float = 0.0, requested_packages: Optional[List[str]] = None) -> None:
     state = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else {}
-    packages = state.get("packages") or _uniform_sample(fetch_pypi_projects(), limit)
+    packages = state.get("packages") or requested_packages or _uniform_sample(fetch_pypi_projects(), limit * 2, sample_phase)
     processed = int(state.get("processed", 0))
+    successful = int(state.get("successful", 0))
     failures = int(state.get("failures", 0))
     started = perf_counter()
     model = _load_ner_model(model_name) if extract else None
@@ -145,21 +147,24 @@ def _crawl_pypi(limit: int, checkpoint: Path, extract: bool, model_name: str) ->
     with _store() as store:
         store.ensure_schema()
         for package in packages[processed:]:
+            if successful >= limit:
+                break
             try:
                 payload = fetch_pypi(package)
                 document = parse_pypi(payload, raw=json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
                 _write_ingested(document, extract, model_name, store, model, semantic)
+                successful += 1
             except Exception as exc:
                 failures += 1
                 print(f"skipped={package} error={exc}", flush=True)
             processed += 1
-            if processed % 25 == 0 or processed == len(packages):
+            if processed % 25 == 0 or successful == limit or processed == len(packages):
                 checkpoint.write_text(
-                    json.dumps({"packages": packages, "processed": processed, "failures": failures}),
+                    json.dumps({"packages": packages, "processed": processed, "successful": successful, "failures": failures}),
                     encoding="utf-8",
                 )
                 elapsed = perf_counter() - started
-                print(f"processed={processed}/{len(packages)} failures={failures} elapsed={elapsed:.1f}s rate={processed / elapsed:.2f} packages/s", flush=True)
+                print(f"successful={successful}/{limit} processed={processed} failures={failures} elapsed={elapsed:.1f}s rate={processed / elapsed:.2f} packages/s", flush=True)
 
 
 def main() -> None:
@@ -207,11 +212,24 @@ def main() -> None:
     pypi_crawl_command = subparsers.add_parser("crawl-pypi", help="Crawl a uniform PyPI sample into Neo4j")
     pypi_crawl_command.add_argument("--limit", type=int, default=5000)
     pypi_crawl_command.add_argument("--checkpoint", type=Path, default=Path(".pypi-crawl.json"))
+    pypi_crawl_command.add_argument("--sample-phase", type=float, default=0.0, help=argparse.SUPPRESS)
+    pypi_crawl_command.add_argument("--packages", nargs="+", help="Specific PyPI packages to ingest")
     pypi_crawl_command.set_defaults(extract=True)
     pypi_crawl_command.add_argument("--no-extract", dest="extract", action="store_false")
     pypi_crawl_command.add_argument(
         "--ner-model", default=os.getenv("GLINER_MODEL", "urchade/gliner_medium-v2.1")
     )
+
+    training_command = subparsers.add_parser("build-training-set", help="Export temporal technology training rows")
+    training_command.add_argument("--output", type=Path, default=Path("artifacts/training/technology_3y.csv"))
+    training_command.add_argument("--start-year", type=int, default=2015)
+    training_command.add_argument("--horizon-years", type=int, default=3)
+    training_command.add_argument("--min-documents", type=int, default=2)
+    training_command.add_argument("--positive-future-documents", type=int, default=5)
+    training_command.add_argument("--negative-future-documents", type=int, default=1)
+    features_command = subparsers.add_parser("export-features", help="Export snapshot graph features")
+    features_command.add_argument("--snapshot", required=True)
+    features_command.add_argument("--output", type=Path, default=Path("artifacts/features/technology.csv"))
 
     subparsers.add_parser("init-graph", help="Create Neo4j constraints")
     args = parser.parse_args()
@@ -226,7 +244,27 @@ def main() -> None:
         return
 
     if args.command == "crawl-pypi":
-        _crawl_pypi(args.limit, args.checkpoint, args.extract, args.ner_model)
+        _crawl_pypi(
+            len(args.packages) if args.packages else args.limit,
+            args.checkpoint, args.extract, args.ner_model, args.sample_phase, args.packages,
+        )
+        return
+
+    if args.command == "build-training-set":
+        with _store() as store:
+            mentions, documents, tasks = store.read_training_data()
+        rows = build_training_rows(
+            mentions, documents, tasks, args.start_year, args.horizon_years,
+            args.min_documents, args.positive_future_documents, args.negative_future_documents,
+        )
+        print(f"rows={write_training_rows(args.output, rows)} output={args.output}")
+        return
+
+    if args.command == "export-features":
+        with _store() as store:
+            mentions, documents, tasks = store.read_training_data()
+        rows = build_feature_rows(mentions, documents, tasks, args.snapshot)
+        print(f"rows={write_feature_rows(args.output, rows)} output={args.output}")
         return
 
     if args.command == "fetch":

@@ -83,3 +83,18 @@ def test_gliner_adapter_anchors_model_output():
 
 def test_chunk_ner_does_not_extract_document_metadata_domains():
     assert "domain" not in DEFAULT_LABELS
+
+
+def test_transformer_application_becomes_one_specific_technology():
+    text = "Vision transformers are applied to computer vision."
+    doc = document()
+    doc.chunks[0].text = text
+
+    class FakeModel:
+        def predict_entities(self, text, labels, threshold):
+            start = text.index("computer vision")
+            return [{"start": start, "end": start + len("computer vision"), "label": "technology", "score": 0.9}]
+
+    mentions = extract_mentions(doc, FakeModel())
+    assert [item.canonical_text for item in mentions] == ["Transformer-based computer vision"]
+    assert mentions[0].surface_text == "Vision transformers are applied to computer vision"

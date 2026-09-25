@@ -145,7 +145,8 @@ def resolve_mentions(
 
     for mention in mentions:
         compatible = [concept for concept in concepts if _compatible(mention, concept)]
-        mention_keys = alias_keys(mention.surface_text)
+        canonical_text = mention.canonical_text or mention.surface_text
+        mention_keys = alias_keys(canonical_text)
         deterministic = [
             concept
             for concept in compatible
@@ -186,7 +187,7 @@ def resolve_mentions(
             continue
 
         if semantic is not None:
-            match, cosine, model_score = semantic.best_match(mention.surface_text, compatible)
+            match, cosine, model_score = semantic.best_match(canonical_text, compatible)
             if match is not None:
                 _add_alias(match, mention.surface_text)
                 touched[match.concept_id] = match
@@ -209,7 +210,7 @@ def resolve_mentions(
         concept = Concept(
             concept_id=concept_id,
             kind=kind,
-            preferred_label=mention.surface_text,
+            preferred_label=canonical_text,
             status="provisional",
             names=[
                 ConceptName(

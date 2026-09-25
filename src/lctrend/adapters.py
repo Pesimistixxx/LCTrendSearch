@@ -22,22 +22,25 @@ from .models import (
 
 
 DOMAIN_RULES = (
-    ("Bioinformatics", ("bioinformatics", "computational biology", "genomics")),
-    ("Edge computing", ("edge computing", "fog computing", "edge ai")),
-    ("Artificial intelligence", ("artificial intelligence", "machine learning", "natural language", "computer vision", "deep learning", "named entity recognition", "ner")),
-    ("Robotics", ("robotics", "robotic")),
-    ("Cybersecurity", ("cybersecurity", "computer security", "information security")),
-    ("Quantum computing", ("quantum computing", "quantum information")),
-    ("Semiconductors", ("semiconductor", "integrated circuit")),
-    ("Energy technology", ("renewable energy", "energy storage", "smart grid")),
+    ("Natural language processing", "Artificial intelligence", ("natural language processing", "named entity recognition", "ner")),
+    ("Computer vision", "Artificial intelligence", ("computer vision", "image recognition")),
+    ("Machine learning", "Artificial intelligence", ("machine learning", "deep learning")),
+    ("Bioinformatics", "Life sciences", ("bioinformatics", "computational biology", "genomics")),
+    ("Edge computing", "Computer systems", ("edge computing", "fog computing", "edge ai")),
+    ("Artificial intelligence", None, ("artificial intelligence",)),
+    ("Robotics", "Engineering", ("robotics", "robotic")),
+    ("Cybersecurity", "Computer systems", ("cybersecurity", "computer security", "information security")),
+    ("Quantum computing", "Physical sciences", ("quantum computing", "quantum information")),
+    ("Semiconductors", "Physical sciences", ("semiconductor", "integrated circuit")),
+    ("Energy technology", "Engineering", ("renewable energy", "energy storage", "smart grid")),
 )
 
 
 def _domain_from_values(values: Iterable[Any]) -> Optional[Domain]:
     text = " ".join(str(value).casefold() for value in values)
-    for name, aliases in DOMAIN_RULES:
+    for name, parent_name, aliases in DOMAIN_RULES:
         if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases):
-            return Domain(domain_id=stable_id("domain", name), name=name)
+            return Domain(domain_id=stable_id("domain", name), name=name, parent_name=parent_name)
     return None
 
 
@@ -244,6 +247,9 @@ def parse_openalex(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> D
             source_type="scholarly_api",
             record_id=openalex_id,
             canonical_url=canonical_url,
+            source_family="scholarly",
+            independence_group="openalex",
+            reliability_tier=3,
         ),
         artifact=_artifact(str(canonical_url), raw, "application/json"),
         identifiers=identifiers,
@@ -253,6 +259,11 @@ def parse_openalex(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> D
         domains=[domain] if domain else [],
         chunks=chunks,
         metadata={"type": payload.get("type"), "topics": payload.get("topics") or []},
+        metrics={
+            "citation_count": float(payload.get("cited_by_count") or 0),
+            "reference_count": float(payload.get("referenced_works_count") or 0),
+            "authorship_count": float(len(payload.get("authorships") or [])),
+        },
         coverage="abstract_only" if abstract else "metadata_only",
     )
 
@@ -327,6 +338,9 @@ def parse_github(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Doc
             source_type="code_host",
             record_id=repo_id,
             canonical_url=canonical_url,
+            source_family="code",
+            independence_group="github",
+            reliability_tier=2,
         ),
         artifact=_artifact(canonical_url, raw, "application/json"),
         identifiers=[ExternalId(scheme="github", value=repo_id)],
@@ -340,6 +354,11 @@ def parse_github(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Doc
             "license": (repo.get("license") or {}).get("spdx_id"),
             "stars": repo.get("stargazers_count"),
             "fork": bool(repo.get("fork")),
+        },
+        metrics={
+            "stars": float(repo.get("stargazers_count") or 0),
+            "forks": float(repo.get("forks_count") or 0),
+            "watchers": float(repo.get("subscribers_count") or 0),
         },
         coverage="selected_files" if chunks else "metadata_only",
     )
@@ -399,6 +418,9 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
             source_type="package_registry",
             record_id=name,
             canonical_url=canonical_url,
+            source_family="package_registry",
+            independence_group="pypi",
+            reliability_tier=2,
         ),
         artifact=_artifact(canonical_url, raw, "application/json"),
         identifiers=[ExternalId(scheme="pypi", value=name)],
@@ -414,6 +436,7 @@ def parse_pypi(payload: Mapping[str, Any], raw: Optional[bytes] = None) -> Docum
             "requires_python": info.get("requires_python"),
             "country_status": "provided" if countries else "unavailable",
         },
+        metrics={"release_file_count": float(len(payload.get("urls") or []))},
         coverage="full_text" if chunks else "metadata_only",
     )
 

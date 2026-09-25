@@ -1,0 +1,1020 @@
+technology_id,technology,snapshot_date,document_count,mention_count,documents_last_year,country_count,company_count,university_count,domain_count,source_count,task_count,future_document_count,label_realized_3y
+concept:8db86f935644d2a591432b6e,Streaming NER,2015-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2015-01-01,57,195,5,12,1,38,3,1,8,53,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2015-01-01,116,211,10,21,5,70,2,1,1,86,1
+concept:6651924e2f49300abf94e9e8,Robotics,2015-01-01,5,7,0,2,0,3,1,1,0,6,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2015-01-01,6,9,1,3,0,5,2,1,0,13,1
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2015-01-01,2,3,0,3,4,4,1,1,0,1,0
+concept:a68a26dbd30e221d6b37e5f9,multiagent systems,2015-01-01,2,3,0,1,0,1,1,1,0,1,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2015-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2015-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2015-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2015-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2015-01-01,3,4,0,2,0,1,1,1,0,0,0
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2015-01-01,4,4,1,1,0,0,1,1,0,1,0
+concept:4b9c08a8f505d20907daf421,aircraft turbines,2015-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2015-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2015-01-01,3,4,0,1,0,2,1,1,0,0,0
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2015-01-01,4,4,0,1,0,2,1,1,0,0,0
+concept:8cbd1fbc54705150b01deaad,smart cities,2015-01-01,3,5,1,1,0,1,2,1,0,1,0
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2015-01-01,10,13,1,3,1,6,2,1,1,1,0
+concept:c844941aa27c9e916d400332,steam engines,2015-01-01,3,3,0,1,0,1,1,1,0,1,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2015-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2015-01-01,5,5,0,2,1,3,0,1,0,1,0
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2015-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:7621c4ac7013c672320e00ea,programming languages,2015-01-01,3,3,0,1,0,1,1,1,0,0,0
+concept:f1263ee6f0b63f22823c182f,hardware,2015-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:7795e6b3ab6a1bd4a3251c02,computing platforms,2015-01-01,2,2,0,3,0,3,1,1,0,0,0
+concept:9927a241adf5091541f98213,genetic algorithms,2015-01-01,6,6,0,3,0,2,1,1,0,1,0
+concept:04e6f469e5b2e6f4992cd239,plain algorithms,2015-01-01,2,2,0,2,1,2,1,1,0,0,0
+concept:8433b3b97f938d194db18565,artificial life,2015-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2015-01-01,2,2,1,2,0,2,0,1,0,0,0
+concept:62da66e3ad1eb953b9e60319,metaheuristic algorithms,2015-01-01,2,2,0,3,4,4,1,1,0,0,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2015-01-01,4,5,1,0,0,0,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2015-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:40328dc5c15195a0553af49b,virtual humans,2015-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2015-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2015-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:b6be8e71c48cc771e4319acc,IBM PC,2015-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2015-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:9af72b8587ed73263d45af4a,computers,2015-01-01,6,11,0,2,0,3,1,1,1,1,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2015-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:8db86f935644d2a591432b6e,Streaming NER,2016-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2016-01-01,61,207,4,12,1,42,3,1,8,169,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2016-01-01,125,228,9,23,5,77,2,1,1,232,1
+concept:6651924e2f49300abf94e9e8,Robotics,2016-01-01,6,10,1,3,0,4,1,1,0,12,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2016-01-01,7,12,1,4,0,6,2,1,0,39,1
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2016-01-01,3,4,1,4,4,5,1,1,0,0,0
+concept:a68a26dbd30e221d6b37e5f9,multiagent systems,2016-01-01,3,4,1,2,0,2,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2016-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2016-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2016-01-01,8,12,0,5,0,7,1,1,1,5,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2016-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2016-01-01,3,4,0,2,0,1,1,1,0,0,0
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2016-01-01,4,4,0,1,0,0,1,1,0,9,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2016-01-01,5,7,0,2,0,3,1,1,0,5,1
+concept:4b9c08a8f505d20907daf421,aircraft turbines,2016-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2016-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2016-01-01,3,4,0,1,0,2,1,1,0,0,0
+concept:f6f18f1ecf7badea02551c9e,neural networks,2016-01-01,14,28,1,6,2,8,1,1,0,8,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2016-01-01,4,4,0,1,0,2,1,1,0,0,0
+concept:8cbd1fbc54705150b01deaad,smart cities,2016-01-01,3,5,0,1,0,1,2,1,0,1,0
+concept:c844941aa27c9e916d400332,steam engines,2016-01-01,3,3,0,1,0,1,1,1,0,1,0
+concept:ae960d804eb9b35a80adf69e,electronics,2016-01-01,2,2,1,1,0,1,1,1,0,0,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2016-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2016-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:7621c4ac7013c672320e00ea,programming languages,2016-01-01,3,3,0,1,0,1,1,1,0,0,0
+concept:f1263ee6f0b63f22823c182f,hardware,2016-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:7795e6b3ab6a1bd4a3251c02,computing platforms,2016-01-01,2,2,0,3,0,3,1,1,0,0,0
+concept:04e6f469e5b2e6f4992cd239,plain algorithms,2016-01-01,2,2,0,2,1,2,1,1,0,0,0
+concept:8433b3b97f938d194db18565,artificial life,2016-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2016-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:62da66e3ad1eb953b9e60319,metaheuristic algorithms,2016-01-01,2,2,0,3,4,4,1,1,0,0,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2016-01-01,4,5,0,0,0,0,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2016-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:40328dc5c15195a0553af49b,virtual humans,2016-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2016-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2016-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2016-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:9af72b8587ed73263d45af4a,computers,2016-01-01,6,11,0,2,0,3,1,1,1,1,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2016-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:8db86f935644d2a591432b6e,Streaming NER,2017-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2017-01-01,69,244,8,14,1,46,3,1,8,373,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2017-01-01,141,255,16,25,6,89,2,1,1,471,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2017-01-01,2,3,1,2,0,0,1,1,0,1,0
+concept:6651924e2f49300abf94e9e8,Robotics,2017-01-01,7,11,1,3,0,4,1,1,0,16,1
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2017-01-01,2,2,1,3,1,0,1,1,0,8,1
+concept:a9a406af29e462b14c9b6659,NLP,2017-01-01,2,2,1,1,0,1,1,1,0,14,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2017-01-01,9,14,2,4,1,6,2,1,0,72,1
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2017-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:a68a26dbd30e221d6b37e5f9,multiagent systems,2017-01-01,3,4,0,2,0,2,1,1,0,1,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2017-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:651a504402e378482d5ef7ae,robot,2017-01-01,2,2,1,2,0,2,1,1,0,5,1
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2017-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2017-01-01,8,12,0,5,0,7,1,1,1,12,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2017-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2017-01-01,2,2,0,1,0,1,1,1,0,6,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2017-01-01,3,4,0,2,0,1,1,1,0,0,0
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2017-01-01,4,4,0,1,0,0,1,1,0,11,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2017-01-01,7,10,2,5,0,5,1,1,0,10,1
+concept:3beb25a85acbe29e98962042,support vector machines,2017-01-01,2,2,0,3,0,4,0,1,0,12,1
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2017-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2017-01-01,3,4,0,1,0,2,1,1,0,0,0
+concept:f6f18f1ecf7badea02551c9e,neural networks,2017-01-01,14,28,0,6,2,8,1,1,0,14,1
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2017-01-01,2,4,1,1,0,0,0,1,0,1,0
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2017-01-01,4,4,0,1,0,2,1,1,0,1,0
+concept:ae960d804eb9b35a80adf69e,electronics,2017-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2017-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2017-01-01,5,5,0,2,1,3,0,1,0,5,1
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2017-01-01,2,2,0,2,0,2,0,1,0,1,0
+concept:4e36eae4681d3fad66e562e7,conversational agents,2017-01-01,2,2,1,1,0,1,1,1,0,0,0
+concept:7621c4ac7013c672320e00ea,programming languages,2017-01-01,3,3,0,1,0,1,1,1,0,0,0
+concept:f1263ee6f0b63f22823c182f,hardware,2017-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:7795e6b3ab6a1bd4a3251c02,computing platforms,2017-01-01,2,2,0,3,0,3,1,1,0,1,0
+concept:04e6f469e5b2e6f4992cd239,plain algorithms,2017-01-01,2,2,0,2,1,2,1,1,0,0,0
+concept:8433b3b97f938d194db18565,artificial life,2017-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2017-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:bba809cd6871f85095858d32,CAD system,2017-01-01,6,7,0,4,0,8,1,1,0,5,1
+concept:62da66e3ad1eb953b9e60319,metaheuristic algorithms,2017-01-01,2,2,0,3,4,4,1,1,0,0,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2017-01-01,4,5,0,0,0,0,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2017-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:40328dc5c15195a0553af49b,virtual humans,2017-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2017-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2017-01-01,2,2,1,2,0,1,1,1,1,1,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2017-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:12d102708f7ff906b14a70d1,digital computer technology,2017-01-01,2,2,1,1,0,0,1,1,0,1,0
+concept:f565a94b42b8112870175351,wearable technology,2017-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2017-01-01,2,2,1,2,1,1,1,1,0,1,0
+concept:9af72b8587ed73263d45af4a,computers,2017-01-01,6,11,0,2,0,3,1,1,1,1,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2017-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2018-01-01,110,415,41,19,5,86,4,1,8,647,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2018-01-01,202,376,61,35,9,149,3,1,1,791,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2018-01-01,2,3,0,2,0,0,1,1,0,1,0
+concept:6651924e2f49300abf94e9e8,Robotics,2018-01-01,11,15,4,7,0,9,1,1,0,17,1
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2018-01-01,2,2,0,3,1,0,1,1,0,17,1
+concept:a9a406af29e462b14c9b6659,NLP,2018-01-01,2,2,0,1,0,1,1,1,0,19,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2018-01-01,3,4,2,1,0,1,1,1,0,13,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2018-01-01,19,38,10,10,2,17,2,1,0,111,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2018-01-01,9,23,8,6,0,13,1,1,0,90,1
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2018-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2018-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:651a504402e378482d5ef7ae,robot,2018-01-01,2,2,0,2,0,2,1,1,0,10,1
+concept:1621bd15f374b54548d85362,data mining,2018-01-01,2,2,1,1,0,1,1,1,0,1,0
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2018-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2018-01-01,10,14,2,5,0,8,2,1,1,15,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2018-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2018-01-01,3,3,1,2,0,2,1,1,0,9,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2018-01-01,3,4,0,2,0,1,1,1,0,0,0
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2018-01-01,5,6,1,1,0,0,1,1,0,15,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2018-01-01,2,2,1,2,0,2,1,1,0,7,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2018-01-01,8,11,1,6,0,6,1,1,0,17,1
+concept:3beb25a85acbe29e98962042,support vector machines,2018-01-01,3,3,1,4,0,5,1,1,0,19,1
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2018-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:b660908689ead05e55236ff1,Internet of Things,2018-01-01,3,7,3,4,0,4,0,1,0,29,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2018-01-01,4,4,3,3,1,3,1,1,0,28,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2018-01-01,2,2,2,3,0,5,1,1,0,6,1
+concept:f6f18f1ecf7badea02551c9e,neural networks,2018-01-01,16,30,2,8,3,12,1,1,0,23,1
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2018-01-01,3,5,1,2,0,2,0,1,0,0,0
+concept:836e2afaea87b44489763522,big data,2018-01-01,2,4,2,4,0,4,0,1,0,18,1
+concept:5447e095974d70af436ad66e,blockchain,2018-01-01,2,5,1,2,0,2,1,1,0,5,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2018-01-01,4,4,0,1,0,2,1,1,0,1,0
+concept:8cbd1fbc54705150b01deaad,smart cities,2018-01-01,4,6,1,2,0,2,2,1,0,1,0
+concept:01d7268db56cd6189eb1122c,AI algorithms,2018-01-01,2,3,1,1,0,1,1,1,0,8,1
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2018-01-01,11,14,1,3,1,7,2,1,1,9,1
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2018-01-01,2,2,2,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2018-01-01,2,2,2,3,1,3,0,1,0,0,0
+concept:557e490bbb1b28d419867b67,A.I.,2018-01-01,2,10,2,3,1,3,0,1,0,1,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2018-01-01,2,2,2,3,1,3,0,1,0,0,0
+concept:ae960d804eb9b35a80adf69e,electronics,2018-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2018-01-01,4,5,4,3,0,5,1,1,0,11,1
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2018-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2018-01-01,6,7,1,4,1,6,1,1,0,5,1
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2018-01-01,2,2,0,2,0,2,0,1,0,1,0
+concept:7621c4ac7013c672320e00ea,programming languages,2018-01-01,3,3,0,1,0,1,1,1,0,1,0
+concept:f1263ee6f0b63f22823c182f,hardware,2018-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:7795e6b3ab6a1bd4a3251c02,computing platforms,2018-01-01,2,2,0,3,0,3,1,1,0,1,0
+concept:de8468b5dcaf0551959c8a34,fuzzy systems,2018-01-01,2,2,1,2,0,3,1,1,0,1,0
+concept:9927a241adf5091541f98213,genetic algorithms,2018-01-01,7,7,1,5,0,5,1,1,0,5,1
+concept:8433b3b97f938d194db18565,artificial life,2018-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2018-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:bba809cd6871f85095858d32,CAD system,2018-01-01,8,14,2,5,0,10,1,1,0,5,1
+concept:62da66e3ad1eb953b9e60319,metaheuristic algorithms,2018-01-01,2,2,0,3,4,4,1,1,0,1,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2018-01-01,4,5,0,0,0,0,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2018-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:40328dc5c15195a0553af49b,virtual humans,2018-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2018-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2018-01-01,3,5,1,3,0,2,1,1,1,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2018-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2018-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2018-01-01,2,2,0,2,1,1,1,1,0,1,0
+concept:9af72b8587ed73263d45af4a,computers,2018-01-01,7,12,1,2,0,4,1,1,1,0,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2018-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2019-01-01,230,930,120,37,19,215,4,1,13,874,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2019-01-01,357,616,155,50,24,310,4,1,4,1027,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2019-01-01,2,3,0,2,0,0,1,1,0,5,1
+concept:6651924e2f49300abf94e9e8,Robotics,2019-01-01,18,23,7,9,2,18,1,1,0,21,1
+concept:95ed676751854f2ea0ff2f8a,web-based chatbots,2019-01-01,3,12,2,2,0,2,1,1,0,12,1
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2019-01-01,2,2,0,3,1,0,1,1,0,30,1
+concept:a9a406af29e462b14c9b6659,NLP,2019-01-01,7,7,5,5,0,10,1,1,0,18,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2019-01-01,5,14,2,4,0,3,1,1,0,20,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2019-01-01,46,85,27,19,8,56,2,1,0,141,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2019-01-01,23,52,14,15,1,46,1,1,0,108,1
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2019-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2019-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:c2ec432c9a3243ad33f0e97b,automation,2019-01-01,4,24,3,3,0,6,0,1,0,10,1
+concept:651a504402e378482d5ef7ae,robot,2019-01-01,5,5,3,4,0,7,1,1,0,10,1
+concept:1621bd15f374b54548d85362,data mining,2019-01-01,2,2,0,1,0,1,1,1,0,5,1
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2019-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2019-01-01,13,17,3,7,0,16,2,1,1,24,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2019-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2019-01-01,4,8,1,3,0,4,2,1,0,12,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2019-01-01,3,4,0,2,0,1,1,1,0,0,0
+concept:5cdbd5ca2379cbfa57828c59,technologies,2019-01-01,2,3,1,1,0,1,1,1,0,1,0
+concept:2d420722137659d45f6bc897,big data analytics,2019-01-01,2,2,2,1,0,2,1,1,0,9,1
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2019-01-01,13,14,8,9,1,15,1,1,0,17,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2019-01-01,7,8,5,6,0,10,1,1,0,6,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2019-01-01,10,13,2,8,0,9,1,1,0,17,1
+concept:bbcb935d85c3d3e59fed902a,deep neural network,2019-01-01,7,7,6,4,1,8,1,1,0,12,1
+concept:3beb25a85acbe29e98962042,support vector machines,2019-01-01,5,5,2,6,0,8,1,1,0,20,1
+concept:a9a62004449e82e44c4c48b7,integrated circuits,2019-01-01,2,3,1,1,0,3,1,1,0,0,0
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2019-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:b660908689ead05e55236ff1,Internet of Things,2019-01-01,8,23,5,8,0,15,3,1,0,39,1
+concept:474b9794732c4e12f3f1cceb,deep learning (DL),2019-01-01,2,2,2,3,0,3,1,1,0,5,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2019-01-01,8,8,4,6,1,10,1,1,0,31,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2019-01-01,4,4,2,4,2,8,1,1,0,12,1
+concept:5075c365d8d0147065868c25,Deep learning algorithms,2019-01-01,2,2,2,3,0,5,1,1,0,11,1
+concept:dd3eb93fea6f07ae0a464455,algorithms,2019-01-01,6,9,5,6,0,10,1,1,0,11,1
+concept:f6f18f1ecf7badea02551c9e,neural networks,2019-01-01,22,36,6,9,5,17,1,1,0,22,1
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2019-01-01,3,5,0,2,0,2,0,1,0,0,0
+concept:54c3fa39310ec4c96a769b51,deep learning models,2019-01-01,2,2,0,1,1,1,1,1,0,5,1
+concept:385609602abbd0b0b9324c5a,cognitive technologies,2019-01-01,4,5,2,3,0,3,2,1,0,5,1
+concept:836e2afaea87b44489763522,big data,2019-01-01,4,8,2,5,0,6,1,1,0,27,1
+concept:17f22f65af09718c710dd5ed,social media,2019-01-01,3,4,0,3,0,3,1,1,0,7,1
+concept:5447e095974d70af436ad66e,blockchain,2019-01-01,2,5,0,2,0,2,1,1,0,12,1
+concept:7e9695b36f24a1a882709a89,Smart Technology,2019-01-01,3,3,1,3,0,4,1,1,1,6,1
+concept:8cbd1fbc54705150b01deaad,smart cities,2019-01-01,4,6,0,2,0,2,2,1,0,1,0
+concept:c7f8d04a4e2f6b91a6c4438e,ML models,2019-01-01,3,5,1,4,0,5,1,1,0,1,0
+concept:01d7268db56cd6189eb1122c,AI algorithms,2019-01-01,4,7,2,3,0,4,1,1,0,10,1
+concept:d0402c42dca6165d1f6917d2,speech recognition,2019-01-01,3,4,2,6,0,8,1,1,0,8,1
+concept:6c65c152218b2d885d6174e5,AlphaGo,2019-01-01,2,2,2,1,0,1,1,1,0,1,0
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2019-01-01,13,16,2,5,1,10,2,1,1,11,1
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2019-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2019-01-01,2,2,0,3,1,3,0,1,0,1,0
+concept:557e490bbb1b28d419867b67,A.I.,2019-01-01,2,10,0,3,1,3,0,1,0,1,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2019-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:f446fd36defa677f9ef170e7,medical devices,2019-01-01,2,2,1,1,0,1,1,1,0,1,0
+concept:ae960d804eb9b35a80adf69e,electronics,2019-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2019-01-01,6,10,2,5,0,8,1,1,0,12,1
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2019-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:7859c3707426d244616fc820,AI chatbots,2019-01-01,2,2,0,1,0,1,1,1,0,5,1
+concept:f94c1c26179091c656c07e61,data analytics,2019-01-01,2,5,1,1,0,1,0,1,0,1,0
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2019-01-01,2,2,0,2,0,2,0,1,0,1,0
+concept:bc21f423edf71c98a3091474,machine-learning algorithms,2019-01-01,2,2,1,1,0,1,1,1,0,10,1
+concept:f1263ee6f0b63f22823c182f,hardware,2019-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:9927a241adf5091541f98213,genetic algorithms,2019-01-01,8,8,1,5,0,5,1,1,0,6,1
+concept:04e6f469e5b2e6f4992cd239,plain algorithms,2019-01-01,2,2,0,2,1,2,1,1,0,6,1
+concept:3add21bfd171564ab627b7e0,cognitive robots,2019-01-01,5,14,3,6,4,10,1,1,0,1,0
+concept:08337d686f11c3d83ccf4fc4,smart systems,2019-01-01,3,3,2,3,0,4,1,1,0,5,1
+concept:8433b3b97f938d194db18565,artificial life,2019-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:bba809cd6871f85095858d32,CAD system,2019-01-01,9,16,1,6,0,12,1,1,0,6,1
+concept:62da66e3ad1eb953b9e60319,metaheuristic algorithms,2019-01-01,2,2,0,3,4,4,1,1,0,1,0
+concept:2b22a6ab6d51b342e51439e8,Naive Bayes,2019-01-01,2,2,2,1,0,1,1,1,0,7,1
+concept:b0199813602e1463b3389ee4,cryptocurrency,2019-01-01,2,3,1,2,0,2,1,1,0,0,0
+concept:b152ea6680731c6cccfc3be7,automated decision-making systems,2019-01-01,2,2,1,4,0,4,0,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2019-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:79f97d1a93950010eb4cd50f,pressure sensors,2019-01-01,2,2,2,4,0,8,2,1,0,1,0
+concept:40328dc5c15195a0553af49b,virtual humans,2019-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2019-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2019-01-01,3,5,0,3,0,2,1,1,1,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2019-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:61161f49ae35e962834a47a2,simulated dynamic networks,2019-01-01,3,9,2,2,0,4,1,1,0,0,0
+concept:b6be8e71c48cc771e4319acc,IBM PC,2019-01-01,4,5,2,3,2,3,1,1,0,0,0
+concept:f1d7b14650f0a5d3707b44c0,hybrid AI,2019-01-01,2,2,1,2,0,1,1,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2019-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2019-01-01,2,2,0,2,1,1,1,1,0,1,0
+concept:9af72b8587ed73263d45af4a,computers,2019-01-01,7,12,0,2,0,4,1,1,1,0,0
+concept:0a08d3760ffa765f1608445b,GoogLeNet,2019-01-01,2,3,1,3,0,5,0,1,0,0,0
+concept:e5c99e6b95f7c8d527e3e8d6,fuzzy inference system,2019-01-01,2,3,1,3,0,4,1,1,1,0,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2019-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2020-01-01,442,1948,212,53,44,427,5,1,29,979,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2020-01-01,612,1018,255,69,48,586,5,1,20,1113,1
+concept:b7c770d72748bfb6f67d8e43,Artificial Intelligence in Education,2020-01-01,2,2,1,2,0,2,1,1,0,1,0
+concept:486064faf4c52977e0356396,AIEd,2020-01-01,4,19,4,4,0,5,1,1,0,10,1
+concept:6651924e2f49300abf94e9e8,Robotics,2020-01-01,23,30,5,11,2,26,1,1,0,19,1
+concept:95ed676751854f2ea0ff2f8a,web-based chatbots,2020-01-01,8,22,5,11,1,13,1,1,0,11,1
+concept:5d00ae29b41c4b3b019f3479,humanoid robots,2020-01-01,2,2,1,2,0,3,1,1,0,0,0
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2020-01-01,10,18,8,12,4,21,2,1,0,33,1
+concept:a9a406af29e462b14c9b6659,NLP,2020-01-01,16,18,9,15,0,27,1,1,1,17,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2020-01-01,9,22,4,6,0,7,1,1,0,23,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2020-01-01,81,159,35,29,11,103,4,1,1,141,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2020-01-01,52,94,29,25,7,85,3,1,4,100,1
+concept:c1061fd1e45b0d426deba3df,T-NER,2020-01-01,2,3,1,2,0,2,1,1,0,0,0
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2020-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2020-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:c2ec432c9a3243ad33f0e97b,automation,2020-01-01,7,31,3,3,0,8,1,1,0,7,1
+concept:651a504402e378482d5ef7ae,robot,2020-01-01,7,9,2,9,1,13,1,1,0,9,1
+concept:1621bd15f374b54548d85362,data mining,2020-01-01,2,2,0,1,0,1,1,1,0,5,1
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2020-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2020-01-01,20,28,7,13,2,32,2,1,4,27,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2020-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2020-01-01,8,12,4,7,0,10,2,1,1,10,1
+concept:9f85db63b2bfa9e87b759989,mobile computing,2020-01-01,5,5,3,3,0,6,2,1,0,0,0
+concept:65ee786d9a2334bcf0d57c89,clinical decision support systems,2020-01-01,2,3,1,1,0,3,1,1,1,5,1
+concept:6b3c80813749460f0abb5a2e,XAI,2020-01-01,4,8,3,3,1,7,1,1,0,39,1
+concept:5cdbd5ca2379cbfa57828c59,technologies,2020-01-01,2,3,0,1,0,1,1,1,0,1,0
+concept:2d420722137659d45f6bc897,big data analytics,2020-01-01,5,5,3,3,0,4,2,1,0,7,1
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2020-01-01,15,17,2,10,1,16,1,1,0,16,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2020-01-01,9,12,2,9,1,12,1,1,0,5,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2020-01-01,17,21,7,11,0,16,1,1,0,15,1
+concept:bbcb935d85c3d3e59fed902a,deep neural network,2020-01-01,9,9,2,6,2,11,1,1,0,15,1
+concept:c5f262517ea0cbc65f34e73b,generative adversarial networks,2020-01-01,3,3,2,10,3,21,1,1,0,5,1
+concept:3beb25a85acbe29e98962042,support vector machines,2020-01-01,14,19,9,16,1,26,1,1,0,17,1
+concept:4b9c08a8f505d20907daf421,aircraft turbines,2020-01-01,5,8,2,3,0,9,1,1,0,1,0
+concept:a9a62004449e82e44c4c48b7,integrated circuits,2020-01-01,2,3,0,1,0,3,1,1,0,1,0
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2020-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:b660908689ead05e55236ff1,Internet of Things,2020-01-01,18,40,10,14,3,34,3,1,0,38,1
+concept:474b9794732c4e12f3f1cceb,deep learning (DL),2020-01-01,3,3,1,5,0,5,1,1,0,7,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2020-01-01,18,26,10,11,1,26,1,1,0,26,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2020-01-01,6,7,2,6,2,10,1,1,0,15,1
+concept:5075c365d8d0147065868c25,Deep learning algorithms,2020-01-01,6,7,4,7,0,14,2,1,1,10,1
+concept:dd3eb93fea6f07ae0a464455,algorithms,2020-01-01,11,15,5,6,0,17,2,1,0,7,1
+concept:f6f18f1ecf7badea02551c9e,neural networks,2020-01-01,28,42,6,12,5,23,1,1,0,20,1
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2020-01-01,3,5,0,2,0,2,0,1,0,0,0
+concept:54c3fa39310ec4c96a769b51,deep learning models,2020-01-01,2,2,0,1,1,1,1,1,0,5,1
+concept:385609602abbd0b0b9324c5a,cognitive technologies,2020-01-01,5,7,1,3,0,4,2,1,0,5,1
+concept:6ef2687baef74f620abe2e7a,NGs,2020-01-01,2,5,2,3,0,2,1,1,0,1,0
+concept:bf576f0b36df894be914c987,superhuman artificial intelligence,2020-01-01,2,2,2,1,1,1,1,1,0,0,0
+concept:836e2afaea87b44489763522,big data,2020-01-01,11,19,7,11,2,19,3,1,0,28,1
+concept:17f22f65af09718c710dd5ed,social media,2020-01-01,4,5,1,3,0,4,1,1,0,6,1
+concept:c2a83eec2def9d14da834740,machine learning (ML),2020-01-01,2,2,2,2,0,2,1,1,0,27,1
+concept:5447e095974d70af436ad66e,blockchain,2020-01-01,6,9,4,7,1,11,2,1,0,16,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2020-01-01,5,6,1,1,0,3,1,1,0,1,0
+concept:5dc967f936d883d498fa7a40,magnetic resonance imaging,2020-01-01,2,2,1,2,0,2,1,1,0,1,0
+concept:8cbd1fbc54705150b01deaad,smart cities,2020-01-01,5,7,1,4,0,4,2,1,0,1,0
+concept:c7f8d04a4e2f6b91a6c4438e,ML models,2020-01-01,3,5,0,4,0,5,1,1,0,1,0
+concept:01d7268db56cd6189eb1122c,AI algorithms,2020-01-01,4,7,0,3,0,4,1,1,0,14,1
+concept:8bb32f93f15ce8dbe801343a,Precision medicine,2020-01-01,2,3,2,4,0,8,1,1,0,6,1
+concept:d0402c42dca6165d1f6917d2,speech recognition,2020-01-01,6,7,3,8,0,11,1,1,0,10,1
+concept:6c65c152218b2d885d6174e5,AlphaGo,2020-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2020-01-01,14,17,1,6,1,12,2,1,1,14,1
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2020-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2020-01-01,2,2,0,3,1,3,0,1,0,1,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2020-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:5e778af20f210fc15b90a66a,Industrial Artificial Intelligence,2020-01-01,2,5,2,4,1,6,1,1,0,1,0
+concept:e67c551b7276d379a198db8a,artificial neural networks (ANNs),2020-01-01,2,2,1,2,0,2,0,1,0,6,1
+concept:f446fd36defa677f9ef170e7,medical devices,2020-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:c844941aa27c9e916d400332,steam engines,2020-01-01,5,5,1,3,0,2,1,1,0,1,0
+concept:f8df8973462d3fd62b8e313e,Internet,2020-01-01,2,2,1,2,0,2,1,1,0,0,0
+concept:ae960d804eb9b35a80adf69e,electronics,2020-01-01,3,3,1,2,0,1,1,1,0,0,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2020-01-01,11,15,5,7,1,13,3,1,0,12,1
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2020-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2020-01-01,10,13,2,10,1,15,1,1,0,5,1
+concept:7859c3707426d244616fc820,AI chatbots,2020-01-01,2,2,0,1,0,1,1,1,0,6,1
+concept:f94c1c26179091c656c07e61,data analytics,2020-01-01,3,10,1,2,0,2,0,1,0,1,0
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2020-01-01,3,3,1,3,1,4,1,1,0,0,0
+concept:b510a0bc323c36cd0ac8a3c0,nanotechnology,2020-01-01,2,5,1,3,0,4,1,1,0,1,0
+concept:4e36eae4681d3fad66e562e7,conversational agents,2020-01-01,2,2,0,1,0,1,1,1,0,5,1
+concept:56504d74532298e3c7729854,secure computing technologies,2020-01-01,2,2,1,2,3,1,1,1,0,0,0
+concept:bc21f423edf71c98a3091474,machine-learning algorithms,2020-01-01,5,7,3,4,3,3,1,1,0,13,1
+concept:3279554a6c587da31b046333,AI-based tools,2020-01-01,2,5,1,4,0,5,1,1,0,9,1
+concept:75000a3bc66323459433743b,Long/Short Term Memory (LSTM),2020-01-01,2,2,2,8,1,17,1,1,0,1,0
+concept:f1263ee6f0b63f22823c182f,hardware,2020-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:caea85d7c477868305c0b298,internet of things (IoT),2020-01-01,2,2,1,3,0,6,0,1,0,6,1
+concept:de8468b5dcaf0551959c8a34,fuzzy systems,2020-01-01,3,3,1,4,0,6,1,1,0,1,0
+concept:b0c56a6a506df60eed9a4cae,artificial intelligence algorithms,2020-01-01,2,3,2,1,0,3,0,1,0,6,1
+concept:04e6f469e5b2e6f4992cd239,plain algorithms,2020-01-01,2,2,0,2,1,2,1,1,0,6,1
+concept:3add21bfd171564ab627b7e0,cognitive robots,2020-01-01,5,14,0,6,4,10,1,1,0,1,0
+concept:1fbac7b560b0356c69280088,electronic nose,2020-01-01,3,4,2,4,0,6,1,1,0,1,0
+concept:f6ba4390c51d75292ea10a2e,Random Forest,2020-01-01,5,6,4,5,0,6,1,1,0,9,1
+concept:bba809cd6871f85095858d32,CAD system,2020-01-01,11,18,2,7,0,13,1,1,1,5,1
+concept:2b22a6ab6d51b342e51439e8,Naive Bayes,2020-01-01,4,5,2,3,0,4,1,1,0,6,1
+concept:21b1dd72565c5e94581680db,AI-powered systems,2020-01-01,2,2,2,2,0,3,0,1,0,0,0
+concept:b0199813602e1463b3389ee4,cryptocurrency,2020-01-01,2,3,0,2,0,2,1,1,0,1,0
+concept:cec12a5de24e2c3e3b5c69c9,augmented reality,2020-01-01,2,2,1,2,0,5,1,1,0,5,1
+concept:b152ea6680731c6cccfc3be7,automated decision-making systems,2020-01-01,2,2,0,4,0,4,0,1,0,0,0
+concept:379508bb7a034991568eeaf2,k-nearest neighbor,2020-01-01,2,4,1,2,0,3,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2020-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:54671db0c987e9f36535037f,CAD,2020-01-01,5,17,2,4,0,7,1,1,0,1,0
+concept:79f97d1a93950010eb4cd50f,pressure sensors,2020-01-01,2,2,0,4,0,8,2,1,0,1,0
+concept:40328dc5c15195a0553af49b,virtual humans,2020-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:6b68ac52ebe1d293bf268f9f,automated systems,2020-01-01,2,4,0,2,2,1,0,1,0,5,1
+concept:635bcbcc0c7834024d8dc144,machine intelligence,2020-01-01,2,2,1,2,0,1,0,1,0,1,0
+concept:7b420d139104d03b11ea9c1f,simulation,2020-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2020-01-01,3,5,0,3,0,2,1,1,1,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2020-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:61161f49ae35e962834a47a2,simulated dynamic networks,2020-01-01,3,9,0,2,0,4,1,1,0,1,0
+concept:b6be8e71c48cc771e4319acc,IBM PC,2020-01-01,4,5,0,3,2,3,1,1,0,0,0
+concept:f1d7b14650f0a5d3707b44c0,hybrid AI,2020-01-01,2,2,0,2,0,1,1,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2020-01-01,2,2,0,1,0,1,0,1,0,1,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2020-01-01,3,3,1,6,2,5,1,1,0,0,0
+concept:9af72b8587ed73263d45af4a,computers,2020-01-01,7,12,0,2,0,4,1,1,1,1,0
+concept:e3b87ed1e33989a2014e39ed,RAISA technologies,2020-01-01,2,2,1,0,0,0,1,1,0,0,0
+concept:1e60efdf8b2dadf69c7e7aa7,evolutionary algorithms,2020-01-01,2,2,1,3,0,4,1,1,0,0,0
+concept:b31608b86bdf1bb9dc8be88f,RAISA,2020-01-01,3,18,2,7,1,7,1,1,0,0,0
+concept:fa41ba67ad73bcce495e38f2,Dermoscopy,2020-01-01,2,8,1,3,1,3,1,1,0,1,0
+concept:0a08d3760ffa765f1608445b,GoogLeNet,2020-01-01,2,3,0,3,0,5,0,1,0,0,0
+concept:bc717f850d48372a2d73d6dd,AdaBoost,2020-01-01,2,2,2,2,0,2,0,1,0,0,0
+concept:e5c99e6b95f7c8d527e3e8d6,fuzzy inference system,2020-01-01,2,3,0,3,0,4,1,1,1,1,0
+concept:c0dc86a5ba3e767db87791e5,ANNs,2020-01-01,3,5,2,3,2,3,1,1,3,1,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2020-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:e1cce994d2f0a467f6a46e74,3-dimentional echocardiography,2020-01-01,2,2,1,3,0,4,0,1,0,0,0
+concept:8de6870b9353d4200f8b21e4,synthetic aperture radar (SAR),2020-01-01,2,2,1,2,0,4,0,1,1,1,0
+concept:0b30b3a3df4b713b6a27efdd,adaptive network-based fuzzy inference system (ANFIS),2020-01-01,2,2,1,5,0,8,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2021-01-01,757,3707,315,72,81,723,6,1,61,1006,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2021-01-01,993,1591,381,85,113,916,6,1,46,1076,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2021-01-01,3,4,0,3,0,1,1,1,0,10,1
+concept:b7c770d72748bfb6f67d8e43,Artificial Intelligence in Education,2021-01-01,2,2,0,2,0,2,1,1,0,1,0
+concept:486064faf4c52977e0356396,AIEd,2021-01-01,6,23,2,6,0,11,1,1,0,10,1
+concept:6651924e2f49300abf94e9e8,Robotics,2021-01-01,28,36,5,18,2,41,1,1,0,17,1
+concept:95ed676751854f2ea0ff2f8a,web-based chatbots,2021-01-01,11,32,3,13,1,19,1,1,0,14,1
+concept:5d00ae29b41c4b3b019f3479,humanoid robots,2021-01-01,2,2,0,2,0,3,1,1,0,0,0
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2021-01-01,19,52,9,19,4,44,2,1,1,39,1
+concept:a9a406af29e462b14c9b6659,NLP,2021-01-01,21,23,5,20,0,35,1,1,1,22,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2021-01-01,16,40,7,12,1,16,1,1,1,21,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2021-01-01,130,249,49,45,46,205,4,1,6,127,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2021-01-01,99,180,47,42,20,181,4,1,5,79,1
+concept:8b1a60e7ce6d5fc2281c07d5,NER system,2021-01-01,3,5,2,4,0,5,1,1,1,0,0
+concept:c1061fd1e45b0d426deba3df,T-NER,2021-01-01,2,3,0,2,0,2,1,1,0,0,0
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2021-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2021-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:651a504402e378482d5ef7ae,robot,2021-01-01,12,15,5,13,1,22,1,1,0,5,1
+concept:1621bd15f374b54548d85362,data mining,2021-01-01,3,4,1,2,0,2,1,1,0,5,1
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2021-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2021-01-01,25,33,5,15,2,47,2,1,4,24,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2021-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2021-01-01,12,20,4,9,0,15,2,1,1,9,1
+concept:f1e2e93c1406750734a43902,mechanical AI,2021-01-01,6,15,2,6,0,9,1,1,0,1,0
+concept:9f85db63b2bfa9e87b759989,mobile computing,2021-01-01,5,5,0,3,0,6,2,1,0,1,0
+concept:65ee786d9a2334bcf0d57c89,clinical decision support systems,2021-01-01,3,5,1,4,0,5,1,1,1,6,1
+concept:6b3c80813749460f0abb5a2e,XAI,2021-01-01,14,52,10,15,1,27,1,1,1,47,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2021-01-01,3,4,0,2,0,1,1,1,0,46,1
+concept:5cdbd5ca2379cbfa57828c59,technologies,2021-01-01,3,4,1,4,0,6,1,1,0,1,0
+concept:2d420722137659d45f6bc897,big data analytics,2021-01-01,8,11,3,6,0,7,2,1,0,7,1
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2021-01-01,20,26,5,17,1,25,2,1,0,15,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2021-01-01,9,12,0,9,1,12,1,1,0,8,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2021-01-01,25,34,8,19,0,28,2,1,0,12,1
+concept:bbcb935d85c3d3e59fed902a,deep neural network,2021-01-01,15,16,6,14,3,22,1,1,0,9,1
+concept:3beb25a85acbe29e98962042,support vector machines,2021-01-01,22,27,8,19,2,36,1,1,0,9,1
+concept:04de5c47f0c124a9bcb94bb7,optical coherence tomography,2021-01-01,2,2,1,6,1,9,1,1,0,0,0
+concept:a9a62004449e82e44c4c48b7,integrated circuits,2021-01-01,2,3,0,1,0,3,1,1,0,1,0
+concept:d2f83e32938f46559b1d7661,edge intelligence,2021-01-01,4,12,2,6,0,9,2,1,0,1,0
+concept:3a171c01b3745e0f489476de,AI on edge,2021-01-01,2,2,1,4,0,4,2,1,0,5,1
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2021-01-01,2,2,0,0,0,0,1,1,0,1,0
+concept:b660908689ead05e55236ff1,Internet of Things,2021-01-01,32,89,14,29,8,78,3,1,0,35,1
+concept:0d190e61931292fd5ae2abd4,neuroscience,2021-01-01,3,3,2,13,0,28,1,1,0,0,0
+concept:474b9794732c4e12f3f1cceb,deep learning (DL),2021-01-01,4,4,1,7,0,7,1,1,0,9,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2021-01-01,32,44,14,19,4,62,1,1,0,17,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2021-01-01,8,9,2,7,2,12,1,1,0,18,1
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2021-01-01,5,6,2,2,1,3,1,1,0,0,0
+concept:46474c713de395b2ffede349,graphical models,2021-01-01,3,3,2,4,2,1,1,1,0,1,0
+concept:5075c365d8d0147065868c25,Deep learning algorithms,2021-01-01,11,12,5,9,1,18,2,1,1,9,1
+concept:f6f18f1ecf7badea02551c9e,neural networks,2021-01-01,39,54,11,25,5,54,1,1,0,14,1
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2021-01-01,3,5,0,2,0,2,0,1,0,1,0
+concept:2c4bfe4e944d6bbba65dc6f8,generative AI,2021-01-01,4,5,0,3,0,6,0,1,0,34,1
+concept:2d69c841bbcef7762e39b2fa,AI/ML,2021-01-01,3,13,2,7,3,8,1,1,0,15,1
+concept:5e565c103dd518deecbc8cc6,Learning Analytics,2021-01-01,3,8,1,4,0,3,1,1,0,1,0
+concept:385609602abbd0b0b9324c5a,cognitive technologies,2021-01-01,5,7,0,3,0,4,2,1,0,7,1
+concept:d7a180da7b683c3babeff8c5,virtual agents,2021-01-01,4,4,0,4,1,7,1,1,0,5,1
+concept:6ef2687baef74f620abe2e7a,NGs,2021-01-01,3,6,1,5,0,4,2,1,0,0,0
+concept:bf576f0b36df894be914c987,superhuman artificial intelligence,2021-01-01,2,2,0,1,1,1,1,1,0,0,0
+concept:836e2afaea87b44489763522,big data,2021-01-01,20,38,9,24,3,50,3,1,0,25,1
+concept:17f22f65af09718c710dd5ed,social media,2021-01-01,7,12,3,8,1,8,1,1,0,5,1
+concept:c2a83eec2def9d14da834740,machine learning (ML),2021-01-01,12,14,10,12,4,22,3,1,0,27,1
+concept:5447e095974d70af436ad66e,blockchain,2021-01-01,7,10,1,7,1,12,2,1,0,20,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2021-01-01,5,6,0,1,0,3,1,1,0,1,0
+concept:7e9695b36f24a1a882709a89,Smart Technology,2021-01-01,5,6,0,5,0,5,1,1,1,5,1
+concept:c7f8d04a4e2f6b91a6c4438e,ML models,2021-01-01,4,6,1,5,0,7,1,1,0,0,0
+concept:01d7268db56cd6189eb1122c,AI algorithms,2021-01-01,10,18,6,7,0,12,1,1,1,11,1
+concept:8bb32f93f15ce8dbe801343a,Precision medicine,2021-01-01,3,6,1,7,0,13,1,1,0,8,1
+concept:cccdfbdd918088316a7fd499,electronic health records,2021-01-01,3,4,1,3,1,6,1,1,0,5,1
+concept:d0402c42dca6165d1f6917d2,speech recognition,2021-01-01,9,10,3,10,0,13,2,1,0,7,1
+concept:bd36c08cb7e0134523d89a46,fog computing,2021-01-01,2,2,1,1,0,1,2,1,0,1,0
+concept:6c65c152218b2d885d6174e5,AlphaGo,2021-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2021-01-01,20,24,6,10,1,20,2,1,1,10,1
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2021-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2021-01-01,2,2,0,3,1,3,0,1,0,1,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2021-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:5826065aa93d1bbbbac67557,CNNs,2021-01-01,3,7,2,2,2,5,1,1,0,0,0
+concept:5e778af20f210fc15b90a66a,Industrial Artificial Intelligence,2021-01-01,2,5,0,4,1,6,1,1,0,1,0
+concept:f446fd36defa677f9ef170e7,medical devices,2021-01-01,2,2,0,1,0,1,1,1,0,1,0
+concept:c844941aa27c9e916d400332,steam engines,2021-01-01,6,6,1,3,0,3,1,1,0,1,0
+concept:f8df8973462d3fd62b8e313e,Internet,2021-01-01,2,2,0,2,0,2,1,1,0,0,0
+concept:ae960d804eb9b35a80adf69e,electronics,2021-01-01,3,3,0,2,0,1,1,1,0,0,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2021-01-01,15,19,4,11,1,23,3,1,0,12,1
+concept:109da3d7d79fbb84ba6e3dd8,AmI,2021-01-01,2,5,1,4,0,3,2,1,0,1,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2021-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:5f64be329b3d165dd8376d37,evolutionary electronics,2021-01-01,2,2,1,2,0,2,0,1,0,1,0
+concept:9a1345e39bc0c919302fdd1a,recurrent neural networks,2021-01-01,4,5,1,9,1,6,1,1,0,1,0
+concept:ca0577230beabb77da61fbaf,recommender systems,2021-01-01,4,6,4,4,0,4,1,1,0,6,1
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2021-01-01,11,16,1,12,1,18,1,1,1,5,1
+concept:7859c3707426d244616fc820,AI chatbots,2021-01-01,6,16,4,4,0,6,1,1,0,8,1
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2021-01-01,3,3,0,3,1,4,1,1,0,0,0
+concept:b510a0bc323c36cd0ac8a3c0,nanotechnology,2021-01-01,2,5,0,3,0,4,1,1,0,1,0
+concept:56504d74532298e3c7729854,secure computing technologies,2021-01-01,2,2,0,2,3,1,1,1,0,0,0
+concept:bc21f423edf71c98a3091474,machine-learning algorithms,2021-01-01,9,11,4,6,4,5,2,1,0,11,1
+concept:3279554a6c587da31b046333,AI-based tools,2021-01-01,3,6,1,4,0,6,1,1,0,10,1
+concept:75000a3bc66323459433743b,Long/Short Term Memory (LSTM),2021-01-01,3,3,1,9,1,19,1,1,0,0,0
+concept:f6c7a02b838fbc6e399bf486,machine vision,2021-01-01,2,2,1,5,0,5,1,1,0,1,0
+concept:7621c4ac7013c672320e00ea,programming languages,2021-01-01,4,5,1,1,0,1,1,1,0,1,0
+concept:f1263ee6f0b63f22823c182f,hardware,2021-01-01,3,3,1,1,0,1,1,1,0,1,0
+concept:71e58fc6fdafe2b1c6661bef,artificial intelligence-based system,2021-01-01,2,2,1,2,0,2,1,1,0,1,0
+concept:caea85d7c477868305c0b298,internet of things (IoT),2021-01-01,4,4,2,6,0,9,0,1,0,7,1
+concept:a45eb14f46fd46edd5a127b2,RPA,2021-01-01,2,5,2,2,0,3,1,1,0,0,0
+concept:b0c56a6a506df60eed9a4cae,artificial intelligence algorithms,2021-01-01,3,7,1,2,0,5,1,1,0,5,1
+concept:32829b8f0bdfe1d5cc2b7b1f,Radiomics,2021-01-01,2,7,0,2,0,4,1,1,1,6,1
+concept:3add21bfd171564ab627b7e0,cognitive robots,2021-01-01,6,15,1,8,4,12,1,1,0,1,0
+concept:c6c70b4c26045320162a0cc2,autonomous driving,2021-01-01,3,3,1,3,2,10,1,1,0,1,0
+concept:a050728ff6d4af13ab6a44d3,decision support systems,2021-01-01,4,4,1,5,0,6,1,1,0,1,0
+concept:468c38fda2efb0d4e072cdc6,unmanned aerial vehicles,2021-01-01,3,3,2,3,0,3,1,1,0,0,0
+concept:389860c1f5eb0fea0588d9fc,powerful computers,2021-01-01,3,3,2,2,0,2,1,1,0,1,0
+concept:1fbac7b560b0356c69280088,electronic nose,2021-01-01,3,4,0,4,0,6,1,1,0,1,0
+concept:f6ba4390c51d75292ea10a2e,Random Forest,2021-01-01,9,11,4,10,0,13,1,1,0,6,1
+concept:34549601845b3918b4296e0f,decision tree models,2021-01-01,2,3,2,3,0,4,1,1,0,0,0
+concept:563771f754c0b1066fca39fe,decision tree algorithm,2021-01-01,2,2,1,2,0,5,1,1,0,0,0
+concept:871f18d30ac256af5cee8c81,5G,2021-01-01,5,13,2,8,0,11,1,1,0,5,1
+concept:21b1dd72565c5e94581680db,AI-powered systems,2021-01-01,2,2,0,2,0,3,0,1,0,1,0
+concept:b0199813602e1463b3389ee4,cryptocurrency,2021-01-01,2,3,0,2,0,2,1,1,0,1,0
+concept:b152ea6680731c6cccfc3be7,automated decision-making systems,2021-01-01,2,2,0,4,0,4,0,1,0,0,0
+concept:379508bb7a034991568eeaf2,k-nearest neighbor,2021-01-01,2,4,0,2,0,3,1,1,0,0,0
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2021-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:54671db0c987e9f36535037f,CAD,2021-01-01,6,18,1,4,0,11,1,1,0,0,0
+concept:30af6dcdb0d95ca2fa419c07,self-driving cars,2021-01-01,4,4,2,5,1,14,0,1,0,1,0
+concept:79f97d1a93950010eb4cd50f,pressure sensors,2021-01-01,2,2,0,4,0,8,2,1,0,1,0
+concept:d16fc4bee7a18284a82fb788,brain computer interfaces,2021-01-01,3,3,3,9,0,23,1,1,0,1,0
+concept:40328dc5c15195a0553af49b,virtual humans,2021-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:cb321a4f326952df270bd3a2,sensors,2021-01-01,2,2,2,7,0,8,0,1,0,1,0
+concept:6b68ac52ebe1d293bf268f9f,automated systems,2021-01-01,3,5,1,3,2,1,1,1,0,5,1
+concept:d5f51534e94c402b108750ce,AI-enabled clinical decision support,2021-01-01,2,2,1,8,0,9,1,1,0,1,0
+concept:e1370a2e3e9794b60485b96d,cognitive models,2021-01-01,5,5,3,2,3,5,1,1,0,1,0
+concept:dd28ead1d7dcae0bdbb0b9db,computational OMICS,2021-01-01,2,2,1,5,3,7,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2021-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:cd6f59d33a14a71cebf4692b,interactive systems,2021-01-01,4,8,0,2,1,4,1,1,0,5,1
+concept:2e62746763b17f58221e0242,learning models,2021-01-01,3,5,0,3,0,2,1,1,1,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2021-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:a55f8bada66b7b142ac81971,industrial robots,2021-01-01,3,3,2,5,0,9,1,1,0,1,0
+concept:12d102708f7ff906b14a70d1,digital computer technology,2021-01-01,5,5,2,5,2,3,1,1,0,1,0
+concept:61161f49ae35e962834a47a2,simulated dynamic networks,2021-01-01,3,9,0,2,0,4,1,1,0,1,0
+concept:b6be8e71c48cc771e4319acc,IBM PC,2021-01-01,4,5,0,3,2,3,1,1,0,0,0
+concept:f1d7b14650f0a5d3707b44c0,hybrid AI,2021-01-01,2,2,0,2,0,1,1,1,0,0,0
+concept:aeda9c1eb2f45aea8a1007ba,convolutional neural network (CNN),2021-01-01,2,4,2,3,1,8,0,1,0,1,0
+concept:f565a94b42b8112870175351,wearable technology,2021-01-01,2,2,0,1,0,1,0,1,0,1,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2021-01-01,3,3,0,6,2,5,1,1,0,0,0
+concept:a09f082fd9ae9cedd6772864,IDx-DR,2021-01-01,2,2,1,2,1,5,1,1,0,1,0
+concept:9af72b8587ed73263d45af4a,computers,2021-01-01,7,12,0,2,0,4,1,1,1,1,0
+concept:7b9a5c66f9f73e1b6f73fdb9,Scientific Machine Learning,2021-01-01,2,2,1,2,0,6,1,1,0,1,0
+concept:e3b87ed1e33989a2014e39ed,RAISA technologies,2021-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:1e60efdf8b2dadf69c7e7aa7,evolutionary algorithms,2021-01-01,2,2,0,3,0,4,1,1,0,0,0
+concept:b31608b86bdf1bb9dc8be88f,RAISA,2021-01-01,3,18,0,7,1,7,1,1,0,0,0
+concept:bdd0954a757b4267c87f34af,proteomics,2021-01-01,2,2,1,2,0,2,1,1,0,0,0
+concept:beae6ce0e20a6b63a7509f65,deep learning convolutional neural networks,2021-01-01,2,2,1,3,0,5,0,1,0,1,0
+concept:fa41ba67ad73bcce495e38f2,Dermoscopy,2021-01-01,2,8,0,3,1,3,1,1,0,1,0
+concept:0a08d3760ffa765f1608445b,GoogLeNet,2021-01-01,2,3,0,3,0,5,0,1,0,0,0
+concept:bc717f850d48372a2d73d6dd,AdaBoost,2021-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:c611363161245c386ed767cd,genetic algorithm (GA),2021-01-01,2,2,1,1,0,1,0,1,0,0,0
+concept:5cc7964bf507261efaed8041,ICTs,2021-01-01,3,3,2,7,0,8,0,1,0,1,0
+concept:b6187fd5d2f4d8f50c4ed920,bioinformatics,2021-01-01,2,3,1,4,1,6,1,1,1,0,0
+concept:e5c99e6b95f7c8d527e3e8d6,fuzzy inference system,2021-01-01,2,3,0,3,0,4,1,1,1,1,0
+concept:c0dc86a5ba3e767db87791e5,ANNs,2021-01-01,4,6,1,6,2,7,1,1,3,0,0
+concept:832e7dd96b21fab9a57352a5,Telemedicine,2021-01-01,4,11,2,9,0,12,2,1,0,0,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2021-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:d17589f36774b1dd327ad48a,machines,2021-01-01,2,2,1,1,0,1,0,1,0,0,0
+concept:e1cce994d2f0a467f6a46e74,3-dimentional echocardiography,2021-01-01,2,2,0,3,0,4,0,1,0,0,0
+concept:eef2b07f65507e6083f0732c,UAVs,2021-01-01,2,6,2,1,0,1,1,1,0,1,0
+concept:59cef04317e5bdc27fe11e52,information and communication technologies,2021-01-01,3,3,2,6,0,8,1,1,0,1,0
+concept:df692ca46a82d414dc85ebdc,k-NN,2021-01-01,2,3,1,2,0,1,0,1,0,0,0
+concept:28b6b627b99bb6ac2883ae0b,AutoEncoder,2021-01-01,2,2,2,4,0,4,1,1,0,0,0
+concept:8de6870b9353d4200f8b21e4,synthetic aperture radar (SAR),2021-01-01,2,2,0,2,0,4,0,1,1,1,0
+concept:0b30b3a3df4b713b6a27efdd,adaptive network-based fuzzy inference system (ANFIS),2021-01-01,2,2,0,5,0,8,1,1,0,0,0
+concept:6623dddc807785a90c67dabf,RNNs,2021-01-01,2,4,1,0,0,0,1,1,0,0,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2022-01-01,1104,5692,347,84,105,1045,6,1,68,857,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2022-01-01,1384,2211,391,95,143,1253,6,1,48,878,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2022-01-01,7,8,4,8,0,6,1,1,0,6,1
+concept:b7c770d72748bfb6f67d8e43,Artificial Intelligence in Education,2022-01-01,2,2,0,2,0,2,1,1,0,1,0
+concept:486064faf4c52977e0356396,AIEd,2022-01-01,7,28,1,7,0,12,1,1,0,11,1
+concept:6651924e2f49300abf94e9e8,Robotics,2022-01-01,39,50,11,32,2,83,1,1,0,9,1
+concept:95ed676751854f2ea0ff2f8a,web-based chatbots,2022-01-01,15,40,4,17,1,30,1,1,0,15,1
+concept:5d00ae29b41c4b3b019f3479,humanoid robots,2022-01-01,2,2,0,2,0,3,1,1,0,0,0
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2022-01-01,32,69,13,27,5,68,2,1,1,35,1
+concept:a9a406af29e462b14c9b6659,NLP,2022-01-01,25,28,4,21,0,40,1,1,1,21,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2022-01-01,25,61,9,23,1,49,1,1,1,14,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2022-01-01,187,348,57,55,50,300,4,1,7,92,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2022-01-01,131,234,32,44,23,229,4,1,5,62,1
+concept:8b1a60e7ce6d5fc2281c07d5,NER system,2022-01-01,3,5,0,4,0,5,1,1,1,0,0
+concept:c1061fd1e45b0d426deba3df,T-NER,2022-01-01,2,3,0,2,0,2,1,1,0,0,0
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2022-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2022-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2022-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2022-01-01,37,49,12,20,2,68,4,1,4,15,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2022-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2022-01-01,16,28,4,11,0,20,3,1,1,6,1
+concept:f1e2e93c1406750734a43902,mechanical AI,2022-01-01,7,16,1,8,0,10,1,1,0,0,0
+concept:65ee786d9a2334bcf0d57c89,clinical decision support systems,2022-01-01,5,7,2,6,0,6,2,1,3,6,1
+concept:6b3c80813749460f0abb5a2e,XAI,2022-01-01,23,84,9,17,1,39,1,1,1,50,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2022-01-01,3,4,0,2,0,1,1,1,0,62,1
+concept:5cdbd5ca2379cbfa57828c59,technologies,2022-01-01,3,4,0,4,0,6,1,1,0,1,0
+concept:2d420722137659d45f6bc897,big data analytics,2022-01-01,11,14,3,12,0,15,2,1,0,6,1
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2022-01-01,30,38,10,22,3,47,2,1,0,7,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2022-01-01,13,16,4,13,1,21,1,1,0,6,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2022-01-01,27,40,2,22,1,35,2,1,0,12,1
+concept:bbcb935d85c3d3e59fed902a,deep neural network,2022-01-01,19,23,4,18,3,29,1,1,0,5,1
+concept:517a323dfbc5ad956c4193c2,classification and regression,2022-01-01,2,2,1,2,1,1,1,1,0,0,0
+concept:a1342693f191879b8e0be42c,reinforcement learning,2022-01-01,4,4,3,6,0,8,2,1,0,5,1
+concept:3beb25a85acbe29e98962042,support vector machines,2022-01-01,25,30,3,20,2,40,1,1,0,7,1
+concept:04de5c47f0c124a9bcb94bb7,optical coherence tomography,2022-01-01,2,2,0,6,1,9,1,1,0,0,0
+concept:4b9c08a8f505d20907daf421,aircraft turbines,2022-01-01,6,9,1,5,0,14,1,1,0,1,0
+concept:a9a62004449e82e44c4c48b7,integrated circuits,2022-01-01,2,3,0,1,0,3,1,1,0,1,0
+concept:d2f83e32938f46559b1d7661,edge intelligence,2022-01-01,4,12,0,6,0,9,2,1,0,1,0
+concept:ad5e58d8fa760b57c0aa7ca2,Deep Blue,2022-01-01,2,2,1,3,1,1,1,1,0,1,0
+concept:b660908689ead05e55236ff1,Internet of Things,2022-01-01,47,123,15,34,8,107,4,1,0,31,1
+concept:0d190e61931292fd5ae2abd4,neuroscience,2022-01-01,3,3,0,13,0,28,1,1,0,0,0
+concept:474b9794732c4e12f3f1cceb,deep learning (DL),2022-01-01,7,7,3,14,0,17,2,1,0,11,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2022-01-01,39,52,7,25,4,73,1,1,0,11,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2022-01-01,16,20,8,15,2,32,2,1,0,15,1
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2022-01-01,5,6,0,2,1,3,1,1,0,0,0
+concept:5075c365d8d0147065868c25,Deep learning algorithms,2022-01-01,13,14,2,12,1,22,2,1,1,8,1
+concept:f6f18f1ecf7badea02551c9e,neural networks,2022-01-01,44,59,5,26,5,64,1,1,0,13,1
+concept:2d0bfae87665d8b349eb747f,Artificial Intelligence Chatbot,2022-01-01,2,2,1,2,0,3,1,1,0,1,0
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2022-01-01,3,5,0,2,0,2,0,1,0,1,0
+concept:2c4bfe4e944d6bbba65dc6f8,generative AI,2022-01-01,4,5,0,3,0,6,0,1,0,69,1
+concept:4bec409e6e1c7d569a17b705,deep Reinforcement Learning (DRL),2022-01-01,2,2,1,3,2,4,1,1,0,1,0
+concept:1e1c87de7b3982c610bba668,recurrent neural networks (RNNs),2022-01-01,2,2,2,2,0,1,1,1,0,1,0
+concept:2d69c841bbcef7762e39b2fa,AI/ML,2022-01-01,9,35,6,12,4,19,1,1,0,12,1
+concept:c4b7b918e6c84859a722fc3a,high-performance computing,2022-01-01,4,4,2,7,1,10,1,1,0,0,0
+concept:6ef2687baef74f620abe2e7a,NGs,2022-01-01,3,6,0,5,0,4,2,1,0,0,0
+concept:bf576f0b36df894be914c987,superhuman artificial intelligence,2022-01-01,2,2,0,1,1,1,1,1,0,0,0
+concept:836e2afaea87b44489763522,big data,2022-01-01,31,65,11,28,3,71,3,1,0,18,1
+concept:c2a83eec2def9d14da834740,machine learning (ML),2022-01-01,19,21,7,21,4,36,3,1,0,28,1
+concept:5447e095974d70af436ad66e,blockchain,2022-01-01,14,38,7,14,1,31,3,1,0,15,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2022-01-01,6,7,1,3,0,6,1,1,0,0,0
+concept:8a4225d1797fafb3056e83d0,ultrasound,2022-01-01,3,3,2,4,0,4,1,1,0,1,0
+concept:7e9695b36f24a1a882709a89,Smart Technology,2022-01-01,9,10,4,12,0,23,1,1,1,1,0
+concept:c7f8d04a4e2f6b91a6c4438e,ML models,2022-01-01,4,6,0,5,0,7,1,1,0,0,0
+concept:01d7268db56cd6189eb1122c,AI algorithms,2022-01-01,14,26,4,9,1,19,1,1,1,8,1
+concept:8bb32f93f15ce8dbe801343a,Precision medicine,2022-01-01,4,7,1,7,0,14,1,1,0,7,1
+concept:d0402c42dca6165d1f6917d2,speech recognition,2022-01-01,11,12,2,11,0,16,2,1,0,5,1
+concept:bd36c08cb7e0134523d89a46,fog computing,2022-01-01,2,2,0,1,0,1,2,1,0,1,0
+concept:6c65c152218b2d885d6174e5,AlphaGo,2022-01-01,3,3,1,2,0,4,1,1,0,0,0
+concept:29d3b85bf51e5c617f9cc5db,expert systems,2022-01-01,24,29,4,16,1,35,2,1,1,6,1
+concept:e1b94e03e0711e838bc0560c,Alexa,2022-01-01,2,2,1,4,0,5,1,1,0,1,0
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2022-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2022-01-01,3,3,1,4,1,4,0,1,0,0,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2022-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:5826065aa93d1bbbbac67557,CNNs,2022-01-01,3,7,0,2,2,5,1,1,0,0,0
+concept:f98fc40cc8bf7f28809a1e8b,DNNs,2022-01-01,3,7,2,6,0,8,1,1,2,1,0
+concept:5e778af20f210fc15b90a66a,Industrial Artificial Intelligence,2022-01-01,2,5,0,4,1,6,1,1,0,1,0
+concept:f446fd36defa677f9ef170e7,medical devices,2022-01-01,3,3,1,2,0,2,1,1,0,0,0
+concept:d6ec3171b3d30c74c67f89f1,5G communication,2022-01-01,2,2,1,5,1,6,0,1,0,0,0
+concept:c844941aa27c9e916d400332,steam engines,2022-01-01,6,6,0,3,0,3,1,1,0,1,0
+concept:f8df8973462d3fd62b8e313e,Internet,2022-01-01,2,2,0,2,0,2,1,1,0,0,0
+concept:ae960d804eb9b35a80adf69e,electronics,2022-01-01,3,3,0,2,0,1,1,1,0,0,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2022-01-01,18,22,3,12,1,32,3,1,0,11,1
+concept:109da3d7d79fbb84ba6e3dd8,AmI,2022-01-01,3,6,1,4,0,5,2,1,0,0,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2022-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:9a1345e39bc0c919302fdd1a,recurrent neural networks,2022-01-01,5,6,1,9,1,7,1,1,0,1,0
+concept:27a10f3161626f17617ded9a,multilayer perceptron,2022-01-01,6,8,2,13,2,18,1,1,0,0,0
+concept:a065474a765bb01cc3564252,tumor markers,2022-01-01,2,8,1,3,0,5,1,1,0,1,0
+concept:ca0577230beabb77da61fbaf,recommender systems,2022-01-01,5,9,1,5,0,5,1,1,0,10,1
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2022-01-01,12,18,1,13,1,21,1,1,1,9,1
+concept:2aa8a486e1645a0b89e1a73a,computational intelligence,2022-01-01,2,2,1,1,0,1,2,1,0,1,0
+concept:7859c3707426d244616fc820,AI chatbots,2022-01-01,7,17,1,4,0,6,1,1,0,8,1
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2022-01-01,3,3,0,3,1,4,1,1,0,1,0
+concept:b510a0bc323c36cd0ac8a3c0,nanotechnology,2022-01-01,3,6,1,4,0,5,1,1,0,0,0
+concept:56504d74532298e3c7729854,secure computing technologies,2022-01-01,2,2,0,2,3,1,1,1,0,0,0
+concept:bc21f423edf71c98a3091474,machine-learning algorithms,2022-01-01,12,15,3,12,4,14,2,1,0,11,1
+concept:3279554a6c587da31b046333,AI-based tools,2022-01-01,4,9,1,7,0,17,1,1,0,10,1
+concept:75000a3bc66323459433743b,Long/Short Term Memory (LSTM),2022-01-01,3,3,0,9,1,19,1,1,0,0,0
+concept:f6c7a02b838fbc6e399bf486,machine vision,2022-01-01,2,2,0,5,0,5,1,1,0,1,0
+concept:7621c4ac7013c672320e00ea,programming languages,2022-01-01,5,6,1,2,0,2,1,1,0,0,0
+concept:f1263ee6f0b63f22823c182f,hardware,2022-01-01,3,3,0,1,0,1,1,1,0,1,0
+concept:71e58fc6fdafe2b1c6661bef,artificial intelligence-based system,2022-01-01,2,2,0,2,0,2,1,1,0,1,0
+concept:caea85d7c477868305c0b298,internet of things (IoT),2022-01-01,5,5,1,8,0,12,1,1,0,8,1
+concept:d5695b7ec7c941850ac4a544,Internet-connected systems,2022-01-01,2,2,1,4,1,5,1,1,0,0,0
+concept:a45eb14f46fd46edd5a127b2,RPA,2022-01-01,2,5,0,2,0,3,1,1,0,0,0
+concept:de8468b5dcaf0551959c8a34,fuzzy systems,2022-01-01,4,4,1,7,0,10,1,1,0,1,0
+concept:9927a241adf5091541f98213,genetic algorithms,2022-01-01,14,14,2,10,0,17,2,1,0,0,0
+concept:6ad5d42d222dfd195f034b56,agent-based systems,2022-01-01,3,4,1,5,0,6,1,1,0,1,0
+concept:b0c56a6a506df60eed9a4cae,artificial intelligence algorithms,2022-01-01,4,8,1,3,0,6,1,1,0,5,1
+concept:25fce8751bed3081f7eee6ba,smart grid,2022-01-01,2,2,2,5,0,8,1,1,0,1,0
+concept:3add21bfd171564ab627b7e0,cognitive robots,2022-01-01,6,15,0,8,4,12,1,1,0,1,0
+concept:d990c36ff5cc4ada05d2772b,Explainable Artificial Intelligence,2022-01-01,3,3,0,2,0,3,1,1,0,6,1
+concept:c6c70b4c26045320162a0cc2,autonomous driving,2022-01-01,4,4,1,4,2,12,1,1,0,0,0
+concept:468c38fda2efb0d4e072cdc6,unmanned aerial vehicles,2022-01-01,3,3,0,3,0,3,1,1,0,0,0
+concept:389860c1f5eb0fea0588d9fc,powerful computers,2022-01-01,4,6,1,5,0,6,2,1,0,0,0
+concept:1fbac7b560b0356c69280088,electronic nose,2022-01-01,4,5,1,5,0,9,1,1,0,0,0
+concept:84e509a503fa2203c1e324e5,fuzzy logic systems,2022-01-01,3,3,2,8,0,11,1,1,0,0,0
+concept:f6ba4390c51d75292ea10a2e,Random Forest,2022-01-01,10,12,1,10,0,15,1,1,0,7,1
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2022-01-01,4,4,2,4,0,7,1,1,0,0,0
+concept:34549601845b3918b4296e0f,decision tree models,2022-01-01,2,3,0,3,0,4,1,1,0,0,0
+concept:563771f754c0b1066fca39fe,decision tree algorithm,2022-01-01,2,2,0,2,0,5,1,1,0,0,0
+concept:952a1500c1bfaec5303c4c16,TRIPOD-AI,2022-01-01,2,12,1,5,2,5,1,1,0,0,0
+concept:e01d3badbdbd71b5700eaeb4,TRIPOD-artificial intelligence,2022-01-01,2,2,1,4,2,5,1,1,0,0,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2022-01-01,6,7,2,3,0,8,1,1,0,0,0
+concept:54733dc8c4e498910c6f3c20,virtual reality,2022-01-01,4,4,0,5,1,4,1,1,0,6,1
+concept:2b22a6ab6d51b342e51439e8,Naive Bayes,2022-01-01,9,12,2,7,0,9,1,1,0,1,0
+concept:21b1dd72565c5e94581680db,AI-powered systems,2022-01-01,2,2,0,2,0,3,0,1,0,1,0
+concept:905c1a33f43258a78b630664,Industrial Internet of Things (IIoT),2022-01-01,2,2,1,9,0,8,0,1,0,1,0
+concept:3c4c664613e690778a27d00f,technological tools,2022-01-01,2,2,1,2,0,3,1,1,0,0,0
+concept:cec12a5de24e2c3e3b5c69c9,augmented reality,2022-01-01,4,11,0,5,0,11,1,1,0,5,1
+concept:b152ea6680731c6cccfc3be7,automated decision-making systems,2022-01-01,2,2,0,4,0,4,0,1,0,0,0
+concept:379508bb7a034991568eeaf2,k-nearest neighbor,2022-01-01,2,4,0,2,0,3,1,1,0,0,0
+concept:75c4894dcff5464a079bb705,AIoT,2022-01-01,3,8,3,5,0,9,2,1,0,7,1
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2022-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:54671db0c987e9f36535037f,CAD,2022-01-01,6,18,0,4,0,11,1,1,0,0,0
+concept:7397e0a7210bc8933fa9ccd3,photonic platforms,2022-01-01,3,5,1,2,0,7,1,1,0,1,0
+concept:15a140ab43f2ea0997bca910,robotic prostheses,2022-01-01,2,2,1,2,2,3,1,1,0,0,0
+concept:30af6dcdb0d95ca2fa419c07,self-driving cars,2022-01-01,4,4,0,5,1,14,0,1,0,1,0
+concept:79f97d1a93950010eb4cd50f,pressure sensors,2022-01-01,3,3,1,4,1,9,2,1,0,0,0
+concept:d16fc4bee7a18284a82fb788,brain computer interfaces,2022-01-01,3,3,0,9,0,23,1,1,0,1,0
+concept:e75d78012e3b1c7043cbc1f5,Pattern recognition,2022-01-01,2,2,1,2,0,4,0,1,0,1,0
+concept:ca2fbc3a7b99ed32378f999d,wearable monitoring devices,2022-01-01,2,3,2,2,0,3,1,1,0,5,1
+concept:40328dc5c15195a0553af49b,virtual humans,2022-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:cb321a4f326952df270bd3a2,sensors,2022-01-01,3,4,1,11,0,13,1,1,0,1,0
+concept:6b68ac52ebe1d293bf268f9f,automated systems,2022-01-01,4,6,1,4,2,3,1,1,0,5,1
+concept:d5f51534e94c402b108750ce,AI-enabled clinical decision support,2022-01-01,2,2,0,8,0,9,1,1,0,1,0
+concept:e1370a2e3e9794b60485b96d,cognitive models,2022-01-01,6,6,1,3,3,7,1,1,0,0,0
+concept:dd28ead1d7dcae0bdbb0b9db,computational OMICS,2022-01-01,2,2,0,5,3,7,1,1,0,0,0
+concept:7b420d139104d03b11ea9c1f,simulation,2022-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2022-01-01,3,5,0,3,0,2,1,1,1,1,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2022-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:27c29e2b352b061f72c6b79f,Neuro-Symbolic Artificial Intelligence,2022-01-01,2,2,1,3,0,4,1,1,0,1,0
+concept:9065ed06cd8855992bc8a0ce,VA technology,2022-01-01,2,3,2,2,0,2,1,1,0,0,0
+concept:61161f49ae35e962834a47a2,simulated dynamic networks,2022-01-01,3,9,0,2,0,4,1,1,0,1,0
+concept:498cd0e5c2d2ca8b51d4541e,drones,2022-01-01,2,2,1,5,0,7,0,1,0,5,1
+concept:b6be8e71c48cc771e4319acc,IBM PC,2022-01-01,4,5,0,3,2,3,1,1,0,0,0
+concept:f1d7b14650f0a5d3707b44c0,hybrid AI,2022-01-01,2,2,0,2,0,1,1,1,0,0,0
+concept:798967b64cb7b260c0ced028,touch screens,2022-01-01,2,2,1,4,0,7,0,1,0,0,0
+concept:741dd89c63a244bfbca318bb,hybrid systems,2022-01-01,2,2,1,1,0,2,1,1,0,1,0
+concept:4ea50279f0fbf2b9b70aecb7,telehealth,2022-01-01,2,4,1,1,0,2,1,1,0,1,0
+concept:f565a94b42b8112870175351,wearable technology,2022-01-01,2,2,0,1,0,1,0,1,0,1,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2022-01-01,3,3,0,6,2,5,1,1,0,0,0
+concept:a09f082fd9ae9cedd6772864,IDx-DR,2022-01-01,3,4,1,3,1,5,1,1,0,0,0
+concept:9af72b8587ed73263d45af4a,computers,2022-01-01,7,12,0,2,0,4,1,1,1,1,0
+concept:7b9a5c66f9f73e1b6f73fdb9,Scientific Machine Learning,2022-01-01,2,2,0,2,0,6,1,1,0,1,0
+concept:97f7434d89b7a94f13cfd381,regression models,2022-01-01,4,6,1,4,1,2,1,1,0,1,0
+concept:e3b87ed1e33989a2014e39ed,RAISA technologies,2022-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:1e60efdf8b2dadf69c7e7aa7,evolutionary algorithms,2022-01-01,2,2,0,3,0,4,1,1,0,0,0
+concept:b31608b86bdf1bb9dc8be88f,RAISA,2022-01-01,3,18,0,7,1,7,1,1,0,0,0
+concept:064fdaf27e0f4caf35674e1b,GI Genius,2022-01-01,2,3,1,4,0,5,1,1,0,0,0
+concept:bdd0954a757b4267c87f34af,proteomics,2022-01-01,2,2,0,2,0,2,1,1,0,0,0
+concept:beae6ce0e20a6b63a7509f65,deep learning convolutional neural networks,2022-01-01,2,2,0,3,0,5,0,1,0,1,0
+concept:fa41ba67ad73bcce495e38f2,Dermoscopy,2022-01-01,3,9,1,4,1,4,1,1,0,0,0
+concept:0a08d3760ffa765f1608445b,GoogLeNet,2022-01-01,2,3,0,3,0,5,0,1,0,0,0
+concept:bc717f850d48372a2d73d6dd,AdaBoost,2022-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:c611363161245c386ed767cd,genetic algorithm (GA),2022-01-01,2,2,0,1,0,1,0,1,0,1,0
+concept:d346c339a95e1dba4959e23c,ICT,2022-01-01,2,4,1,2,0,2,1,1,0,0,0
+concept:9c3a5d7cdaeb1464aca61b67,early machine learning algorithms,2022-01-01,2,2,1,3,0,4,1,1,0,0,0
+concept:da0f6830c2bdfe5a2f19ffa2,artificial intelligence/machine learning,2022-01-01,2,3,1,4,1,4,1,1,0,0,0
+concept:5cc7964bf507261efaed8041,ICTs,2022-01-01,3,3,0,7,0,8,0,1,0,1,0
+concept:b6187fd5d2f4d8f50c4ed920,bioinformatics,2022-01-01,2,3,0,4,1,6,1,1,1,0,0
+concept:e5c99e6b95f7c8d527e3e8d6,fuzzy inference system,2022-01-01,2,3,0,3,0,4,1,1,1,1,0
+concept:c0dc86a5ba3e767db87791e5,ANNs,2022-01-01,4,6,0,6,2,7,1,1,3,0,0
+concept:832e7dd96b21fab9a57352a5,Telemedicine,2022-01-01,4,11,0,9,0,12,2,1,0,0,0
+concept:49924162a6c49dbb84c478ad,explainable model,2022-01-01,2,4,1,1,0,2,1,1,0,0,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2022-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:d17589f36774b1dd327ad48a,machines,2022-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:e1cce994d2f0a467f6a46e74,3-dimentional echocardiography,2022-01-01,2,2,0,3,0,4,0,1,0,0,0
+concept:eef2b07f65507e6083f0732c,UAVs,2022-01-01,2,6,0,1,0,1,1,1,0,1,0
+concept:eb63ce4d1b4c48c4c86e93b7,remote cameras,2022-01-01,2,2,2,2,0,4,1,1,0,0,0
+concept:59cef04317e5bdc27fe11e52,information and communication technologies,2022-01-01,3,3,0,6,0,8,1,1,0,1,0
+concept:2103eb291e10071d7cce74ce,Tumor immunomics,2022-01-01,2,2,1,2,0,3,2,1,0,0,0
+concept:519885527cb1103a5928d18d,cuckoo search algorithm,2022-01-01,2,2,1,3,0,3,1,1,0,0,0
+concept:d3282b3444c77fccde6b3252,gradient boosting machines,2022-01-01,2,2,1,2,0,4,0,1,0,0,0
+concept:2882d1dca2385909017035e0,Tess,2022-01-01,2,10,1,2,0,3,1,1,0,0,0
+concept:4719d72d57436d63d19e71b4,CAD4TB,2022-01-01,2,3,1,3,0,3,1,1,0,0,0
+concept:7898a62c81270e986e17a814,qXR,2022-01-01,2,5,1,3,0,3,1,1,0,0,0
+concept:df692ca46a82d414dc85ebdc,k-NN,2022-01-01,2,3,0,2,0,1,0,1,0,0,0
+concept:28b6b627b99bb6ac2883ae0b,AutoEncoder,2022-01-01,2,2,0,4,0,4,1,1,0,0,0
+concept:8de6870b9353d4200f8b21e4,synthetic aperture radar (SAR),2022-01-01,2,2,0,2,0,4,0,1,1,1,0
+concept:cf50eedbe3f7333c85a2d1c1,assisted reproductive technology,2022-01-01,2,2,1,3,0,3,1,1,0,0,0
+concept:e5076ab258ce151b168c1d65,formal ontologies,2022-01-01,2,3,1,2,0,2,1,1,0,0,0
+concept:ed0292ddd9943d392e63b680,deep learning neural networks,2022-01-01,2,2,2,1,0,2,1,1,0,0,0
+concept:0b30b3a3df4b713b6a27efdd,adaptive network-based fuzzy inference system (ANFIS),2022-01-01,2,2,0,5,0,8,1,1,0,0,0
+concept:6623dddc807785a90c67dabf,RNNs,2022-01-01,2,4,0,0,0,0,1,1,0,0,0
+concept:8db86f935644d2a591432b6e,Streaming NER,2023-01-01,7,7,1,4,1,4,2,1,0,1,0
+concept:1e2b333f8da31b9e72a4c70e,Bi-encoder,2023-01-01,1421,7529,317,93,118,1293,6,1,80,589,1
+concept:307121ec6600bf5153cd3afb,artificial intelligence,2023-01-01,1725,2765,341,103,160,1534,6,1,57,585,1
+concept:38774f3607b0edd1d8429d6c,intelligent tutoring systems,2023-01-01,7,8,0,8,0,6,1,1,0,6,1
+concept:b7c770d72748bfb6f67d8e43,Artificial Intelligence in Education,2023-01-01,3,3,1,3,0,4,1,1,0,0,0
+concept:6651924e2f49300abf94e9e8,Robotics,2023-01-01,42,53,3,33,2,90,1,1,0,6,1
+concept:95ed676751854f2ea0ff2f8a,web-based chatbots,2023-01-01,19,49,4,20,1,40,1,1,0,12,1
+concept:5d00ae29b41c4b3b019f3479,humanoid robots,2023-01-01,2,2,0,2,0,3,1,1,0,0,0
+concept:8dc07f53ed37543743017257,Bidirectional Transformer,2023-01-01,43,99,11,34,7,102,3,1,1,27,1
+concept:a9a406af29e462b14c9b6659,NLP,2023-01-01,33,39,8,26,0,52,2,1,2,14,1
+concept:6663d03b83e1362609d062fe,AI-based systems,2023-01-01,32,79,7,26,1,58,2,1,1,8,1
+concept:038298efdfae363616ef6f54,machine learning techniques,2023-01-01,222,414,35,63,51,366,4,1,12,65,1
+concept:6afb38d9a61eedf0d3b7fd06,deep learning,2023-01-01,152,267,21,48,23,274,4,1,5,43,1
+concept:8b1a60e7ce6d5fc2281c07d5,NER system,2023-01-01,3,5,0,4,0,5,1,1,1,0,0
+concept:10c494357ab4bf9419af82fc,Stanford NER system,2023-01-01,2,2,1,2,0,2,1,1,0,0,0
+concept:c1061fd1e45b0d426deba3df,T-NER,2023-01-01,2,3,0,2,0,2,1,1,0,0,0
+concept:d7ee6bb34be003f72bdc9235,Hidden Markov Model,2023-01-01,3,4,0,4,4,5,1,1,0,0,0
+concept:bd7f9f6bb124a8f7b52d7d06,contemporary distributed artificial intelligence,2023-01-01,4,11,0,4,0,5,2,1,0,0,0
+concept:3d679902fd5c2802f90fd05a,hybrid intelligent systems,2023-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:5a2f160d91d7223033d83b9b,artificail neural networks,2023-01-01,47,63,10,23,2,85,4,1,4,5,1
+concept:492608e91886f79808b41dc0,fuzzy expert systems,2023-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:04aa8fc4187076e218e1190d,evolutionary computation,2023-01-01,18,30,2,18,0,34,3,1,1,5,1
+concept:f1e2e93c1406750734a43902,mechanical AI,2023-01-01,7,16,0,8,0,10,1,1,0,0,0
+concept:65ee786d9a2334bcf0d57c89,clinical decision support systems,2023-01-01,7,9,2,10,1,18,2,1,3,5,1
+concept:6b3c80813749460f0abb5a2e,XAI,2023-01-01,43,171,20,31,2,85,1,1,4,32,1
+concept:9fc55ce41e6cb3449608eb47,Chat GPT,2023-01-01,7,18,4,7,0,11,1,1,1,59,1
+concept:5cdbd5ca2379cbfa57828c59,technologies,2023-01-01,3,4,0,4,0,6,1,1,0,1,0
+concept:2d420722137659d45f6bc897,big data analytics,2023-01-01,12,15,1,12,0,16,2,1,0,5,1
+concept:ec8624e0ce6df75a1ac476f8,computer vision,2023-01-01,31,39,1,22,3,48,2,1,0,7,1
+concept:f4d5c27817ef949cad6d5102,autonomous car,2023-01-01,14,17,1,13,1,24,1,1,0,5,1
+concept:a98a081d59aac1aef30b3f9d,artificial intelligent techniques,2023-01-01,32,47,5,26,1,52,2,1,0,8,1
+concept:bbcb935d85c3d3e59fed902a,deep neural network,2023-01-01,24,28,5,20,4,43,1,1,0,1,0
+concept:517a323dfbc5ad956c4193c2,classification and regression,2023-01-01,2,2,0,2,1,1,1,1,0,0,0
+concept:9729e34a9f04973410d2f54c,supervised learning,2023-01-01,3,4,1,5,0,5,1,1,0,1,0
+concept:04de5c47f0c124a9bcb94bb7,optical coherence tomography,2023-01-01,2,2,0,6,1,9,1,1,0,0,0
+concept:4b9c08a8f505d20907daf421,aircraft turbines,2023-01-01,6,9,0,5,0,14,1,1,0,1,0
+concept:a9a62004449e82e44c4c48b7,integrated circuits,2023-01-01,3,4,1,2,0,8,1,1,0,0,0
+concept:8530f360c90902103b6fd4a1,data science,2023-01-01,8,10,1,11,0,12,2,1,1,1,0
+concept:d2f83e32938f46559b1d7661,edge intelligence,2023-01-01,4,12,0,6,0,9,2,1,0,1,0
+concept:3a171c01b3745e0f489476de,AI on edge,2023-01-01,5,8,0,9,1,13,2,1,0,5,1
+concept:ad5e58d8fa760b57c0aa7ca2,Deep Blue,2023-01-01,2,2,0,3,1,1,1,1,0,1,0
+concept:e7fd9df8f6d319174f120051,Artificial Intelligence and Statistics,2023-01-01,3,5,1,2,0,2,1,1,0,1,0
+concept:b660908689ead05e55236ff1,Internet of Things,2023-01-01,56,142,9,37,9,123,4,1,1,24,1
+concept:0d190e61931292fd5ae2abd4,neuroscience,2023-01-01,3,3,0,13,0,28,1,1,0,0,0
+concept:820186e98a198f980283240f,facial recognition systems,2023-01-01,5,5,1,5,0,7,1,1,0,1,0
+concept:474b9794732c4e12f3f1cceb,deep learning (DL),2023-01-01,10,10,3,18,0,25,2,1,0,10,1
+concept:2a7cbb4b6e1f72f303ad782a,Convolutional neural networks,2023-01-01,44,57,5,28,4,85,1,1,0,6,1
+concept:908523cf93de050e9f637e0e,Digital technologies,2023-01-01,21,25,5,20,2,39,2,1,0,11,1
+concept:0d45177679128a520f7f5c6c,flexible pressure sensors,2023-01-01,2,4,1,1,0,3,0,1,0,0,0
+concept:67d9fed9beacd32724690f88,first-order Bayesian networks,2023-01-01,5,6,0,2,1,3,1,1,0,0,0
+concept:5075c365d8d0147065868c25,Deep learning algorithms,2023-01-01,16,17,3,13,1,27,3,1,1,5,1
+concept:72d9a48da6ab414d40818777,smartphones,2023-01-01,7,7,3,7,0,9,1,1,0,0,0
+concept:f6f18f1ecf7badea02551c9e,neural networks,2023-01-01,48,66,4,27,5,71,1,1,0,9,1
+concept:2d0bfae87665d8b349eb747f,Artificial Intelligence Chatbot,2023-01-01,2,2,0,2,0,3,1,1,0,1,0
+concept:2b3c529fa535bba28c9a9c21,intelligent manufacturing,2023-01-01,3,5,0,2,0,2,0,1,0,1,0
+concept:2c4bfe4e944d6bbba65dc6f8,generative AI,2023-01-01,7,13,3,8,1,13,1,1,2,69,1
+concept:2d69c841bbcef7762e39b2fa,AI/ML,2023-01-01,13,46,4,13,4,32,1,1,0,9,1
+concept:c4b7b918e6c84859a722fc3a,high-performance computing,2023-01-01,4,4,0,7,1,10,1,1,0,0,0
+concept:6ef2687baef74f620abe2e7a,NGs,2023-01-01,3,6,0,5,0,4,2,1,0,0,0
+concept:40300ab413822b20aac3a6b5,Hyperspectral imaging,2023-01-01,3,6,2,10,1,15,1,1,0,1,0
+concept:bf576f0b36df894be914c987,superhuman artificial intelligence,2023-01-01,2,2,0,1,1,1,1,1,0,0,0
+concept:836e2afaea87b44489763522,big data,2023-01-01,39,80,8,33,3,94,4,1,0,10,1
+concept:c2a83eec2def9d14da834740,machine learning (ML),2023-01-01,29,32,10,32,5,81,3,1,0,21,1
+concept:5447e095974d70af436ad66e,blockchain,2023-01-01,22,62,8,18,1,47,4,1,0,9,1
+concept:19b2213e0bd4d7403d2680b2,knowledge-based systems,2023-01-01,6,7,0,3,0,6,1,1,0,0,0
+concept:8138642510799bc1d8110b66,mammography,2023-01-01,2,2,1,4,0,5,1,1,0,0,0
+concept:3795d751c194e00a8437f7de,computed tomography scan,2023-01-01,2,2,1,4,0,5,1,1,0,1,0
+concept:5dc967f936d883d498fa7a40,magnetic resonance imaging,2023-01-01,3,3,1,4,0,5,1,1,0,1,0
+concept:8a4225d1797fafb3056e83d0,ultrasound,2023-01-01,4,4,1,6,0,7,1,1,0,0,0
+concept:126094d4f5820230d9dfdfea,genomics,2023-01-01,2,2,1,4,0,4,1,1,0,1,0
+concept:7e9695b36f24a1a882709a89,Smart Technology,2023-01-01,9,10,0,12,0,23,1,1,1,1,0
+concept:c7f8d04a4e2f6b91a6c4438e,ML models,2023-01-01,4,6,0,5,0,7,1,1,0,1,0
+concept:d0402c42dca6165d1f6917d2,speech recognition,2023-01-01,16,18,5,18,4,29,2,1,0,0,0
+concept:bd36c08cb7e0134523d89a46,fog computing,2023-01-01,3,3,1,4,1,5,2,1,0,0,0
+concept:55bec97e2cf2ecdf24c389ab,mobile,2023-01-01,2,2,1,3,0,4,0,1,0,0,0
+concept:6c65c152218b2d885d6174e5,AlphaGo,2023-01-01,3,3,0,2,0,4,1,1,0,0,0
+concept:e1b94e03e0711e838bc0560c,Alexa,2023-01-01,3,3,1,6,0,7,1,1,0,0,0
+concept:bb43c5a67ff47a947f028d54,internal combustion engines,2023-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:83648401535f685b97c1e234,Electricity,2023-01-01,3,3,0,4,1,4,0,1,0,0,0
+concept:e070778f477a64fed7c9dac2,semiconductors,2023-01-01,2,2,0,3,1,3,0,1,0,0,0
+concept:5826065aa93d1bbbbac67557,CNNs,2023-01-01,3,7,0,2,2,5,1,1,0,0,0
+concept:f98fc40cc8bf7f28809a1e8b,DNNs,2023-01-01,4,10,1,7,0,13,1,1,2,0,0
+concept:5e778af20f210fc15b90a66a,Industrial Artificial Intelligence,2023-01-01,3,9,1,5,1,10,1,1,0,0,0
+concept:b05d4efe8f875b79ecf92e66,Cyber-Physical Systems,2023-01-01,6,6,1,10,4,24,2,1,0,1,0
+concept:d6ec3171b3d30c74c67f89f1,5G communication,2023-01-01,2,2,0,5,1,6,0,1,0,0,0
+concept:df3b4abf91124e714b690573,robotic devices,2023-01-01,2,3,1,1,0,6,1,1,0,0,0
+concept:c844941aa27c9e916d400332,steam engines,2023-01-01,6,6,0,3,0,3,1,1,0,1,0
+concept:f8df8973462d3fd62b8e313e,Internet,2023-01-01,2,2,0,2,0,2,1,1,0,0,0
+concept:ae960d804eb9b35a80adf69e,electronics,2023-01-01,3,3,0,2,0,1,1,1,0,0,0
+concept:83aefad57a10f78dd298c51c,cloud computing,2023-01-01,23,28,5,18,2,67,3,1,0,6,1
+concept:109da3d7d79fbb84ba6e3dd8,AmI,2023-01-01,3,6,0,4,0,5,2,1,0,0,0
+concept:fd19f6778aa5dd8e5ee540d3,health chatbots,2023-01-01,2,2,1,2,0,6,1,1,0,0,0
+concept:91257032d0c61ca3f7b0b629,IEEE Intelligent Systems,2023-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:5f64be329b3d165dd8376d37,evolutionary electronics,2023-01-01,3,3,1,5,0,7,1,1,0,1,0
+concept:9a1345e39bc0c919302fdd1a,recurrent neural networks,2023-01-01,5,6,0,9,1,7,1,1,0,1,0
+concept:27a10f3161626f17617ded9a,multilayer perceptron,2023-01-01,6,8,0,13,2,18,1,1,0,0,0
+concept:a065474a765bb01cc3564252,tumor markers,2023-01-01,3,14,1,4,0,6,1,1,0,0,0
+concept:ca0577230beabb77da61fbaf,recommender systems,2023-01-01,7,15,2,7,0,7,1,1,0,8,1
+concept:0aa438a6b8dd30f0d4bea4b7,federated learning,2023-01-01,15,22,3,13,1,26,1,1,1,7,1
+concept:2aa8a486e1645a0b89e1a73a,computational intelligence,2023-01-01,3,3,1,4,0,4,2,1,0,0,0
+concept:7859c3707426d244616fc820,AI chatbots,2023-01-01,8,19,1,7,0,9,1,1,0,7,1
+concept:b43af85c2e5773a576cf7fe6,nano technology,2023-01-01,2,7,1,3,0,3,0,1,0,0,0
+concept:e2fa5245b2120681366a14a4,Stable Diffusion,2023-01-01,3,3,0,3,1,4,1,1,0,1,0
+concept:b510a0bc323c36cd0ac8a3c0,nanotechnology,2023-01-01,3,6,0,4,0,5,1,1,0,0,0
+concept:a31b8066993779488535d6d5,interactive voice response calls,2023-01-01,2,2,1,3,0,5,1,1,0,0,0
+concept:56504d74532298e3c7729854,secure computing technologies,2023-01-01,2,2,0,2,3,1,1,1,0,0,0
+concept:bc21f423edf71c98a3091474,machine-learning algorithms,2023-01-01,18,21,6,18,5,26,3,1,0,5,1
+concept:75000a3bc66323459433743b,Long/Short Term Memory (LSTM),2023-01-01,3,3,0,9,1,19,1,1,0,0,0
+concept:f6c7a02b838fbc6e399bf486,machine vision,2023-01-01,3,3,1,5,0,5,2,1,0,0,0
+concept:7621c4ac7013c672320e00ea,programming languages,2023-01-01,5,6,0,2,0,2,1,1,0,0,0
+concept:f1263ee6f0b63f22823c182f,hardware,2023-01-01,3,3,0,1,0,1,1,1,0,1,0
+concept:71e58fc6fdafe2b1c6661bef,artificial intelligence-based system,2023-01-01,2,2,0,2,0,2,1,1,0,1,0
+concept:caea85d7c477868305c0b298,internet of things (IoT),2023-01-01,8,8,3,11,0,24,2,1,0,5,1
+concept:eb7ed3d7e316b62f8330e0ad,5G cellular networks,2023-01-01,2,7,1,6,2,7,0,1,0,1,0
+concept:d5695b7ec7c941850ac4a544,Internet-connected systems,2023-01-01,2,2,0,4,1,5,1,1,0,0,0
+concept:a45eb14f46fd46edd5a127b2,RPA,2023-01-01,2,5,0,2,0,3,1,1,0,0,0
+concept:de8468b5dcaf0551959c8a34,fuzzy systems,2023-01-01,4,4,0,7,0,10,1,1,0,1,0
+concept:9927a241adf5091541f98213,genetic algorithms,2023-01-01,14,14,0,10,0,17,2,1,0,0,0
+concept:6ad5d42d222dfd195f034b56,agent-based systems,2023-01-01,3,4,0,5,0,6,1,1,0,1,0
+concept:bab5b43a5d09ddd72aee9e90,historical models,2023-01-01,3,3,2,4,0,6,1,1,0,0,0
+concept:b0c56a6a506df60eed9a4cae,artificial intelligence algorithms,2023-01-01,8,17,4,13,1,20,1,1,0,1,0
+concept:5b39afba0081d9a79d298528,logistic regression,2023-01-01,8,11,2,6,0,7,1,1,0,0,0
+concept:25fce8751bed3081f7eee6ba,smart grid,2023-01-01,2,2,0,5,0,8,1,1,0,1,0
+concept:3add21bfd171564ab627b7e0,cognitive robots,2023-01-01,6,15,0,8,4,12,1,1,0,1,0
+concept:08337d686f11c3d83ccf4fc4,smart systems,2023-01-01,9,12,1,10,1,12,2,1,0,1,0
+concept:8433b3b97f938d194db18565,artificial life,2023-01-01,4,5,2,7,4,11,1,1,0,0,0
+concept:c6c70b4c26045320162a0cc2,autonomous driving,2023-01-01,4,4,0,4,2,12,1,1,0,0,0
+concept:a050728ff6d4af13ab6a44d3,decision support systems,2023-01-01,5,5,1,5,1,7,1,1,0,1,0
+concept:468c38fda2efb0d4e072cdc6,unmanned aerial vehicles,2023-01-01,3,3,0,3,0,3,1,1,0,0,0
+concept:389860c1f5eb0fea0588d9fc,powerful computers,2023-01-01,4,6,0,5,0,6,2,1,0,0,0
+concept:1fbac7b560b0356c69280088,electronic nose,2023-01-01,4,5,0,5,0,9,1,1,0,0,0
+concept:84e509a503fa2203c1e324e5,fuzzy logic systems,2023-01-01,3,3,0,8,0,11,1,1,0,0,0
+concept:35c4e98930b7cd9d6a786ee8,fuzzy-neural networks,2023-01-01,4,4,0,4,0,7,1,1,0,0,0
+concept:34549601845b3918b4296e0f,decision tree models,2023-01-01,2,3,0,3,0,4,1,1,0,0,0
+concept:347dd878c38181e68920cd7c,decision tree technologies,2023-01-01,3,3,1,5,0,6,1,1,0,1,0
+concept:563771f754c0b1066fca39fe,decision tree algorithm,2023-01-01,2,2,0,2,0,5,1,1,0,0,0
+concept:bba809cd6871f85095858d32,CAD system,2023-01-01,16,24,1,14,0,26,1,1,1,1,0
+concept:2af88cbb4ba56541ca9869f4,information technology,2023-01-01,2,3,2,4,0,4,0,1,0,5,1
+concept:952a1500c1bfaec5303c4c16,TRIPOD-AI,2023-01-01,2,12,0,5,2,5,1,1,0,0,0
+concept:e01d3badbdbd71b5700eaeb4,TRIPOD-artificial intelligence,2023-01-01,2,2,0,4,2,5,1,1,0,0,0
+concept:09dadd9fac5b3edd5334f930,Lisp,2023-01-01,6,7,0,3,0,8,1,1,0,0,0
+concept:54733dc8c4e498910c6f3c20,virtual reality,2023-01-01,6,6,2,6,1,5,2,1,0,5,1
+concept:2b22a6ab6d51b342e51439e8,Naive Bayes,2023-01-01,10,13,1,8,0,10,1,1,0,0,0
+concept:905c1a33f43258a78b630664,Industrial Internet of Things (IIoT),2023-01-01,2,2,0,9,0,8,0,1,0,1,0
+concept:d0b72ec09a97844321bcaa58,smart factories,2023-01-01,2,2,1,2,0,2,1,1,0,1,0
+concept:b0199813602e1463b3389ee4,cryptocurrency,2023-01-01,3,4,1,4,0,4,2,1,0,1,0
+concept:3c4c664613e690778a27d00f,technological tools,2023-01-01,2,2,0,2,0,3,1,1,0,0,0
+concept:b152ea6680731c6cccfc3be7,automated decision-making systems,2023-01-01,2,2,0,4,0,4,0,1,0,0,0
+concept:379508bb7a034991568eeaf2,k-nearest neighbor,2023-01-01,2,4,0,2,0,3,1,1,0,0,0
+concept:75c4894dcff5464a079bb705,AIoT,2023-01-01,5,13,2,7,0,12,2,1,1,5,1
+concept:ff870ea24cd4b7d1e3873e3f,Behavior-oriented Artificial Intelligence,2023-01-01,2,2,0,1,0,1,1,1,0,0,0
+concept:54671db0c987e9f36535037f,CAD,2023-01-01,6,18,0,4,0,11,1,1,0,0,0
+concept:7397e0a7210bc8933fa9ccd3,photonic platforms,2023-01-01,3,5,0,2,0,7,1,1,0,1,0
+concept:15a140ab43f2ea0997bca910,robotic prostheses,2023-01-01,2,2,0,2,2,3,1,1,0,0,0
+concept:30af6dcdb0d95ca2fa419c07,self-driving cars,2023-01-01,4,4,0,5,1,14,0,1,0,1,0
+concept:79f97d1a93950010eb4cd50f,pressure sensors,2023-01-01,3,3,0,4,1,9,2,1,0,0,0
+concept:fee2e1c6fb0c8f36152c2456,wearables,2023-01-01,5,8,2,5,1,10,1,1,0,1,0
+concept:d16fc4bee7a18284a82fb788,brain computer interfaces,2023-01-01,3,3,0,9,0,23,1,1,0,1,0
+concept:7a8f3865edb31cd6ba83f8bd,smart homes,2023-01-01,6,6,2,6,0,11,2,1,0,0,0
+concept:e75d78012e3b1c7043cbc1f5,Pattern recognition,2023-01-01,2,2,0,2,0,4,0,1,0,1,0
+concept:ca2fbc3a7b99ed32378f999d,wearable monitoring devices,2023-01-01,4,5,2,3,0,7,2,1,0,5,1
+concept:40328dc5c15195a0553af49b,virtual humans,2023-01-01,2,2,0,2,1,3,1,1,0,0,0
+concept:d5f51534e94c402b108750ce,AI-enabled clinical decision support,2023-01-01,3,3,1,12,1,23,1,1,0,0,0
+concept:e1370a2e3e9794b60485b96d,cognitive models,2023-01-01,6,6,0,3,3,7,1,1,0,0,0
+concept:dd28ead1d7dcae0bdbb0b9db,computational OMICS,2023-01-01,2,2,0,5,3,7,1,1,0,0,0
+concept:fe06986c8dff3330cfea72b8,deepfakes,2023-01-01,2,6,1,5,1,4,1,1,0,0,0
+concept:9980660c39db174b916afd9a,BCT,2023-01-01,2,7,1,4,0,8,1,1,1,1,0
+concept:7b420d139104d03b11ea9c1f,simulation,2023-01-01,2,6,0,1,1,2,1,1,0,0,0
+concept:c504375cdcccf903090588ca,information and communication technology (ICT),2023-01-01,2,2,1,2,0,2,1,1,0,0,0
+concept:2e62746763b17f58221e0242,learning models,2023-01-01,3,5,0,3,0,2,1,1,1,1,0
+concept:d4b35f62dca29b3942c3a852,cameras,2023-01-01,2,2,1,3,0,2,0,1,0,0,0
+concept:3a6bd815aaa26a0c0f366fa2,sensor fusion technology,2023-01-01,2,6,1,6,0,5,1,1,0,0,0
+concept:c68dd355e3710d193fa7a148,Distributed Artificial Intelligence (DAI),2023-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:27c29e2b352b061f72c6b79f,Neuro-Symbolic Artificial Intelligence,2023-01-01,3,6,1,3,0,4,1,1,0,0,0
+concept:a55f8bada66b7b142ac81971,industrial robots,2023-01-01,4,5,1,5,0,9,1,1,0,1,0
+concept:a6b9f7dcd1916b9f26657daa,e-learning environments,2023-01-01,2,2,1,5,0,10,1,1,0,0,0
+concept:400e4c23f303818ad73a0923,e-learning platforms,2023-01-01,2,2,1,5,0,10,1,1,0,0,0
+concept:9065ed06cd8855992bc8a0ce,VA technology,2023-01-01,2,3,0,2,0,2,1,1,0,1,0
+concept:0b7f901fb5b47247ff4878eb,additive manufacturing,2023-01-01,2,2,1,3,0,6,0,1,0,1,0
+concept:59aae7a55b404f046fd2babf,artificial neurons,2023-01-01,2,4,1,2,0,7,1,1,1,1,0
+concept:61161f49ae35e962834a47a2,simulated dynamic networks,2023-01-01,4,10,1,3,0,10,1,1,1,0,0
+concept:b6be8e71c48cc771e4319acc,IBM PC,2023-01-01,4,5,0,3,2,3,1,1,0,0,0
+concept:f1d7b14650f0a5d3707b44c0,hybrid AI,2023-01-01,2,2,0,2,0,1,1,1,0,0,0
+concept:aac0213c3d7e911166ea3112,Artificial Intelligence and Robotics,2023-01-01,3,5,2,2,0,5,1,1,0,0,0
+concept:798967b64cb7b260c0ced028,touch screens,2023-01-01,2,2,0,4,0,7,0,1,0,0,0
+concept:741dd89c63a244bfbca318bb,hybrid systems,2023-01-01,2,2,0,1,0,2,1,1,0,1,0
+concept:7ea3a30fb231c2b0b4349f3b,glucose sensors,2023-01-01,2,2,1,3,2,3,1,1,0,1,0
+concept:f332df5b87be1131920b5f45,6G,2023-01-01,2,4,1,2,0,2,1,1,0,0,0
+concept:4ea50279f0fbf2b9b70aecb7,telehealth,2023-01-01,2,4,0,1,0,2,1,1,0,1,0
+concept:29f3b9e1bbbb9da3f1b1657d,biomimetic prostheses,2023-01-01,2,4,1,1,0,5,0,1,0,0,0
+concept:f565a94b42b8112870175351,wearable technology,2023-01-01,3,3,1,2,0,4,0,1,0,0,0
+concept:be9f69795aa09586dfc245ff,Semantic Web,2023-01-01,3,3,0,6,2,5,1,1,0,0,0
+concept:99cfc6c6a940b923eae5fb85,Geographic Information Systems (GIS),2023-01-01,2,2,1,3,1,5,1,1,0,0,0
+concept:a09f082fd9ae9cedd6772864,IDx-DR,2023-01-01,3,4,0,3,1,5,1,1,0,0,0
+concept:9af72b8587ed73263d45af4a,computers,2023-01-01,8,13,1,7,0,12,1,1,1,0,0
+concept:7b9a5c66f9f73e1b6f73fdb9,Scientific Machine Learning,2023-01-01,3,5,1,4,0,8,1,1,0,0,0
+concept:97f7434d89b7a94f13cfd381,regression models,2023-01-01,4,6,0,4,1,2,1,1,0,1,0
+concept:e3b87ed1e33989a2014e39ed,RAISA technologies,2023-01-01,2,2,0,0,0,0,1,1,0,0,0
+concept:67972f1b85067701a362109c,GP,2023-01-01,2,5,1,4,0,5,1,1,0,0,0
+concept:1e60efdf8b2dadf69c7e7aa7,evolutionary algorithms,2023-01-01,2,2,0,3,0,4,1,1,0,0,0
+concept:b31608b86bdf1bb9dc8be88f,RAISA,2023-01-01,3,18,0,7,1,7,1,1,0,0,0
+concept:064fdaf27e0f4caf35674e1b,GI Genius,2023-01-01,2,3,0,4,0,5,1,1,0,0,0
+concept:bdd0954a757b4267c87f34af,proteomics,2023-01-01,2,2,0,2,0,2,1,1,0,0,0
+concept:beae6ce0e20a6b63a7509f65,deep learning convolutional neural networks,2023-01-01,3,3,1,5,0,7,1,1,0,0,0
+concept:fa41ba67ad73bcce495e38f2,Dermoscopy,2023-01-01,3,9,0,4,1,4,1,1,0,0,0
+concept:2f7c7204e9c2d7e8936689c8,unmanned aerial vehicles (UAVs),2023-01-01,2,2,1,3,0,4,1,1,0,0,0
+concept:0a08d3760ffa765f1608445b,GoogLeNet,2023-01-01,2,3,0,3,0,5,0,1,0,0,0
+concept:bc717f850d48372a2d73d6dd,AdaBoost,2023-01-01,2,2,0,2,0,2,0,1,0,0,0
+concept:c611363161245c386ed767cd,genetic algorithm (GA),2023-01-01,2,2,0,1,0,1,0,1,0,1,0
+concept:d346c339a95e1dba4959e23c,ICT,2023-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:9c3a5d7cdaeb1464aca61b67,early machine learning algorithms,2023-01-01,2,2,0,3,0,4,1,1,0,0,0
+concept:10fd92074c908addd8392bd3,autonomous agents,2023-01-01,4,4,2,8,0,9,2,1,0,0,0
+concept:da0f6830c2bdfe5a2f19ffa2,artificial intelligence/machine learning,2023-01-01,2,3,0,4,1,4,1,1,0,0,0
+concept:5cc7964bf507261efaed8041,ICTs,2023-01-01,3,3,0,7,0,8,0,1,0,1,0
+concept:4b9bc5b4b34b6d1b6b3df22d,next-generation distributed sensors,2023-01-01,2,3,1,3,0,4,1,1,0,0,0
+concept:b6187fd5d2f4d8f50c4ed920,bioinformatics,2023-01-01,2,3,0,4,1,6,1,1,1,0,0
+concept:e5c99e6b95f7c8d527e3e8d6,fuzzy inference system,2023-01-01,3,4,1,4,0,6,2,1,1,0,0
+concept:1d41e099bb16b4a7669599b0,systems,2023-01-01,2,5,1,1,0,1,1,1,4,0,0
+concept:e6917f964c472855f74e541e,teachable agent,2023-01-01,2,8,1,2,0,2,1,1,0,0,0
+concept:c0dc86a5ba3e767db87791e5,ANNs,2023-01-01,4,6,0,6,2,7,1,1,3,0,0
+concept:832e7dd96b21fab9a57352a5,Telemedicine,2023-01-01,4,11,0,9,0,12,2,1,0,0,0
+concept:49924162a6c49dbb84c478ad,explainable model,2023-01-01,2,4,0,1,0,2,1,1,0,0,0
+concept:8c6a0a43bdfd1a7912fa3e9e,ontologies,2023-01-01,2,4,0,2,0,2,1,1,0,0,0
+concept:d17589f36774b1dd327ad48a,machines,2023-01-01,2,2,0,1,0,1,0,1,0,0,0
+concept:e1cce994d2f0a467f6a46e74,3-dimentional echocardiography,2023-01-01,2,2,0,3,0,4,0,1,0,0,0
+concept:fa0da1ed52a2599fe8819cdb,semi-automated analysis,2023-01-01,2,2,1,4,0,4,1,1,0,0,0
+concept:eef2b07f65507e6083f0732c,UAVs,2023-01-01,3,7,1,2,0,2,1,1,0,0,0
+concept:eb63ce4d1b4c48c4c86e93b7,remote cameras,2023-01-01,2,2,0,2,0,4,1,1,0,0,0
+concept:59cef04317e5bdc27fe11e52,information and communication technologies,2023-01-01,3,3,0,6,0,8,1,1,0,1,0
+concept:2103eb291e10071d7cce74ce,Tumor immunomics,2023-01-01,2,2,0,2,0,3,2,1,0,0,0
+concept:36722cc7cb1adfd6e7b94b91,Extremely Randomized Trees,2023-01-01,2,2,2,3,0,5,1,1,0,0,0
+concept:519885527cb1103a5928d18d,cuckoo search algorithm,2023-01-01,2,2,0,3,0,3,1,1,0,0,0
+concept:d3282b3444c77fccde6b3252,gradient boosting machines,2023-01-01,2,2,0,2,0,4,0,1,0,0,0
+concept:16843891dfbd0e6de89e59cd,bio-inspired algorithms,2023-01-01,2,2,1,2,0,2,0,1,0,0,0
+concept:2882d1dca2385909017035e0,Tess,2023-01-01,2,10,0,2,0,3,1,1,0,0,0
+concept:b3957c07257e0f0cde3f8b1e,manufacturing,2023-01-01,2,4,1,2,0,2,1,1,0,0,0
+concept:4719d72d57436d63d19e71b4,CAD4TB,2023-01-01,2,3,0,3,0,3,1,1,0,0,0
+concept:7898a62c81270e986e17a814,qXR,2023-01-01,2,5,0,3,0,3,1,1,0,0,0
+concept:df692ca46a82d414dc85ebdc,k-NN,2023-01-01,2,3,0,2,0,1,0,1,0,0,0
+concept:28b6b627b99bb6ac2883ae0b,AutoEncoder,2023-01-01,2,2,0,4,0,4,1,1,0,0,0
+concept:1feb7d088cbe4c78d9d34adf,Radiogenomics,2023-01-01,2,4,1,4,0,10,1,1,0,1,0
+concept:8de6870b9353d4200f8b21e4,synthetic aperture radar (SAR),2023-01-01,3,3,1,3,0,5,0,1,1,0,0
+concept:cf50eedbe3f7333c85a2d1c1,assisted reproductive technology,2023-01-01,2,2,0,3,0,3,1,1,0,0,0
+concept:e5076ab258ce151b168c1d65,formal ontologies,2023-01-01,2,3,0,2,0,2,1,1,0,0,0
+concept:ed0292ddd9943d392e63b680,deep learning neural networks,2023-01-01,2,2,0,1,0,2,1,1,0,0,0
+concept:0b30b3a3df4b713b6a27efdd,adaptive network-based fuzzy inference system (ANFIS),2023-01-01,2,2,0,5,0,8,1,1,0,0,0
+concept:bbaca254a3b028ba914526a7,RFID,2023-01-01,2,2,2,3,0,3,1,1,0,0,0
+concept:6623dddc807785a90c67dabf,RNNs,2023-01-01,2,4,0,0,0,0,1,1,0,0,0

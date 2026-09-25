@@ -78,13 +78,17 @@ class GraphStore:
         tx.run(
             """
             MERGE (s:Source {source_id: $source.source_id})
-            SET s.name = $source.name, s.source_type = $source.source_type
+            SET s.name = $source.name, s.source_type = $source.source_type,
+                s.source_family = $source.source_family,
+                s.independence_group = $source.independence_group,
+                s.reliability_tier = $source.reliability_tier
             MERGE (d:Document {document_id: $document_id})
             SET d.document_type = $document_type, d.title = $title,
                 d.language = $language, d.published_at = $published_at,
                 d.created_at = $published_at,
                 d.canonical_url = $source.canonical_url,
-                d.external_ids = $external_ids
+                d.external_ids = $external_ids,
+                d.metrics_json = $metrics_json
             MERGE (v:DocumentVersion {document_version_id: $version_id})
             SET v.raw_sha256 = $artifact.sha256, v.raw_uri = $artifact.uri,
                 v.media_type = $artifact.media_type, v.byte_length = $artifact.byte_length,
@@ -106,6 +110,7 @@ class GraphStore:
             coverage=document.coverage,
             quality_status=document.quality_status,
             metadata_json=json_value(document.metadata),
+            metrics_json=json_value(document.metrics),
         ).consume()
 
         tx.run(
@@ -170,6 +175,18 @@ class GraphStore:
                 name=domain.name,
                 external_ids=[item.external_id for item in domain.external_ids],
             ).consume()
+            if domain.parent_name:
+                tx.run(
+                    """
+                    MATCH (child:Domain {domain_id: $domain_id})
+                    MERGE (parent:Domain {domain_id: $parent_id})
+                    SET parent.name = $parent_name
+                    MERGE (child)-[:SUBDOMAIN_OF]->(parent)
+                    """,
+                    domain_id=domain.domain_id,
+                    parent_id=stable_id("domain", domain.parent_name),
+                    parent_name=domain.parent_name,
+                ).consume()
 
         for organization in document.organizations:
             relationship = {
@@ -338,6 +355,41 @@ class GraphStore:
                 )
             return concepts
 
+    def read_training_data(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        with self._driver.session(database=self._database) as session:
+            mentions = [record.data() for record in session.run(
+                """
+                MATCH (t:Technology)<-[m:MENTIONS]-(c:Chunk)<-[:HAS_CHUNK]-(:DocumentVersion)<-[:HAS_VERSION]-(d:Document)
+                RETURN t.concept_id AS technology_id, t.preferred_label AS technology,
+                       d.document_id AS document_id, count(m) AS mentions
+                """
+            )]
+            documents = [record.data() for record in session.run(
+                """
+                MATCH (d:Document)-[:HAS_VERSION]->(:DocumentVersion)-[:FROM_SOURCE]->(s:Source)
+                OPTIONAL MATCH (d)-[country_rel]->(country:Country)
+                WHERE type(country_rel) IN ['WRITTEN_IN', 'JURISDICTION']
+                WITH d, s, collect(DISTINCT country.code) AS countries
+                OPTIONAL MATCH (d)-[company_rel]->(company:Company)
+                WHERE type(company_rel) IN ['HAS_AFFILIATION', 'OWNED_BY', 'APPLIED_BY']
+                WITH d, s, countries, collect(DISTINCT company.organization_id) AS companies
+                OPTIONAL MATCH (d)-[university_rel]->(university:University)
+                WHERE type(university_rel) IN ['HAS_AFFILIATION', 'OWNED_BY', 'APPLIED_BY']
+                WITH d, s, countries, companies, collect(DISTINCT university.organization_id) AS universities
+                OPTIONAL MATCH (d)-[:ABOUT_DOMAIN]->(domain:Domain)
+                RETURN d.document_id AS document_id, d.created_at AS created_at, s.source_id AS source_id,
+                       s.source_family AS source_family, s.independence_group AS independence_group, d.metrics_json AS metrics_json,
+                       countries, companies, universities, collect(DISTINCT domain.domain_id) AS domains
+                """
+            )]
+            tasks = [record.data() for record in session.run(
+                """
+                MATCH (t:Technology)-[r:SOLVES]->(task:Task)
+                RETURN t.concept_id AS technology_id, task.concept_id AS task_id, r.observed_at AS observed_at
+                """
+            )]
+        return mentions, documents, tasks
+
     @staticmethod
     def _solution_links(
         document: DocumentEnvelope, result: ExtractionResult
@@ -459,7 +511,8 @@ class GraphStore:
                 MATCH (chunk:Chunk {chunk_id: $chunk_id})
                 MATCH (concept {concept_id: $concept_id})
                 MERGE (chunk)-[r:MENTIONS {mention_id: $mention_id}]->(concept)
-                SET r.surface_text = $surface_text, r.start = $start, r.end = $end,
+                SET r.surface_text = $surface_text, r.canonical_text = $canonical_text,
+                    r.start = $start, r.end = $end,
                     r.type_candidates = $type_candidates, r.confidence = $confidence,
                     r.status = $status, r.method = $method, r.score = $score,
                     r.basis = $basis, r.run_id = $run_id, r.observed_at = $observed_at

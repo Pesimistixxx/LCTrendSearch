@@ -55,6 +55,9 @@ class SourceRef(BaseModel):
     source_type: str
     record_id: str
     canonical_url: Optional[str] = None
+    source_family: Optional[str] = None
+    independence_group: Optional[str] = None
+    reliability_tier: int = 1
 
 
 class Artifact(BaseModel):
@@ -93,6 +96,7 @@ class Country(BaseModel):
 class Domain(BaseModel):
     domain_id: str
     name: str
+    parent_name: Optional[str] = None
     external_ids: List[ExternalId] = Field(default_factory=list)
 
 
@@ -130,6 +134,7 @@ class DocumentEnvelope(BaseModel):
     domains: List[Domain] = Field(default_factory=list)
     chunks: List[Chunk] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Dict[str, float] = Field(default_factory=dict)
     coverage: str = "metadata_only"
     quality_status: str = "accepted"
 
@@ -166,6 +171,7 @@ class Mention(BaseModel):
     mention_id: str
     chunk_id: str
     surface_text: str
+    canonical_text: Optional[str] = None
     start: int
     end: int
     type_candidates: List[ConceptKind]
