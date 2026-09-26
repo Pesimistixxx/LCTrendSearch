@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "provider": "openai_compatible",
+  "base_url": "https://api.openai.com/v1",
+  "response_mode": "json_object",
+  "timeouts_seconds": {"connect": 10, "read": 90, "write": 30, "pool": 10},
+  "max_output_tokens": {"extract": 4096, "review": 4096},
+  "temperature": 0,
+  "cache": {"enabled": false, "directory": "artifacts/llm-cache"},
+  "prices_usd_per_million_tokens": {},
+  "model_ladder": [],
+  "model_fallback": {"exhausted_statuses": [402], "unavailable_statuses": [404]},
+  "gigachat": {
+    "catalog_checked_at": "2026-09-26",
+    "catalog_note": "Strongest first. GigaChat-3-Ultra (15.07.2026) is available only to individuals on Freemium; paid plans receive 402/403/404 and fall through to GigaChat-2-Max. First-generation names GigaChat/GigaChat-Pro/GigaChat-Max are redirected by Sber to the -2 models.",
+    "base_url": "https://api.giga.chat/v1",
+    "auth_url": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+    "scope": "GIGACHAT_API_PERS",
+    "token_refresh_margin_seconds": 60,
+    "response_mode": "json_schema",
+    "json_schema_strict": false,
+    "temperature": 0.001,
+    "model_ladder": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
+    "model_fallback": {"exhausted_statuses": [402], "unavailable_statuses": [403, 404]},
+    "balance": {
+      "enabled": true,
+      "refresh_seconds": 300,
+      "min_tokens": 20000,
+      "usage_names": {
+        "GigaChat-3-Ultra": ["GigaChat-3-Ultra", "GigaChat-Ultra"],
+        "GigaChat-2-Max": ["GigaChat-2-Max", "GigaChat-Max"],
+        "GigaChat-2-Pro": ["GigaChat-2-Pro", "GigaChat-Pro"],
+        "GigaChat-2": ["GigaChat-2", "GigaChat", "GigaChat-Lite"]
+      }
+    }
+  }
+}

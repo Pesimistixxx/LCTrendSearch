@@ -1,101 +1,337 @@
 # LCTrendSearch
 
-Конвейер загрузки материалов и граф знаний для поиска слабых технологических сигналов.
+Получение материалов → связанные пакеты → LLM-извлечение → проверка → сборка → идентификация сущностей → Neo4j.
 
-## Модель графа
+[Архитектура: две схемы, пояснения этапов и код](docs/pipeline-before-after.md) · [Что означают списки строк](docs/catalogs.md) · [Веб-интерфейс сбора](frontend/README.md)
 
-Первичная запись — не прямое ребро `Technology -> SOLVES -> Problem`, а узел
-`Assertion`, связанный с участниками и буквальным фрагментом-основанием.
+Реализована многоэтапная обработка материалов. Сбор и проверка загрузки встроены в основной React-интерфейс. Поиск и ранжирование технологических кандидатов пока показывают демонстрационные данные; расчёт обучающих признаков сохранён.
 
-Основные узлы: `Source`, `Document`, `DocumentVersion`, `Chunk`, `Technology`,
-`Method`, `Company`, `Country`, `Assertion`, `Contributor`,
-`Organization`, `Country`, `Domain`, `ProcessingRun`.
+## Какие модели используются
 
-Типы извлекаемых сущностей: `Technology`, `Method`, `Task`, `Problem`,
-`ApplicationContext`, `Metric`, `Material`, `Domain`, `MarketSegment`,
-`ConceptCandidate`.
+| Роль | Модель | Где задаётся | Когда работает |
+|---|---|---|---|
+| LLM: извлечение и проверка утверждений | GigaChat, лестница `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`; либо любая модель OpenAI-совместимого API | `LLM_PROVIDER`, `LLM_MODEL*`, [llm.json](src/lctrend/resources/llm.json) | Режимы `hybrid` (по умолчанию) и `llm` |
+| NER: подсказки сущностей | GLiNER `urchade/gliner_medium-v2.1` | `GLINER_MODEL`, [runtime.json](src/lctrend/resources/runtime.json) | `hybrid` (подсказки для LLM) и `gliner` (основной извлекатель) |
+| Разбор PDF | Docling (собственные модели разметки страниц и OCR) | extra `[pdf]` | Любой PDF: локальный файл, загрузка через API, полный текст OpenAlex |
+| Эмбеддинги для сопоставления сущностей | `sentence-transformers/all-MiniLM-L6-v2` (косинус) + `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | **Только в режиме `gliner`.** В `hybrid`/`llm` resolver детерминированный: нормализация, леммы (simplemma), явные синонимы |
 
-PostgreSQL хранит только финальную ранжированную выдачу слабых сигналов.
+Эмбеддинг-совпадение никогда не объединяет сущности автоматически: пара получает статус `ambiguous` и остаётся на проверку. Векторного индекса в Neo4j нет — эмбеддинги вычисляются в памяти на время одной обработки.
+
+## Как передать конкретную статью
+
+**Прямую PDF-ссылку сейчас нельзя передать в `ingest file` или поле «Тематика».** Для отдельной статьи используйте локальный файл либо DOI/ID OpenAlex. Поле «Тематика» запускает поиск нескольких материалов по строке запроса.
+
+| Что у вас есть | Как передать | Что будет обработано |
+|---|---|---|
+| PDF на компьютере | `parse file путь.pdf` / `ingest file путь.pdf` | Текст PDF, полученный Docling; страницы и координаты — если их вернул парсер |
+| PDF/DOCX/TXT/MD/HTML при запущенном Docker | `POST /api/ingest/uploads` ([пример](frontend/README.md#как-передать-одну-статью-а-не-тему)) | То же, что `ingest file`, но фоновым заданием; в веб-форме выбора файла пока нет |
+| Прямая HTTP(S)-ссылка на PDF | Скачать файл, затем передать локальный путь | Скачанные байты PDF; автоматического ввода произвольного URL в CLI сейчас нет |
+| DOI статьи | `fetch openalex "https://doi.org/…"` / `fetch openalex "doi:…"` | Карточка OpenAlex, доступная аннотация и попытка получения PDF |
+| ID OpenAlex | `fetch openalex W2741809807` | Одна конкретная публикация |
+| Страница издателя / `arxiv.org/abs/…` | Найти прямую PDF-ссылку или DOI и воспользоваться вариантом выше | Произвольные страницы статей автоматически не обходятся |
+| Тема, например `edge computing` | Поле «Тематика» в вебе / `crawl-openalex "edge computing"` | Материалы из тематической выдачи, а не одна заданная статья |
+| Сохранённый ответ OpenAlex в JSON | `parse openalex work.json` / `ingest openalex work.json` | Сохранённые метаданные и аннотация; эти команды не скачивают PDF |
+
+### PDF по ссылке или с компьютера
+
+Пример для PowerShell вне Docker из каталога `LCTrendSearch`, с активированным Python-окружением и установленным пакетом:
+
+```powershell
+python -m pip install -e ".[pdf]"
+# Замените URL на прямую PDF-ссылку своего документа.
+Invoke-WebRequest -Uri "https://arxiv.org/pdf/2311.01235" -OutFile .\paper.pdf
+
+# Проверить разбор текста без LLM и Neo4j.
+python -m lctrend parse file .\paper.pdf --output .\paper-envelope.json
+
+# После настройки LLM и Neo4j извлечь сведения и записать граф.
+python -m lctrend ingest file .\paper.pdf --extraction-output .\paper-extraction.json
+```
+
+Если файл уже на компьютере, пропустите скачивание. Ответ по ссылке должен содержать PDF, а не HTML, форму входа или CAPTCHA. Для Docker сохраните файл в смонтированную папку `artifacts` и используйте путь внутри контейнера:
+
+```powershell
+Invoke-WebRequest -Uri "https://arxiv.org/pdf/2311.01235" -OutFile .\artifacts\paper.pdf
+docker compose exec backend python -m lctrend parse file /app/artifacts/paper.pdf --output /app/artifacts/paper-envelope.json
+docker compose exec backend python -m lctrend ingest file /app/artifacts/paper.pdf --extraction-output /app/artifacts/paper-extraction.json
+```
+
+Локальный PDF хранится как `document_type=report`, источник — `local_file`, название берётся из имени файла. DOI, авторы и дата публикации автоматически не восстанавливаются из PDF; `published_at` остаётся пустым. Это загрузка текста документа. Для научной карточки с библиографическими метаданными используйте OpenAlex.
+
+### Статья по DOI / OpenAlex
+
+```powershell
+# Получить одну статью, сохранить DocumentEnvelope; без LLM и записи в граф.
+python -m lctrend fetch openalex "https://doi.org/10.7717/peerj.4375" --output .\paper-envelope.json
+
+# Получить, извлечь сведения и записать в Neo4j.
+python -m lctrend fetch openalex "https://doi.org/10.7717/peerj.4375" --ingest --extraction-output .\paper-extraction.json
+
+# Оставить только карточку/аннотацию; Docling не требуется.
+python -m lctrend fetch openalex W2741809807 --no-fulltext --output .\abstract-envelope.json
+```
+
+В Docker добавьте `docker compose exec backend` перед `python`, а выходные файлы задайте в `/app/artifacts/`. DOI с префиксом `doi:` и полные ссылки DOI/ID поддерживаются [API одной записи OpenAlex](https://help.openalex.org/api/get-single-entities/). Произвольный PDF URL идентификатором OpenAlex не является.
+
+`fetch openalex` и `crawl-openalex` по умолчанию ищут `pdf_url` в `best_oa_location`, `primary_location` и `locations`; явно закрытые варианты (`is_oa=false`) пропускаются. Пробуются до трёх разных HTTP(S)-ссылок. Загрузчик проверяет сигнатуру `%PDF-` и размер. Полученный текст добавляется к аннотации, колонтитулы и распознанная библиография отфильтровываются.
+
+Если PDF-ссылок нет, остаётся доступная аннотация/карточка. Если все загрузки или разборы не удались, причины сохраняются в `document.metadata.fulltext.attempts`. Если PDF-ссылка есть, но Docling не установлен, CLI завершится ошибкой: установите `[pdf]` или передайте `--no-fulltext`. Сборщик с полным текстом проверяет наличие Docling ещё до обхода.
+
+### Как убедиться, что получен текст статьи
+
+Проверьте `paper-envelope.json`, а не только сообщение об успешном запуске:
+
+```powershell
+$paper = Get-Content .\paper-envelope.json -Raw -Encoding UTF8 | ConvertFrom-Json
+$paper.title
+$paper.source.canonical_url
+$paper.coverage
+$paper.chunks.Count
+$paper.chunks | Select-Object -First 3 kind, text, locator
+$paper.metadata.fulltext       # сетевой OpenAlex
+$paper.metadata.parse_warnings # локальный PDF
+```
+
+| Поле / значение | Что означает |
+|---|---|
+| `chunks` | Фрагменты текста, доступные извлечению. Пустой список означает, что текста для анализа нет |
+| `coverage=metadata_only` | Получена карточка без аннотации и полного текста |
+| `coverage=abstract_only` | Получена только аннотация; вся статья не обработана |
+| `coverage=abstract_and_full_text` / `full_text` у OpenAlex | Добавлен текст PDF; качество и полноту нужно проверить по фрагментам |
+| `coverage=parsed_text` у локального PDF | Получен текст Docling; это не гарантия распознавания всех страниц |
+| `metadata.fulltext.status=parsed` | Один PDF OpenAlex скачан и дал непустой текст |
+| `no_pdf_url` / `failed` | PDF-ссылок нет / все попытки получения полного текста не удались |
+| `parse_warnings`, `fulltext.warnings`, `quality_status` | Ограничения OCR, таблиц, координат и разбора |
+
+Для результата извлечения отдельно смотрите `paper-extraction.json`: `run.status`, `run.metadata.issues` и `run.metadata.coverage`. LLM может обработать лишь часть уже загруженных фрагментов. Наличие JSON и код завершения CLI 0 сами по себе не гарантируют `succeeded`.
 
 ## Запуск
 
 ```powershell
+# Только при первом запуске, если .env ещё нет:
 Copy-Item .env.example .env
-# Поменяйте пароли в .env
-docker compose up -d
-python -m pip install -e ".[dev]"
+# Укажите внешнюю Neo4j в NEO4J_* и настройте LLM-провайдера.
+docker compose up -d --build --remove-orphans --wait
+```
+
+Открыть [Сбор материалов](http://localhost:5188/#view=ingest).
+Compose запускает три сервиса: `frontend` (React + Nginx), `backend`
+(FastAPI, LLM, GLiNER, Docling) и `postgres`. Локальной Neo4j в Compose
+нет: API использует внешнюю базу из `.env`. `--remove-orphans` удаляет
+контейнер Neo4j от старой конфигурации; его том с данными сохраняется.
+Порт интерфейса задаётся `FRONTEND_PORT` (по умолчанию 5188), PostgreSQL —
+`POSTGRES_PORT` (5432). API доступен через `/api` на том же адресе.
+
+JSON заданий, результаты и исходные материалы сохраняются в `artifacts/`,
+логи — в `logs/`. Реестр обхода SQLite хранится в Docker-томе
+`ingestion_ledger`: режим WAL требует файловой системы Linux, поэтому
+папка `artifacts/ingestion/crawl` внутри контейнера перекрыта этим томом.
+Кэш моделей также хранится в отдельном Docker-томе. Настройки LLM
+из интерфейса сохраняются в `artifacts/ingestion/settings.env` и действуют
+после пересоздания контейнеров. Они имеют приоритет над настройками LLM
+из `.env`; чтобы снова использовать `.env`, удалите файл сохранённых
+настроек и пересоздайте API. Первое обращение к GLiNER/Docling может
+потребовать загрузки моделей. Первая сборка образа устанавливает их
+зависимости, включая CPU-версию PyTorch.
+
+Проверка и остановка:
+
+```powershell
+docker compose ps
+docker compose logs -f backend
+docker compose down
+```
+
+CLI можно запускать внутри API-контейнера:
+
+```powershell
+docker compose exec backend python -m lctrend init-graph
+docker compose exec backend python -m lctrend ingest file /app/artifacts/report.md --extraction-output /app/artifacts/report-extraction.json
+```
+
+CLI читает `.env` без перезаписи экспортированных переменных (в Docker
+дополнительно читает сохранённые настройки LLM). Neo4j хранит документы,
+исходные блоки, сущности, утверждения, цитаты и аудит обработки.
+PostgreSQL зарезервирован под будущую ранжированную выдачу сигналов:
+сейчас код в него не пишет и не читает, но `backend` ждёт его healthcheck.
+
+LLM-провайдер использует endpoint `/chat/completions`. Задайте модель или лестницу; для GigaChat уже есть штатная лестница. Отдельные модели стадий задаются через `LLM_EXTRACT_MODEL` и `LLM_REVIEW_MODEL`. Извлекатель и проверяющий используют разные промпты. Отсутствующая настройка не переключает обработку на фиктивные ответы. Зависимость httpx нужна для LLM; для чистого разбора файлов и API без извлечения она не нужна.
+
+## Источники и команды
+
+```powershell
+python -m lctrend parse openalex .\work.json --output work-envelope.json
+python -m lctrend parse file .\report.docx --output report-envelope.json
+python -m lctrend ingest epo .\patent.xml
+python -m lctrend fetch github urchade/GLiNER --ingest
+python -m lctrend fetch pypi gliner --ingest --no-extract
+python -m lctrend crawl-openalex "edge computing" --limit 10
+python -m lctrend crawl-pypi --packages gliner pydantic
+```
+
+`parse` формирует DocumentEnvelope. `fetch --ingest`, `ingest` и сборщики публикуют в Neo4j; по умолчанию используют LLM-пакеты. `--no-extract` сохраняет только документ и chunks. `--extraction-output` у одиночной загрузки дополнительно сохраняет проверяемый JSON результата, включая историю стадий и покрытие.
+
+Локальные файлы: UTF-8 TXT/MD/HTML, DOCX и PDF. Для PDF установите `python -m pip install -e ".[pdf]"`; Docling может загружать свои модели. DOCX/HTML не дают полной геометрии таблиц, PDF/OCR требует проверки качества: ограничения фиксируются в метаданных. Лимит файла по умолчанию — 50 МиБ. `work.json`, `report.docx` и `patent.xml` в примерах — ваши входные файлы, в поставке их нет. `work.json` должен содержать исходный ответ OpenAlex, а не уже сформированный DocumentEnvelope.
+
+Снимки исходных байтов хранятся в artifacts/raw; каталог задаётся LCTREND_RAW_DIR. Это источник для воспроизводимости, хранилище графа остаётся Neo4j. GitHub фиксирует commit SHA; даты публикации версии, получения и наблюдения метрик разделены. Неизвестная независимость источника сохраняется неизвестной.
+
+### Что означает каждая команда
+
+| Команда | Назначение |
+|---|---|
+| `init-graph` | Создать ограничения схемы Neo4j; не загружает документы |
+| `parse KIND INPUT` | Разобрать локальный файл и вывести DocumentEnvelope без LLM и базы. `KIND`: `file`, `openalex`, `github`, `pypi`, `epo`; для API нужен JSON, для EPO — XML |
+| `ingest KIND INPUT` | Такой же разбор, затем извлечение и запись в Neo4j |
+| `fetch KIND IDENTIFIER` | Запросить API: `openalex` — DOI/ID, `github` — `owner/repo`, `pypi` — имя пакета. По умолчанию только вывести документ; с `--ingest` обработать и записать в граф |
+| `crawl-openalex QUERY` | Получать страницы статей по поисковой строке и записывать результат в Neo4j с сохранением позиции обхода |
+| `crawl-pypi` | Обрабатывать `--packages` либо равномерную выборку из списка имён PyPI; тематического поиска по реестру нет |
+| `export-features --snapshot DATE` | Выгрузить признаки технологий из графа на дату среза в CSV |
+| `build-training-set` | Выгрузить исторические обучающие строки и метки по числу будущих документов; модель не обучает |
+
+### Что означает каждый параметр CLI
+
+| Параметр | Где действует | Значение |
+|---|---|---|
+| `--output PATH` | `parse`, `fetch`, CSV-команды | Файл документа/CSV. Без него `parse`/`fetch` печатают JSON. Каталог выходного файла для них должен уже существовать |
+| `--ingest` | `fetch` | После получения документа выполнить извлечение и запись в граф |
+| `--no-extract` | `ingest`, `fetch --ingest`, сборщики | Записать документ и chunks без LLM/NER; скачивание PDF остаётся включённым |
+| `--extractor hybrid\|llm\|gliner` | Команды с извлечением | Режим обработки; по умолчанию `hybrid`, подробнее ниже |
+| `--ner-model NAME` | Команды с извлечением | Модель GLiNER; перекрывает `GLINER_MODEL`, по умолчанию `urchade/gliner_medium-v2.1` |
+| `--extraction-output PATH` | `ingest`, `fetch --ingest` | Сохранить ExtractionResult отдельным JSON; при `--no-extract` файл не создаётся. `--output` сохраняет другой объект — DocumentEnvelope |
+| `--no-fulltext` | `fetch openalex`, `crawl-openalex` | Не загружать PDF, использовать доступную карточку/аннотацию |
+| `--limit N` | Сборщики | Предел статей OpenAlex (500) / успешных загрузок пакетов PyPI (5000). С `--packages` равен числу заданных имён |
+| `--per-page N` | `crawl-openalex` | Размер страницы API, по умолчанию 100; CLI принимает 1–200, действительный предел зависит от API |
+| `--filter TEXT` | `crawl-openalex` | Фильтр OpenAlex, например `is_oa:true,has_abstract:true,type:article`, вместе с поисковой строкой |
+| `--checkpoint PATH` | Сборщики | JSON с позицией обхода, по умолчанию `.openalex-crawl.json` / `.pypi-crawl.json`. Для другого запроса/списка используйте отдельный файл |
+| `--packages NAME …` | `crawl-pypi` | Явный список пакетов вместо выборки |
+| `--sample-phase FLOAT` | `crawl-pypi` | Сдвиг равномерной выборки в диапазоне `[0, 1)`, по умолчанию 0; не относится к тематике |
+| `--snapshot DATE` | `export-features` | Обязательная дата среза `YYYY-MM-DD` |
+| `--start-year N` | `build-training-set` | Первый год срезов, по умолчанию 2015 |
+| `--horizon-years N` | `build-training-set` | Число лет после среза, по умолчанию 3 |
+| `--min-documents N` | `build-training-set` | Минимум документов до среза для включения технологии, по умолчанию 2 |
+| `--positive-future-documents N` | `build-training-set` | От этого числа будущих документов метка 1, по умолчанию 5 |
+| `--negative-future-documents N` | `build-training-set` | До этого числа будущих документов метка 0, по умолчанию 1; промежуточные значения исключаются |
+| `--help` | Любая команда | Справка, например `python -m lctrend fetch --help` |
+
+### Извлечение: hybrid по умолчанию
+
+`--extractor hybrid` (по умолчанию, также `LCTREND_EXTRACTOR`) — LLM-пакеты плюс GLiNER как дополнительный фактор. GLiNER находит spans технологий, методов и задач; они попадают в payload экстрактора как `ner_hints` (навигация, не доказательство). После LLM совпавшие по типу spans подтверждают сущности (`confidence` упоминания = score GLiNER), а сильные технологии, которые LLM пропустила (score ≥ 0.7), добавляются как `mention_role=ner_candidate` без утверждений. Сводка — в `run.metadata.ner`, пороги — в разделе `hybrid` файла extraction.json. Если GLiNER не установлен (`pip install -e ".[ner]"`) или упал, документ обрабатывается как `llm` с предупреждением.
+
+`--extractor llm` — только LLM. `--extractor gliner` — прежний путь без LLM; локальные regex-утверждения в нём остаются needs_review/unverified.
+
+### GigaChat и лестница моделей
+
+```
+LLM_PROVIDER=gigachat
+GIGACHAT_CREDENTIALS=<ключ авторизации из личного кабинета>
+GIGACHAT_SCOPE=GIGACHAT_API_PERS          # B2B: GIGACHAT_API_B2B, pay-as-you-go: GIGACHAT_API_CORP
+GIGACHAT_CA_BUNDLE_FILE=russian_trusted_root_ca.crt   # если TLS требует сертификат НУЦ Минцифры
+```
+
+Клиент получает OAuth-токен и обновляет его перед истечением срока, использует endpoint `https://api.giga.chat/v1` и structured output (`response_format: json_schema`). Срок токена и значения scope описаны в [документации авторизации GigaChat](https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/gigachat-api).
+
+В `resources/llm.json` задана лестница: `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`. Это конфигурация клиента; доступность моделей зависит от аккаунта и ответа API. Модель выбывает, когда `/balance` показывает остаток меньше резерва (20 000 + лимит ответа), либо при HTTP 402/403/404. Запрос переходит к следующей модели; причины — в `run.metadata.model_events`, фактическая модель каждого вызова — в `run.metadata.provider_calls`. `LLM_MODEL` выбирает стартовую модель; нижние ступени остаются резервными, если её имя входит в лестницу. Если имени в лестнице нет, используется только эта модель. `LLM_MODEL_LADDER` задаёт собственный порядок для обоих провайдеров.
+
+### Совместимый LLM-провайдер
+
+```dotenv
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://your-provider.example/v1
+LLM_API_KEY=your-key
+LLM_MODEL=your-model-name
+```
+
+Это шаблон: замените URL, ключ и имя модели своими значениями. Клиент добавляет `/chat/completions` к базовому URL. Нужны JSON-ответы (`json_object` или `json_schema`, задаётся в `llm.json`). Для удалённого endpoint ключ обязателен; для `localhost`, `127.0.0.1`, `::1` может быть пустым. Вместо общей модели можно задать обе модели стадий или лестницу.
+
+## Что означает каждая настройка .env
+
+В `.env.example` выбран GigaChat. Заполните его ключ авторизации либо смените `LLM_PROVIDER` и задайте параметры совместимого API. Явные параметры CLI имеют приоритет над соответствующими переменными. `.env` не перекрывает экспортированные переменные; в Docker сохранённые настройки LLM из `LCTREND_SETTINGS_FILE` имеют дополнительный приоритет.
+
+| Переменная | Назначение и значение по умолчанию |
+|---|---|
+| `NEO4J_URI` | Адрес внешней Neo4j, например `neo4j+s://…databases.neo4j.io`. Адрес образца — шаблон, его нужно заменить |
+| `NEO4J_USER` | Пользователь Neo4j, по умолчанию `neo4j` |
+| `NEO4J_PASSWORD` | Пароль существующей внешней базы; образец `change-me-now` не подключает её автоматически |
+| `POSTGRES_DB` | Имя базы PostgreSQL в Compose, `lctrend`; текущая загрузка графа её не использует |
+| `POSTGRES_USER` | Пользователь PostgreSQL в Compose, `lctrend` |
+| `POSTGRES_PASSWORD` | Пароль PostgreSQL; замените значение образца при первоначальной настройке |
+| `POSTGRES_PORT` | Внешний порт PostgreSQL, по умолчанию 5432; backend внутри Docker обращается к порту 5432 контейнера |
+| `FRONTEND_PORT` | Порт веб-интерфейса на компьютере, по умолчанию 5188 |
+| `GITHUB_TOKEN` | Необязательный токен для запросов к GitHub API |
+| `OPENALEX_MAILTO` | Необязательный контактный email для запросов OpenAlex; это не ключ API или адрес статьи |
+| `LLM_PROVIDER` | `gigachat` или `openai_compatible`; в образце — GigaChat, без настройки — совместимый провайдер из `llm.json` |
+| `GIGACHAT_CREDENTIALS` | Ключ авторизации из кабинета GigaChat для получения OAuth-токена; не сам временный access token |
+| `GIGACHAT_SCOPE` | `GIGACHAT_API_PERS` для физлиц, `GIGACHAT_API_B2B` для пакетного доступа организаций, `GIGACHAT_API_CORP` для pay-as-you-go |
+| `GIGACHAT_BASE_URL` | Необязательный базовый URL GigaChat; пусто — `https://api.giga.chat/v1` |
+| `GIGACHAT_AUTH_URL` | Необязательный URL токена; по умолчанию `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` |
+| `GIGACHAT_CA_BUNDLE_FILE` | Необязательный путь к доверенным TLS-сертификатам GigaChat; указанный файл должен существовать |
+| `LLM_BASE_URL` | Базовый URL совместимого API, используется при `openai_compatible`; без `/chat/completions` |
+| `LLM_API_KEY` | Ключ совместимого API; GigaChat использует отдельный `GIGACHAT_CREDENTIALS` |
+| `LLM_CA_BUNDLE_FILE` | Общий необязательный CA bundle; для GigaChat действует, если его отдельный bundle не задан |
+| `LLM_MODEL` | Общая стартовая модель извлечения и проверки; пусто — лестница или модели обеих стадий |
+| `LLM_EXTRACT_MODEL` | Стартовая модель извлечения; приоритет выше `LLM_MODEL` |
+| `LLM_REVIEW_MODEL` | Стартовая модель проверки поддержки утверждений текстом; приоритет выше `LLM_MODEL` |
+| `LLM_MODEL_LADDER` | Имена моделей через запятую в порядке переключения; пусто — порядок из `llm.json` |
+| `LCTREND_EXTRACTOR` | Режим CLI: `hybrid`, `llm`, `gliner`; пусто — `hybrid`. Веб-обход по теме использует свой режим `hybrid` |
+| `GLINER_MODEL` | Имя модели GLiNER; пусто — `urchade/gliner_medium-v2.1` |
+| `DEDUP_EMBEDDING_MODEL` | Эмбеддинг-модель resolver, только режим `gliner`; пусто — `sentence-transformers/all-MiniLM-L6-v2` |
+| `DEDUP_DECISION_MODEL` | Cross-encoder проверки пары; пусто — `cross-encoder/stsb-distilroberta-base` |
+| `DEDUP_COSINE_THRESHOLD` | Минимальный косинус для передачи пары cross-encoder, по умолчанию 0.78 |
+| `DEDUP_DECISION_THRESHOLD` | Минимальная оценка cross-encoder для кандидата `ambiguous`, по умолчанию 0.80 |
+| `LCTREND_CONFIG_DIR` | Каталог с вашими версиями JSON-каталогов, схемы и промптов; одноимённые файлы заменяются целиком |
+| `LCTREND_RAW_DIR` | Каталог снимков исходных байтов, по умолчанию `artifacts/raw` |
+| `LCTREND_UPLOAD_DIR` | Файлы, загруженные через HTTP API; по умолчанию `artifacts/ingestion/uploads` |
+| `LCTREND_SETTINGS_FILE` | Файл сохранённых настроек LLM; Compose задаёт `/app/artifacts/ingestion/settings.env`. Без него локальная веб-форма пишет в `.env` |
+| `LCTREND_LOG_LEVEL` | Уровень сообщений в консоли, по умолчанию `INFO` |
+| `LCTREND_LOG_FILE` | Файл журнала, по умолчанию `logs/lctrend.log` |
+| `LCTREND_LOG_FILE_LEVEL` | Уровень файлового журнала, по умолчанию `DEBUG` |
+
+Пути относительны каталогу запуска; внутри Docker нужны пути контейнера. Пустые необязательные настройки означают штатные значения. У совместимого провайдера нужно задать модель/лестницу: встроенной лестницы для него нет. Пустой ключ в веб-форме сохраняет прежний ключ; во время активной обработки настройки менять нельзя. Изменение пароля PostgreSQL в `.env` не меняет пароль уже созданной базы в Docker volume.
+
+### Локальный Python без Docker
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[llm,pdf,dev]"
+# Если .env ещё нет: Copy-Item .env.example .env
+# Настройте внешнюю Neo4j и выбранного LLM-провайдера.
 python -m lctrend init-graph
 ```
 
-Neo4j Browser: <http://localhost:7474>. PostgreSQL: `localhost:5432`.
+Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[ner]` — GLiNER, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest. Можно объединить: `python -m pip install -e ".[gui,llm,ner,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
 
-## Парсеры
+## Что происходит на каждом этапе
 
-Поддержаны OpenAlex JSON, GitHub API JSON, PyPI JSON и EPO OPS XML:
+| Этап | Действие | Что проверять |
+|---|---|---|
+| Получение | Читает локальный файл или API; сетевой OpenAlex пытается получить PDF | `source`, `artifact`, `metadata.fulltext`, сохранённые байты |
+| Разбор | Формирует DocumentEnvelope и адресуемые chunks | Текст, `locator`, покрытие и предупреждения |
+| Связанные пакеты | Собирает соседние фрагменты в ограниченный контекст LLM | Какие chunks включены, бюджеты `pipeline.json` |
+| GLiNER в hybrid | Предлагает упоминания в `ner_hints` | `run.metadata.ner`; подсказка не является доказательством утверждения |
+| LLM-извлечение | Извлекает сущности и атомарные утверждения с ролями и цитатами | Evidence, сущности, assertions, журнал вызовов |
+| Проверка | Код проверяет цитаты/координаты/типы, отдельный reviewer — поддержку текстом | Validation/review и причины отклонения |
+| Сборка и идентификация | Объединяет пакеты, сопоставляет сущности с реестром | Неоднозначности, provisional-сущности |
+| Публикация | Сохраняет документ, аудит и допустимые связи в Neo4j | ProcessingRun, статус, опубликованные связи |
 
-```powershell
-python -m lctrend parse openalex fixtures/work.json
-python -m lctrend ingest epo fixtures/patent.xml
-python -m lctrend fetch pypi gliner --output gliner.json --ingest
-python -m lctrend fetch github urchade/GLiNER --ingest
-```
+## Проверки и статусы
 
-GitHub использует `GITHUB_TOKEN`, OpenAlex — необязательный `OPENALEX_MAILTO`.
-EPO OPS пока принимает сохранённый XML: live-доступ требует OAuth credentials.
+Extractor возвращает локальные сущности и атомарные утверждения. Код проверяет цитаты, координаты, роли, типы и величины. Reviewer отдельно проверяет поддержку утверждения оригинальным текстом. При нехватке контекста, сбое проверки или неоднозначной идентичности подтверждённая связь не создаётся.
 
-## NER
+ProcessingRun хранит бюджеты, попытки вызовов, результаты проверки, причины ошибок, непроверенные утверждения и неполное покрытие. Повторы ограничены и учитываются в общем бюджете. Поддержка текстом не означает доказанную истинность источника.
 
-GLiNER подключён тонким адаптером `lctrend.ner.extract_mentions`. Модель ставится
-отдельно, потому что она тяжёлая и не нужна парсерам:
+Неполный/неудачный разбор сохраняется в аудите со staged_result. Он не стирает активный граф предыдущей успешной обработки; публикация структурной проекции выполняется при succeeded.
 
-```powershell
-python -m pip install -e ".[ner]"
-```
+Прямое SOLVES допустимо только для accepted/supported положительного solves_task с reported/observed модальностью. Совместное упоминание технологии и задачи больше не считается таким основанием. Новые сущности остаются provisional; коллизии имён — ambiguous. Экономические regex-сведения остаются кандидатами.
 
-NER создаёт внутренние записи упоминаний, которые после разрешения сохраняются
-как связи `Chunk-[:MENTIONS]->Technology|Method|...`. Страны, университеты и компании
-не извлекаются из чанков: они берутся из структурированных метаданных и связываются
-непосредственно с `Document` через `WRITTEN_IN` и `HAS_AFFILIATION`. Координаты, исходное написание,
-confidence и способ дедупликации находятся в свойствах связи.
+## Настройки и проверка
 
-`Domain` — одна широкая нормализованная предметная область документа, например
-bioinformatics или edge computing. Она выбирается из короткого канонического
-словаря по темам источника, а не извлекается из чанков.
-Когда технология и задача явно связаны в одном предложении, создаётся
-`Technology-[:SOLVES]->Task` с цитатой-доказательством. Для отображения в Neo4j Browser
-у технологии также записывается свойство `name` с её каноническим названием.
+Предметные словари, правила, предикаты, промпты и бюджеты вынесены в src/lctrend/resources. `LCTREND_CONFIG_DIR` заменяет одноимённый файл целиком; остальные берутся из пакета. Промпты переопределяются файлами prompts/extract.txt и prompts/review.txt.
 
-Экономические сведения создаются только для предложения, где одновременно явно
-упомянуты технология и стоимость, инвестиции, рынок, экономия или коммерциализация.
-Они хранятся как `Technology-[:HAS_ECONOMIC_EVIDENCE]->Chunk`; цитата, категория,
-сумма и валюта находятся в свойствах связи.
-
-Resolver сначала приводит имена к нижнему регистру, удаляет символы, выполняет
-лемматизацию и сопоставляет сокращения (`NLP` ↔ `natural language processing`).
-Только для оставшихся кандидатов вычисляется cosine similarity embeddings; пару
-выше `DEDUP_COSINE_THRESHOLD` дополнительно проверяет cross-encoder. Порог его
-решения задаётся `DEDUP_DECISION_THRESHOLD`.
-
-Каждая типизированная сущность хранит каноническое имя и варианты написания в
-свойствах `aliases` и `normalized_aliases`. Общего label `Concept` и отдельных
-служебных узлов `Mention`,
-`ConceptName` и `ResolutionDecision` в графе нет.
-
-NER запускается вместе с `--ingest` для любого поддержанного типа документа.
-Для быстрого импорта только метаданных используйте `--no-extract`:
+Назначение каждого каталога — в [docs/catalogs.md](docs/catalogs.md). `pipeline.json` задаёт размеры пакетов, лимиты контекста, общий бюджет LLM-вызовов и ограничения файлов; `llm.json` — клиент и ответы; `llm_schema.json` — допустимые отношения и роли. Большая статья может получить неполное покрытие при исчерпании бюджета даже после успешного разбора PDF.
 
 ```powershell
-python -m lctrend fetch pypi gliner --ingest --no-extract
+python -m pytest
 ```
 
-Markdown делится по заголовкам и абзацам; длинные секции ограничиваются 1000
-символами и получают overlap до 150 символов внутри одной секции. Внешние
-идентификаторы (`doi`, `openalex`, `pypi` и другие) хранятся
-в свойстве `external_ids` документа, а не как отдельные узлы графа.
-
-## Проверка
-
-```powershell
-pytest
-docker compose config
-```
+Тесты используют сохранённые ответы, фиктивные LLM и транзакции. Реальные LLM, Neo4j и качество OCR отдельно требуют проверки на ваших материалах. Существующая база и CSV автоматически не пересчитываются. Прежние export-features/build-training-set сохранены с исходными алгоритмами и форматом.

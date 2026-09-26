@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "sentence_pattern": "(?:[^\\n.!?]|\\.(?=\\d))+(?:[.!?]+|$)",
+  "ner": {
+    "threshold": 0.5,
+    "composite_technologies_enabled": false,
+    "composite_rule_note": "Legacy synthetic concept proposals based on sentence co-occurrence; disabled because they are not evidence of a technology's identity or use.",
+    "labels": {
+      "technology": "Technology", "method": "Method", "task": "Task",
+      "technical problem": "Problem", "application": "ApplicationContext",
+      "metric": "Metric", "material": "Material"
+    },
+    "generic_technologies": ["ai", "artificial intelligence", "computer vision", "cv", "machine learning", "natural language processing", "nlp"],
+    "composite_technology_rules": [
+      {"method": "(?:vision )?transformers?|transformer[- ]based(?: models?)?", "application": "computer vision|image (?:analysis|classification|segmentation)", "canonical": "Transformer-based computer vision"},
+      {"method": "transformers?|transformer[- ]based(?: models?)?", "application": "natural language processing|text classification|named entity recognition", "canonical": "Transformer-based natural language processing"}
+    ]
+  },
+  "hybrid": {
+    "note": "GLiNER is an auxiliary signal for the LLM path: hints are navigation, never evidence; uncovered technology spans become unreviewed candidates.",
+    "hint_kinds": ["Technology", "Method", "Task", "Problem", "Material"],
+    "hint_min_score": 0.5,
+    "max_hints_per_packet": 40,
+    "candidate_kinds": ["Technology"],
+    "candidate_min_score": 0.7
+  },
+  "polarity": {
+    "negated": "\\b(?:not|no|never|cannot|can't|doesn't|didn't|don't|не|нет|невозможно|нельзя|без)\\b",
+    "hypothetical": "\\b(?:can|may|might|could|would|potentially|if|может|могут|могло|могли|способен|способна|способны|возможно|если|потенциально)\\b",
+    "planned": "\\b(?:will|plans?|planned|intends?|aims?|будет|будут|планир\\w*|намерен\\w*)\\b"
+  },
+  "assertions": {
+    "subject_kinds": ["Technology"],
+    "object_kinds": {"solves_task": ["Task", "Problem"], "changes_metric": ["Metric"]},
+    "relation_rules": [
+      {"predicate": "solves_task", "role": "task", "pattern": "^\\s+(?:(?:does|did|can|could|may|might|will|would)\\s+(?:not\\s+)?|(?:cannot|can't|doesn't|didn't)\\s+|(?:не|может|могут|будет|будут)\\s+)*(?:solves?|solved|addresses?|addressed|решает|решают|решил|решили|решать)\\s+(?:(?:the|a|an|задачу|задачи|проблему)\\s+)?$"},
+      {"predicate": "changes_metric", "role": "metric", "pattern": "^\\s+(?:(?:does|did|can|could|may|might|will|would)\\s+(?:not\\s+)?|(?:cannot|can't|doesn't|didn't)\\s+|(?:не|может|могут|будет|будут)\\s+)*(?:improves?|improved|reduces?|reduced|increases?|increased|снижает|снижают|снизил|снизили|улучшает|улучшают|повышает|повышают)\\s+(?:the\\s+)?$"}
+    ]
+  },
+  "economics": {
+    "clause_split_pattern": ";|\\b(?:whereas|while|but|но|тогда как|а)\\b|,\\s*(?=[A-ZА-Я])",
+    "ownership_prefix": "^(?:(?:the\\s+)?(?:costs?|prices?|expenses?|funding|investment|market|revenue|sales|savings)\\s+(?:of|for|in)\\s+|(?:стоимость|цена|затраты|финансирование|инвестиции|рынок|выручка|экономия)\\s+(?:(?:на|для|в)\\s+)?)$",
+    "ownership_suffix": "^(?:['’]s)?\\s+(?:(?:does|did|can|could|may|might|will|would)\\s+(?:not\\s+)?|(?:cannot|can't|doesn't|didn't|не|может|могут|будет|будут)\\s+)*(?:costs?|costed|prices?|expenses?|funding|investment|market|revenue|sales|savings|has|requires?|receives?|received|attracts?|attracted|reduces?|reduced|increases?|increased|saves?|saved|offers?|offered|enables?|enabled|стоит|снижает|снижают|снизил|снизили|повышает|повышают|требует|получает|получил|экономит|затраты|стоимость|цена|финансирование|инвестиции|рынок|выручка|экономия)\\b",
+    "categories": {
+      "cost": "\\b(costs?|prices?|expenses?|affordab\\w*|стоимост\\w*|цен[аы]?|затрат\\w*)\\b",
+      "investment": "\\b(invest\\w*|funding|grants?|capital|инвест\\w*|финансир\\w*|грант\\w*)\\b",
+      "market": "\\b(market|revenue|sales|cagr|рын\\w*|выручк\\w*|продаж\\w*)\\b",
+      "savings": "\\b(savings?|payback|profitab\\w*|экономи\\w*|окупаем\\w*|рентабельн\\w*)\\b",
+      "commercialization": "\\b(commercial\\w*|moneti[sz]\\w*|коммерциализац\\w*|монетизац\\w*)\\b"
+    },
+    "non_monetary_cost": "\\b(?:(?:computational|computation|inference|time|memory|energy|communication|algorithmic|search)\\s+(?:costs?|expenses?)|вычислительн\\w*\\s+затрат\\w*|затрат\\w*\\s+(?:памяти|энергии|времени))\\b",
+    "money_pattern": "(?:[$€£₽]\\s?\\d[\\d\\s.,]*(?:\\s?(?:million|billion|млн|млрд))?|\\d[\\d\\s.,]*(?:\\s?(?:million|billion|млн|млрд))?\\s?(?:USD|EUR|RUB|GBP|доллар\\w*|евро|рубл\\w*))",
+    "currencies": {"$": "USD", "usd": "USD", "€": "EUR", "eur": "EUR", "£": "GBP", "gbp": "GBP", "₽": "RUB", "rub": "RUB", "руб": "RUB", "доллар": "USD", "евро": "EUR"}
+  }
+}

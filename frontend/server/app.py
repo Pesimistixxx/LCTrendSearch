@@ -1,0 +1,540 @@
+"""Local ingestion controls. This API does not select or rank trends."""
+
+from __future__ import annotations
+
+import importlib.util
+import logging
+import os
+import re
+from contextlib import asynccontextmanager
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from tempfile import NamedTemporaryFile
+from threading import RLock
+from typing import Literal, Optional
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from lctrend.core.config import load_catalog, load_environment
+
+logger = logging.getLogger(__name__)
+
+
+class CollectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=10, ge=1, le=5000)
+    workers: int = Field(default=1, ge=1, le=1)
+    mode: Literal["hybrid", "llm", "gliner", "none"] = "hybrid"
+    fulltext: bool = True
+    filter: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("query")
+    @classmethod
+    def real_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Укажите направление сбора")
+        return value.strip()
+
+
+class ModelSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["openai_compatible", "gigachat"] = "openai_compatible"
+    model: str = Field(default="", max_length=200)
+    base_url: str = Field(default="", max_length=1000)
+    api_key: Optional[str] = Field(default=None, max_length=20000)
+
+
+class CrawlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topic: str = Field(default="", max_length=1000)
+
+    @field_validator("topic")
+    @classmethod
+    def clean_topic(cls, value: str) -> str:
+        return value.strip()
+
+
+def _installed(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ValueError, ImportError):
+        return False
+
+
+def _status() -> dict:
+    """Read-only readiness; never return secrets or call a language model."""
+    load_environment()
+    neo = {"available": False, "message": "Neo4j недоступен"}
+    try:
+        from lctrend.graph.store import GraphStore
+
+        with GraphStore(
+            os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            os.getenv("NEO4J_USER", "neo4j"),
+            os.getenv("NEO4J_PASSWORD", "change-me-now"),
+        ) as store:
+            store.verify_connectivity()
+        neo.update(available=True, message="Neo4j подключён")
+    except Exception as exc:
+        # Polled every few seconds by the page: keep it out of the console.
+        logger.debug("Neo4j status check failed: %s", exc)
+    catalog = load_catalog("llm")
+    provider_name = os.getenv(
+        "LLM_PROVIDER", catalog.get("provider", "openai_compatible")
+    )
+    profile = (
+        catalog.get("gigachat", {}) if provider_name == "gigachat" else catalog
+    )
+    endpoint = os.getenv(
+        "GIGACHAT_BASE_URL" if provider_name == "gigachat" else "LLM_BASE_URL"
+    ) or profile.get("base_url", catalog.get("base_url", ""))
+    llm = {
+        "configured": False,
+        "provider": provider_name,
+        "base_url": endpoint,
+        "models": {},
+        "has_key": bool(
+            os.getenv(
+                "GIGACHAT_CREDENTIALS"
+                if provider_name == "gigachat"
+                else "LLM_API_KEY"
+            )
+        ),
+        "message": "Настройте подключение модели",
+    }
+    try:
+        from lctrend.llm.client import JsonLLM
+
+        provider = JsonLLM.from_environment()
+        llm.update(
+            configured=True,
+            models=provider.models,
+            base_url=provider.base_url,
+            message=(
+                "Подключение настроено; доступ к модели проверяется "
+                "при запуске"
+            ),
+        )
+    except Exception as exc:
+        # An unconfigured model is a normal state of a fresh checkout.
+        logger.debug("LLM status check failed: %s", exc)
+    return {
+        "neo4j": neo,
+        "llm": llm,
+        "gliner": {
+            "installed": _installed("gliner"),
+            "model": load_catalog("runtime")["ner_model"],
+        },
+        "pdf": {"installed": _installed("docling")},
+        "defaults": {
+            "mode": "hybrid",
+            "workers": 1,
+            "max_workers": 1,
+            "limit": 10,
+        },
+        "server": {"local": True},
+    }
+
+
+def create_app(
+    manager=None,
+    *,
+    crawl_manager=None,
+    frontend_dir=None,
+    upload_root=None,
+    status_reader=None,
+    environment_path=None,
+) -> FastAPI:
+    root = Path(__file__).resolve().parents[2]
+    frontend = (
+        Path(frontend_dir) if frontend_dir else root / "frontend" / "dist"
+    )
+    uploads = Path(
+        upload_root
+        or os.getenv("LCTREND_UPLOAD_DIR", "artifacts/ingestion/uploads")
+    ).resolve()
+    env_path = Path(
+        environment_path
+        or os.getenv("LCTREND_SETTINGS_FILE")
+        or Path.cwd() / ".env"
+    )
+    settings_lock = RLock()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        load_environment()
+        if app.state.manager is None:
+            from .jobs import JobManager
+
+            app.state.manager = JobManager()
+            logger.info(
+                "Job manager started in %s", app.state.manager.directory
+            )
+        if app.state.crawls is None and manager is None:
+            from .crawl import CrawlManager
+
+            app.state.crawls = CrawlManager(job_manager=app.state.manager)
+        yield
+        if crawl_manager is None and app.state.crawls is not None:
+            app.state.crawls.close(wait=False)
+        if manager is None:
+            logger.info("Stopping job manager")
+            app.state.manager.close(wait=False)
+
+    app = FastAPI(title="LCTrend: загрузка материалов", lifespan=lifespan)
+    app.state.manager = manager
+    app.state.crawls = crawl_manager
+    readiness = status_reader or _status
+
+    @app.middleware("http")
+    async def local_mutations(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
+            parsed = urlsplit(origin)
+            own = urlsplit(str(request.base_url))
+            same = (parsed.scheme, parsed.hostname, parsed.port) == (
+                own.scheme,
+                own.hostname,
+                own.port,
+            )
+            dev = (
+                parsed.scheme == "http"
+                and parsed.hostname in ("127.0.0.1", "localhost")
+                and parsed.port in (5173, 5188)
+            )
+            if not (same or dev):
+                logger.warning(
+                    "Rejected %s %s from origin %s",
+                    request.method,
+                    request.url.path,
+                    origin,
+                )
+                return JSONResponse(
+                    {"detail": "Запуск доступен из локального интерфейса"},
+                    status_code=403,
+                )
+        return await call_next(request)
+
+    def get_manager():
+        if app.state.manager is None:
+            raise HTTPException(503, "Очередь ещё запускается")
+        return app.state.manager
+
+    def get_crawls():
+        if app.state.crawls is None:
+            raise HTTPException(503, "Обход источников ещё запускается")
+        return app.state.crawls
+
+    def known(call, *args, **kwargs):
+        try:
+            return call(*args, **kwargs)
+        except (KeyError, FileNotFoundError) as exc:
+            logger.debug("Not found: %s", exc)
+            raise HTTPException(
+                404, "Задание или результат не найден"
+            ) from None
+        except ValueError as exc:
+            logger.warning("Rejected ingestion request: %s", exc)
+            raise HTTPException(400, "Проверьте параметры загрузки") from None
+
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok"}
+
+    @app.get("/api/ingest/status")
+    def status():
+        return readiness()
+
+    @app.get("/api/ingest/crawls")
+    def list_crawls():
+        return {"crawls": get_crawls().list_crawls()}
+
+    @app.post("/api/ingest/crawls", status_code=202)
+    def create_crawl(body: CrawlRequest):
+        with settings_lock:
+            return known(get_crawls().create, topic=body.topic)
+
+    @app.get("/api/ingest/crawls/{crawl_id}")
+    def crawl(crawl_id: str):
+        return known(get_crawls().get_crawl, crawl_id)
+
+    @app.post("/api/ingest/crawls/{crawl_id}/pause")
+    def pause_crawl(crawl_id: str):
+        return known(get_crawls().pause, crawl_id)
+
+    @app.post("/api/ingest/crawls/{crawl_id}/resume")
+    def resume_crawl(crawl_id: str):
+        with settings_lock:
+            return known(get_crawls().resume, crawl_id)
+
+    @app.post("/api/ingest/crawls/{crawl_id}/retry-failed")
+    def retry_crawl_materials(crawl_id: str):
+        with settings_lock:
+            return known(get_crawls().retry_failed, crawl_id)
+
+    @app.get("/api/ingest/crawls/{crawl_id}/materials")
+    def crawl_materials(
+        crawl_id: str,
+        status: Optional[
+            Literal["pending", "processing", "parsed", "partial", "failed"]
+        ] = None,
+        limit: int = Query(default=100, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ):
+        value = known(
+            get_crawls().list_materials,
+            crawl_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        if isinstance(value, dict):
+            return {
+                "materials": value["items"],
+                "total": value["total"],
+                "limit": value["limit"],
+                "offset": value["offset"],
+            }
+        return {"materials": value}
+
+    @app.get("/api/ingest/jobs")
+    def list_jobs():
+        return {"jobs": get_manager().list_jobs()}
+
+    @app.post("/api/ingest/jobs", status_code=202)
+    def collect(body: CollectRequest):
+        with settings_lock:
+            return known(get_manager().create_openalex, **body.model_dump())
+
+    @app.get("/api/ingest/jobs/{job_id}")
+    def job(job_id: str):
+        return known(get_manager().get_job, job_id)
+
+    @app.post("/api/ingest/jobs/{job_id}/cancel")
+    def cancel(job_id: str):
+        return known(get_manager().cancel_job, job_id)
+
+    @app.get("/api/ingest/jobs/{job_id}/documents/{doc_id}/result")
+    def result(job_id: str, doc_id: str):
+        return known(get_manager().get_result, job_id, doc_id)
+
+    @app.get("/api/ingest/jobs/{job_id}/documents/{doc_id}/download")
+    def download(job_id: str, doc_id: str):
+        value = known(get_manager().get_result, job_id, doc_id)
+        return JSONResponse(
+            value,
+            headers={
+                "Content-Disposition": 'attachment; filename="extraction.json"'
+            },
+        )
+
+    @app.post("/api/ingest/uploads", status_code=202)
+    async def upload(
+        files: list[UploadFile] = File(...),
+        mode: str = Form("hybrid"),
+        workers: int = Form(1),
+        direction: str = Form(""),
+    ):
+        if (
+            mode not in ("hybrid", "llm", "gliner", "none")
+            or workers != 1
+            or not 1 <= len(files) <= 100
+            or len(direction) > 1000
+        ):
+            raise HTTPException(
+                400, "Проверьте режим, число файлов и параллельность"
+            )
+        catalog = load_catalog("pipeline")
+        max_bytes = catalog["file_limits"]["max_file_bytes"]
+        folder = uploads / uuid4().hex
+        paths = []
+        try:
+            for item in files:
+                # Both separators must be stripped even on a different host OS.
+                name = PurePosixPath(
+                    PureWindowsPath(item.filename or "").name
+                ).name
+                name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).rstrip(" .")
+                if (
+                    not name
+                    or Path(name).suffix.casefold()
+                    not in catalog["file_formats"]
+                ):
+                    raise HTTPException(
+                        400, "Поддерживаются PDF, DOCX, TXT, Markdown и HTML"
+                    )
+                folder.mkdir(parents=True, exist_ok=True)
+                base = Path(name)
+                name = base.stem[:120] + base.suffix
+                used = {p.name.casefold() for p in paths}
+                suffix = 2
+                while name.casefold() in used:
+                    name = base.stem[:110] + f"-{suffix}" + base.suffix
+                    suffix += 1
+                path = folder / name
+                size = 0
+                with path.open("xb") as handle:
+                    paths.append(path)
+                    while data := await item.read(1024 * 1024):
+                        size += len(data)
+                        if size > max_bytes:
+                            raise HTTPException(
+                                413, "Файл превышает допустимый размер"
+                            )
+                        handle.write(data)
+                if size == 0:
+                    raise HTTPException(400, "Пустой файл")
+            with settings_lock:
+                return known(
+                    get_manager().create_files,
+                    paths,
+                    mode=mode,
+                    workers=workers,
+                    direction=direction.strip(),
+                )
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                logger.warning(
+                    "Upload rejected (%s): %s", exc.status_code, exc.detail
+                )
+            else:
+                logger.warning("Upload failed (%s)", type(exc).__name__)
+                logger.debug("Upload failure traceback", exc_info=True)
+            # These are only files created by this request, never source
+            # files.
+            for path in paths:
+                path.unlink(missing_ok=True)
+            if folder.exists():
+                folder.rmdir()
+            raise
+        finally:
+            for item in files:
+                await item.close()
+
+    @app.post("/api/ingest/settings")
+    def model_settings(body: ModelSettings):
+        from dotenv import set_key
+
+        from lctrend.llm.client import JsonLLM, LLMError
+
+        with settings_lock:
+            processing_jobs = any(
+                j["status"] in ("queued", "running", "cancelling")
+                for j in get_manager().list_jobs()
+            )
+            processing_crawls = app.state.crawls is not None and any(
+                c["status"] in ("queued", "running", "pausing")
+                for c in app.state.crawls.list_crawls()
+            )
+            if processing_jobs or processing_crawls:
+                raise HTTPException(
+                    409, "Дождитесь завершения обработки перед сменой модели"
+                )
+            values = {
+                "LLM_PROVIDER": body.provider,
+                "LLM_MODEL": body.model.strip(),
+                "LLM_EXTRACT_MODEL": "",
+                "LLM_REVIEW_MODEL": "",
+                "GIGACHAT_BASE_URL"
+                if body.provider == "gigachat"
+                else "LLM_BASE_URL": body.base_url.strip(),
+            }
+            if body.api_key is not None and body.api_key.strip():
+                values[
+                    "GIGACHAT_CREDENTIALS"
+                    if body.provider == "gigachat"
+                    else "LLM_API_KEY"
+                ] = body.api_key.strip()
+            before = {key: os.environ.get(key) for key in values}
+            temporary = None
+            try:
+                os.environ.update(values)
+                # Configuration check, no request/payment.
+                JsonLLM.from_environment()
+                env_path.parent.mkdir(parents=True, exist_ok=True)
+                with NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=env_path.parent,
+                    prefix=".env-",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    if env_path.exists():
+                        handle.write(env_path.read_text(encoding="utf-8-sig"))
+                for key, value in values.items():
+                    set_key(str(temporary), key, value, quote_mode="always")
+                temporary.replace(env_path)
+            except Exception as exc:
+                for key, old in before.items():
+                    if old is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = old
+                if isinstance(exc, LLMError):
+                    # LLMError carries only a code and a safe message.
+                    logger.warning("Model settings rejected: %s", exc)
+                    raise HTTPException(
+                        400, "Проверьте модель, адрес API и ключ подключения"
+                    ) from None
+                logger.exception("Cannot save model settings")
+                raise HTTPException(
+                    500, "Не удалось сохранить настройки проекта"
+                ) from None
+            finally:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+            logger.info(
+                "Model settings saved: provider=%s model=%s key_updated=%s",
+                body.provider,
+                values["LLM_MODEL"] or "<default>",
+                body.api_key is not None and bool(body.api_key.strip()),
+            )
+        return readiness()
+
+    if (frontend / "assets").is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(frontend / "assets")),
+            name="assets",
+        )
+
+    @app.get("/")
+    def page():
+        path = frontend / "index.html"
+        if not path.is_file():
+            raise HTTPException(
+                503, "Интерфейс ещё не собран: выполните сборку frontend"
+            )
+        return FileResponse(path)
+
+    @app.get("/ingest.html")
+    def ingestion_page():
+        return RedirectResponse("/#view=ingest")
+
+    return app
+
+
+def serve(host: str = "127.0.0.1", port: int = 5188) -> None:
+    import uvicorn
+
+    from lctrend.core.logging_config import setup_logging
+
+    log_file = setup_logging(loggers=("lctrend", "frontend.server"))
+    logger.info("Starting ingestion server on http://%s:%s", host, port)
+    logger.debug("Writing detailed log to %s", log_file)
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")

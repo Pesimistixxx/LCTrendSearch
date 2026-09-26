@@ -1,0 +1,12 @@
+CREATE CONSTRAINT source_id IF NOT EXISTS FOR (n:Source) REQUIRE n.source_id IS UNIQUE;
+CREATE CONSTRAINT document_id IF NOT EXISTS FOR (n:Document) REQUIRE n.document_id IS UNIQUE;
+CREATE CONSTRAINT document_version_id IF NOT EXISTS FOR (n:DocumentVersion) REQUIRE n.document_version_id IS UNIQUE;
+CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (n:Chunk) REQUIRE n.chunk_id IS UNIQUE;
+CREATE CONSTRAINT contributor_id IF NOT EXISTS FOR (n:Contributor) REQUIRE n.contributor_id IS UNIQUE;
+CREATE CONSTRAINT organization_id IF NOT EXISTS FOR (n:Organization) REQUIRE n.organization_id IS UNIQUE;
+CREATE CONSTRAINT country_id IF NOT EXISTS FOR (n:Country) REQUIRE n.country_id IS UNIQUE;
+CREATE CONSTRAINT domain_id IF NOT EXISTS FOR (n:Domain) REQUIRE n.domain_id IS UNIQUE;
+CREATE CONSTRAINT assertion_id IF NOT EXISTS FOR (n:Assertion) REQUIRE n.assertion_id IS UNIQUE;
+CREATE CONSTRAINT run_id IF NOT EXISTS FOR (n:ProcessingRun) REQUIRE n.run_id IS UNIQUE;
+CREATE CONSTRAINT claim_group_id IF NOT EXISTS FOR (n:ClaimGroup) REQUIRE n.claim_group_id IS UNIQUE;
+CREATE CONSTRAINT evidence_family_id IF NOT EXISTS FOR (n:EvidenceFamily) REQUIRE n.family_id IS UNIQUE;

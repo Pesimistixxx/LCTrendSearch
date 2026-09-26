@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { search, graph } from './api.js'
 import Graph from './Graph.jsx'
+import Ingestion from './ingest/App.jsx'
+import './ingest/styles.css'
 
 const EXAMPLES = ['технологии в ИИ', 'перспективные решения в финтехе', 'слабые сигналы в кибербезопасности', 'новые материалы', 'энергетика будущего']
 const STEPS = ['Сбор открытых источников', 'Парсинг патентов, статей, отчётов', 'NLP: извлечение сущностей', 'Инференс и скоринг', 'Фильтрация мейнстрима и хайпа']
@@ -17,6 +19,7 @@ export default function App() {
   const [route, setRoute] = useState(readHash)
   const [res, setRes] = useState(null)
   const [err, setErr] = useState(null)
+  const ingestion = route.view === 'ingest'
 
   useEffect(() => {
     const on = () => setRoute(readHash())
@@ -25,12 +28,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!route.q || res?.query === route.q) return
+    if (ingestion || !route.q || res?.query === route.q) return
     let live = true
     setRes(null); setErr(null)
     search(route.q).then((d) => live && setRes(d), (e) => live && setErr(e.message))
     return () => { live = false }
-  }, [route.q])
+  }, [route.q, ingestion])
 
   useEffect(() => { window.scrollTo({ top: 0 }) }, [route.s, route.q])
 
@@ -39,13 +42,15 @@ export default function App() {
   return (
     <>
       <div className="sky" aria-hidden="true" />
-      <Header q={route.q} compact={!!route.q} />
+      <Header q={route.q} compact={!!route.q || ingestion} ingestion={ingestion} />
       <main className="wrap">
-        {!route.q && <Home />}
-        {route.q && err && <div className="error card">Не удалось выполнить поиск: {err}</div>}
-        {route.q && !res && !err && <Scanning q={route.q} />}
-        {res && !route.s && <Results res={res} />}
-        {res && signal && <Insight s={signal} q={res.query} />}
+        {ingestion ? <Ingestion /> : <>
+          {!route.q && <Home />}
+          {route.q && err && <div className="error card">Не удалось выполнить поиск: {err}</div>}
+          {route.q && !res && !err && <Scanning q={route.q} />}
+          {route.q && res && !route.s && <Results res={res} />}
+          {route.q && res && signal && <Insight s={signal} q={res.query} />}
+        </>}
       </main>
       <footer className="foot wrap">
         <span>Сигнал · радар зарождающихся технологий</span>
@@ -67,14 +72,18 @@ function SearchBox({ initial = '', big }) {
   )
 }
 
-function Header({ q, compact }) {
+function Header({ q, compact, ingestion }) {
   return (
     <header className={`top ${compact ? 'top-compact' : ''}`}>
       <div className="wrap top-in">
         <a href="#" className="brand" aria-label="На главную">
           <Logo /> <span>Сигнал</span>
         </a>
-        {compact && <SearchBox initial={q} />}
+        {q && !ingestion && <SearchBox initial={q} />}
+        <nav className="top-nav" aria-label="Разделы">
+          <a href="#" aria-current={!ingestion ? 'page' : undefined}>Демо поиска</a>
+          <a href="#view=ingest" aria-current={ingestion ? 'page' : undefined}>Сбор материалов</a>
+        </nav>
       </div>
     </header>
   )
@@ -98,6 +107,7 @@ function Home() {
       <div className="chips">
         {EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => go({ q: e })}>{e}</button>)}
       </div>
+      <p className="lead small">Поиск показывает демонстрационные данные. <a className="ingestion-link" href="#view=ingest">Перейти к сбору и проверке материалов →</a></p>
     </section>
   )
 }

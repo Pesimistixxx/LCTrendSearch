@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "measurement_predicates": ["reported_measurement", "reported_comparison"],
+  "number_pattern": "(?<![\\w.])[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)(?:[eE][+-]?\\d+)?",
+  "predicates": {
+    "targets_problem": {
+      "required_roles": ["subject", "problem"], "allowed_roles": ["subject", "problem"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "problem": ["Problem"]}
+    },
+    "targets_task": {
+      "required_roles": ["subject", "task"], "allowed_roles": ["subject", "task"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "task": ["Task"]}
+    },
+    "uses_method": {
+      "required_roles": ["subject", "method"], "allowed_roles": ["subject", "method"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "method": ["Method", "Technology"]}
+    },
+    "reported_comparison": {
+      "required_roles": ["subject", "baseline", "metric"], "allowed_roles": ["subject", "baseline", "metric"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "baseline": ["Technology", "Method", "Material"], "metric": ["Metric"]}
+    },
+    "reported_measurement": {
+      "required_roles": ["subject", "metric"], "allowed_roles": ["subject", "metric"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "metric": ["Metric"]}
+    },
+    "reports_limitation": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "problem", "task", "baseline", "metric", "application", "material"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "problem": ["Problem"], "task": ["Task"], "baseline": ["Technology", "Method", "Material"], "metric": ["Metric"], "application": ["ApplicationContext", "Task"], "material": ["Material"]}
+    },
+    "applied_in": {
+      "required_roles": ["subject", "application"], "allowed_roles": ["subject", "application"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "application": ["ApplicationContext", "Task"]}
+    },
+    "qualitative_advantage": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "metric", "baseline"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "metric": ["Metric"], "baseline": ["Technology", "Method", "Material"]}
+    },
+    "solves_task": {
+      "required_roles": ["subject", "task"], "allowed_roles": ["subject", "task"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "task": ["Task"]}
+    },
+    "changes_metric": {
+      "required_roles": ["subject", "metric"], "allowed_roles": ["subject", "metric"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "metric": ["Metric"]}
+    }
+  }
+}

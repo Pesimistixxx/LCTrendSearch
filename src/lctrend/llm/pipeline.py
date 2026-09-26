@@ -1,0 +1,944 @@
+"""Bounded document processing: packets, extraction, review, resolution.
+
+This coordinator has no trend selection, network context tools or graph
+writes. Only the caller publishes its validated result to Neo4j.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+from time import sleep
+from typing import Any, Iterable
+from uuid import uuid4
+
+from ..core.config import RESOURCE_DIR, load_catalog
+from ..core.models import (
+    Assertion,
+    Concept,
+    ConceptKind,
+    DocumentEnvelope,
+    EvidenceSpan,
+    ExtractionResult,
+    Mention,
+    ProcessingRun,
+    json_value,
+    stable_id,
+    validate_extraction,
+)
+from ..extraction.economics import extract_economic_evidence
+from ..extraction.ner import extract_mentions
+from ..extraction.resolver import resolve_mentions
+from .client import LLMError, Provider
+from .context import (
+    ContextBudgetError,
+    PipelineSettings,
+    build_payload,
+    expand_packet,
+    plan_packets,
+    review_payload,
+)
+from .contracts import Extraction, Review
+from .validation import validate_local_extraction, validate_review
+
+logger = logging.getLogger(__name__)
+
+
+def _emit(event, **value):
+    if event is not None:
+        try:
+            event({"branch": "llm", **value})
+        except Exception:
+            logger.debug("Progress event callback failed", exc_info=True)
+
+
+def _prompt(stage: str) -> str:
+    override = os.getenv("LCTREND_CONFIG_DIR")
+    candidate = (
+        Path(override) / "prompts" / f"{stage}.txt" if override else None
+    )
+    path = (
+        candidate
+        if candidate and candidate.is_file()
+        else RESOURCE_DIR / "prompts" / f"{stage}.txt"
+    )
+    return path.read_text(encoding="utf-8-sig")
+
+
+def _refs(value: Any, mapping: dict[str, str]) -> Any:
+    if isinstance(value, list):
+        return [_refs(item, mapping) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: mapping[item] if key == "entity_ref" else _refs(item, mapping)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _source_key(chunks: dict, span: Any) -> list:
+    """Recognize the same evidence in overlap by original text coordinates."""
+    value = span.model_dump() if hasattr(span, "model_dump") else span
+    chunk = chunks[value["chunk_id"]]
+    stream = chunk.locator.get("source_stream_id")
+    segments = chunk.locator.get("source_segments", [])
+    if stream and segments:
+        first = next(
+            (
+                s
+                for s in segments
+                if s["chunk_start"] <= value["start"] < s["chunk_end"]
+            ),
+            None,
+        )
+        last = next(
+            (
+                s
+                for s in segments
+                if s["chunk_start"] < value["end"] <= s["chunk_end"]
+            ),
+            None,
+        )
+        if first and last:
+            return [
+                "source",
+                stream,
+                first["source_start"] + value["start"] - first["chunk_start"],
+                last["source_start"] + value["end"] - last["chunk_start"],
+            ]
+    return ["chunk", value["chunk_id"], value["start"], value["end"]]
+
+
+def _machine_mentions(
+    document: DocumentEnvelope, ner: Any, metadata: dict, trace: list
+) -> list[Mention]:
+    """GLiNER spans are auxiliary; their failure never fails the document."""
+    try:
+        found = extract_mentions(document, ner)
+    except Exception as exc:
+        logger.warning(
+            "%s: NER failed (%s: %s), continuing without it",
+            document.document_version_id,
+            type(exc).__name__,
+            exc,
+        )
+        metadata["ner"].update(status="failed", error=type(exc).__name__)
+        return []
+    metadata["ner"].update(status="ok", mentions=len(found))
+    trace.append({"stage": "ner", "mentions": len(found)})
+    return found
+
+
+def _hints(found: list[Mention], settings: dict) -> list[dict]:
+    kinds = set(settings["hint_kinds"])
+    hints = [
+        {
+            "chunk_id": m.chunk_id,
+            "text": m.surface_text,
+            "kind": m.type_candidates[0].value,
+            "start": m.start,
+            "end": m.end,
+            "score": round(m.confidence, 3),
+        }
+        for m in found
+        if m.type_candidates[0].value in kinds
+        and m.confidence is not None
+        and m.confidence >= settings["hint_min_score"]
+    ]
+    hints.sort(key=lambda h: (-h["score"], h["chunk_id"], h["start"]))
+    return hints
+
+
+def _packet_hints(
+    hints: list[dict], chunk_ids: Iterable[str], limit: int
+) -> list[dict]:
+    visible = set(chunk_ids)
+    return [hint for hint in hints if hint["chunk_id"] in visible][:limit]
+
+
+def _overlaps(a: Mention, b: Mention) -> bool:
+    return a.chunk_id == b.chunk_id and a.start < b.end and b.start < a.end
+
+
+def _combine(
+    llm: dict[str, Mention],
+    found: list[Mention],
+    settings: dict,
+    metadata: dict,
+) -> None:
+    """Corroborate LLM spans with NER.
+
+    Strong NER-only technologies are kept as candidates.
+    """
+    stats = {
+        "corroborated": 0,
+        "kind_conflicts": 0,
+        "llm_only": 0,
+        "ner_candidates_added": 0,
+    }
+    for mention in llm.values():
+        same = [
+            m
+            for m in found
+            if _overlaps(mention, m)
+            and m.type_candidates == mention.type_candidates
+        ]
+        if same:
+            stats["corroborated"] += 1
+            mention.confidence = max(m.confidence or 0.0 for m in same)
+        elif any(_overlaps(mention, m) for m in found):
+            stats["kind_conflicts"] += 1
+        else:
+            stats["llm_only"] += 1
+    kinds = {ConceptKind(kind) for kind in settings["candidate_kinds"]}
+    for candidate in found:
+        if (
+            candidate.type_candidates[0] in kinds
+            and (candidate.confidence or 0.0)
+            >= settings["candidate_min_score"]
+            and not any(_overlaps(candidate, m) for m in llm.values())
+            and candidate.mention_id not in llm
+        ):
+            llm[candidate.mention_id] = candidate.model_copy(
+                update={"mention_role": "ner_candidate"}
+            )
+            stats["ner_candidates_added"] += 1
+    metadata["ner"].update(stats)
+
+
+class _Budget:
+    def __init__(
+        self,
+        provider: Provider,
+        settings: PipelineSettings,
+        trace: list[dict],
+        event=None,
+    ):
+        self.provider, self.settings, self.trace = provider, settings, trace
+        self.used = 0
+        self.event = event
+
+    def call(self, schema, prompt, payload, stage: str, reserve: int = 0):
+        for attempt in range(self.settings.max_retries + 1):
+            if self.used + reserve >= self.settings.max_model_calls:
+                raise LLMError(
+                    "call_budget", "Document model call budget exhausted"
+                )
+            self.used += 1
+            _emit(
+                self.event,
+                stage=stage,
+                status="running",
+                model_calls=self.used,
+                max_model_calls=self.settings.max_model_calls,
+                attempt=attempt + 1,
+            )
+            try:
+                result = self.provider.generate(
+                    schema, prompt, payload, stage=stage
+                )
+                result = schema.model_validate(
+                    result.model_dump()
+                    if hasattr(result, "model_dump")
+                    else result
+                )
+                self.trace.append(
+                    {
+                        "stage": stage,
+                        "call": self.used,
+                        "attempt": attempt + 1,
+                        "status": "succeeded",
+                    }
+                )
+                _emit(
+                    self.event,
+                    stage=stage,
+                    status="succeeded",
+                    model_calls=self.used,
+                )
+                return result
+            except LLMError as exc:
+                self.trace.append(
+                    {
+                        "stage": stage,
+                        "call": self.used,
+                        "attempt": attempt + 1,
+                        "status": "failed",
+                        "code": exc.code,
+                    }
+                )
+                _emit(
+                    self.event,
+                    stage=stage,
+                    status="failed",
+                    model_calls=self.used,
+                    code=exc.code,
+                )
+                if (
+                    not exc.retryable
+                    or attempt == self.settings.max_retries
+                    or self.used + reserve >= self.settings.max_model_calls
+                ):
+                    logger.warning(
+                        "LLM %s call failed: %s (%s)", stage, exc.code, exc
+                    )
+                    raise
+                delay = (
+                    exc.retry_after
+                    if exc.retry_after is not None
+                    else self.settings.retry_delay_seconds
+                )
+                delay = min(
+                    max(0, delay), self.settings.max_retry_delay_seconds
+                )
+                logger.warning(
+                    "LLM %s attempt %d failed: %s; retrying in %.1fs",
+                    stage,
+                    attempt + 1,
+                    exc.code,
+                    delay,
+                )
+                sleep(delay)
+            except Exception:
+                self.trace.append(
+                    {
+                        "stage": stage,
+                        "call": self.used,
+                        "status": "failed",
+                        "code": "invalid_response",
+                    }
+                )
+                _emit(
+                    self.event,
+                    stage=stage,
+                    status="failed",
+                    model_calls=self.used,
+                    code="invalid_response",
+                )
+                logger.warning(
+                    "LLM %s returned an invalid response", stage, exc_info=True
+                )
+                raise LLMError(
+                    "invalid_response", "Provider returned an invalid response"
+                ) from None
+
+
+def process_document(
+    document: DocumentEnvelope,
+    provider: Provider,
+    registry: Iterable[Concept] = (),
+    settings: PipelineSettings | None = None,
+    semantic=None,
+    ner: Any = None,
+    ner_name: str | None = None,
+    event=None,
+) -> ExtractionResult:
+    """Return an auditable extraction.
+
+    Partial coverage never masquerades as success. With ``ner`` (a
+    GLiNER-like model) the run is hybrid: machine spans are shown to the
+    extractor as hints, corroborate its entities and add unreviewed
+    technology candidates. The LLM stays the source of assertions.
+    """
+    settings = settings or PipelineSettings.from_catalog()
+    hybrid = load_catalog("extraction")["hybrid"]
+    prompts = {stage: _prompt(stage) for stage in ("extract", "review")}
+    trace: list[dict] = []
+    metadata: dict = {
+        "coverage": {},
+        "issues": [],
+        "unresolved_claims": [],
+        "invalid_entities": [],
+        "source_truth_assessed": False,
+        "demo": bool(getattr(provider, "demo", False)),
+        "source_snapshot": document.artifact.model_dump(),
+        "input_coverage": document.coverage,
+        "input_quality_status": document.quality_status,
+        "parse_warnings": document.metadata.get("parse_warnings", []),
+        "ner": {
+            "status": "disabled" if ner is None else "pending",
+            "model": ner_name,
+        },
+    }
+    started = datetime.now(timezone.utc).isoformat()
+    run = ProcessingRun(
+        run_id=stable_id("run", document.document_version_id, uuid4()),
+        pipeline_version="material-llm/1",
+        parser="llm_packets",
+        started_at=started,
+        prompt_hash=stable_id("prompts", json_value(prompts)),
+        config_hash=stable_id(
+            "config",
+            json_value(settings.model_dump()),
+            json_value(load_catalog("pipeline")),
+            json_value(getattr(provider, "models", {})),
+            getattr(provider, "base_url", "replay"),
+            json_value(load_catalog("llm_schema")),
+            json_value(load_catalog("resolver")),
+            json_value(load_catalog("llm")),
+            ner_name,
+            json_value(hybrid) if ner is not None else None,
+        ),
+        model_revision=json_value(getattr(provider, "models", {})),
+        metadata=metadata,
+        trace=trace,
+    )
+    # Pydantic can copy containers on construction; use the actual run
+    # containers.
+    metadata, trace = run.metadata, run.trace
+    budget = _Budget(provider, settings, trace, event)
+    call_offset = len(getattr(provider, "calls", []))
+    found = (
+        _machine_mentions(document, ner, metadata, trace)
+        if ner is not None
+        else []
+    )
+    hints = _hints(found, hybrid) if ner is not None else None
+    _emit(event, stage="plan", status="running")
+    plan = plan_packets(document, settings)
+    logger.info(
+        "%s: %d chunks planned into %d packets",
+        document.document_version_id,
+        len(document.chunks),
+        len(plan.packets),
+    )
+    _emit(
+        event,
+        stage="plan",
+        status="succeeded",
+        total_packets=len(plan.packets),
+        total_chunks=len(document.chunks),
+        omitted_chunks=len(plan.omitted_chunk_ids),
+    )
+    trace.append(
+        {
+            "stage": "plan",
+            "packets": [p.model_dump() for p in plan.packets],
+            "omitted_reasons": plan.omitted_reasons,
+            "support_omissions": plan.support_omissions,
+        }
+    )
+    processed, failed = [], []
+    batches = []
+    for packet_number, original in enumerate(plan.packets, 1):
+        _emit(
+            event,
+            stage="packet",
+            status="running",
+            packet_id=original.packet_id,
+            packet_number=packet_number,
+            total_packets=len(plan.packets),
+        )
+        if budget.used + 2 > settings.max_model_calls:
+            failed.append(original.packet_id)
+            metadata["issues"].append(
+                {"packet_id": original.packet_id, "code": "call_budget"}
+            )
+            _emit(
+                event,
+                stage="packet",
+                status="failed",
+                packet_id=original.packet_id,
+                code="call_budget",
+            )
+            logger.warning(
+                "Packet %s skipped: model call budget exhausted",
+                original.packet_id,
+            )
+            continue
+        packet = original
+        try:
+            packet_hints = (
+                None
+                if hints is None
+                else _packet_hints(
+                    hints,
+                    packet.focus_chunk_ids + packet.support_chunk_ids,
+                    hybrid["max_hints_per_packet"],
+                )
+            )
+            extraction = budget.call(
+                Extraction,
+                prompts["extract"],
+                build_payload(document, packet, settings, hints=packet_hints),
+                "extract",
+                reserve=1,
+            )
+            trace.append(
+                {
+                    "stage": "extraction_response",
+                    "packet_id": packet.packet_id,
+                    "response": extraction.model_dump(mode="python"),
+                }
+            )
+            for context_round in range(settings.max_context_rounds):
+                if (
+                    not extraction.context_requests
+                    or budget.used + 2 > settings.max_model_calls
+                ):
+                    break
+                _emit(
+                    event,
+                    stage="context",
+                    status="running",
+                    packet_id=packet.packet_id,
+                    context_round=context_round + 1,
+                )
+                expanded, outcomes = expand_packet(
+                    document, packet, extraction.context_requests, settings
+                )
+                trace.append(
+                    {
+                        "stage": "context",
+                        "packet_id": packet.packet_id,
+                        "round": context_round + 1,
+                        "requests": [
+                            r.model_dump() for r in extraction.context_requests
+                        ],
+                        "outcomes": outcomes,
+                    }
+                )
+                if expanded == packet and not (
+                    outcomes
+                    and all(
+                        o.get("status") == "already_visible" for o in outcomes
+                    )
+                ):
+                    break
+                try:
+                    next_payload = build_payload(
+                        document,
+                        expanded,
+                        settings,
+                        feedback=[
+                            "Re-read the original requested chunks, "
+                            "including already visible blocks; return a "
+                            "complete replacement extraction.",
+                            json.dumps(outcomes, ensure_ascii=False),
+                        ],
+                        hints=None
+                        if hints is None
+                        else _packet_hints(
+                            hints,
+                            expanded.focus_chunk_ids
+                            + expanded.support_chunk_ids,
+                            hybrid["max_hints_per_packet"],
+                        ),
+                    )
+                except ContextBudgetError:
+                    metadata["issues"].append(
+                        {
+                            "packet_id": packet.packet_id,
+                            "code": "context_payload_budget",
+                        }
+                    )
+                    break
+                packet = expanded
+                extraction = budget.call(
+                    Extraction,
+                    prompts["extract"],
+                    next_payload,
+                    "extract",
+                    reserve=1,
+                )
+                trace.append(
+                    {
+                        "stage": "extraction_response",
+                        "packet_id": packet.packet_id,
+                        "response": extraction.model_dump(mode="python"),
+                    }
+                )
+            visible = set(packet.focus_chunk_ids + packet.support_chunk_ids)
+            _emit(
+                event,
+                stage="validate",
+                status="running",
+                packet_id=packet.packet_id,
+            )
+            extraction, issues = validate_local_extraction(
+                document, extraction, visible
+            )
+            _emit(
+                event,
+                stage="validate",
+                status="succeeded",
+                packet_id=packet.packet_id,
+                validation_issues=len(issues),
+            )
+            metadata["issues"].extend(
+                {
+                    "packet_id": packet.packet_id,
+                    "item": key,
+                    "reasons": reasons,
+                }
+                for key, reasons in issues.items()
+            )
+            metadata["unresolved_claims"].extend(
+                {
+                    "packet_id": packet.packet_id,
+                    "claim": c.model_dump(),
+                    "reason": issues[f"claim:{c.claim_id}"],
+                }
+                for c in extraction.claims
+                if f"claim:{c.claim_id}" in issues
+            )
+            metadata["invalid_entities"].extend(
+                {
+                    "packet_id": packet.packet_id,
+                    "entity": e.model_dump(),
+                    "reason": issues[f"entity:{e.local_id}"],
+                }
+                for e in extraction.entities
+                if f"entity:{e.local_id}" in issues
+            )
+            valid_entities = [
+                e
+                for e in extraction.entities
+                if f"entity:{e.local_id}" not in issues
+            ]
+            valid_claims = [
+                c
+                for c in extraction.claims
+                if f"claim:{c.claim_id}" not in issues
+            ]
+            valid = Extraction(entities=valid_entities, claims=valid_claims)
+            trace.append(
+                {
+                    "stage": "validation",
+                    "packet_id": packet.packet_id,
+                    "valid_entities": len(valid_entities),
+                    "valid_claims": len(valid_claims),
+                    "issues": issues,
+                }
+            )
+            decisions = {}
+            context_pending = bool(extraction.context_requests)
+            if context_pending:
+                metadata["issues"].append(
+                    {
+                        "packet_id": packet.packet_id,
+                        "code": "unresolved_context",
+                        "requests": [
+                            r.model_dump() for r in extraction.context_requests
+                        ],
+                    }
+                )
+            if valid_claims:
+                try:
+                    payload = review_payload(
+                        document,
+                        valid.model_dump(mode="python"),
+                        visible,
+                        settings,
+                    )
+                    review = budget.call(
+                        Review, prompts["review"], payload, "review"
+                    )
+                    review = validate_review(
+                        review, [c.claim_id for c in valid_claims]
+                    )
+                    decisions = {item.claim_id: item for item in review.items}
+                    metadata["issues"].extend(
+                        {
+                            "packet_id": packet.packet_id,
+                            "claim_id": item.claim_id,
+                            "code": "review_unclear",
+                            "reason": item.reason,
+                        }
+                        for item in review.items
+                        if item.decision == "unclear"
+                    )
+                    trace.append(
+                        {
+                            "stage": "verification",
+                            "packet_id": packet.packet_id,
+                            "items": review.model_dump()["items"],
+                        }
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Packet %s review failed: %s",
+                        packet.packet_id,
+                        getattr(exc, "code", type(exc).__name__),
+                    )
+                    metadata["issues"].append(
+                        {
+                            "packet_id": packet.packet_id,
+                            "code": getattr(exc, "code", "review_contract"),
+                        }
+                    )
+            batches.append(
+                (packet.packet_id, valid, decisions, context_pending)
+            )
+            processed.extend(original.focus_chunk_ids)
+            _emit(
+                event,
+                stage="packet",
+                status="succeeded",
+                packet_id=packet.packet_id,
+                packet_number=packet_number,
+                total_packets=len(plan.packets),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Packet %s failed: %s",
+                original.packet_id,
+                getattr(exc, "code", type(exc).__name__),
+            )
+            logger.debug(
+                "Packet %s traceback", original.packet_id, exc_info=True
+            )
+            failed.append(original.packet_id)
+            metadata["issues"].append(
+                {
+                    "packet_id": original.packet_id,
+                    "code": getattr(exc, "code", type(exc).__name__),
+                }
+            )
+            _emit(
+                event,
+                stage="packet",
+                status="failed",
+                packet_id=original.packet_id,
+                code=getattr(exc, "code", type(exc).__name__),
+            )
+    # Assemble only source-anchored entities; matching names alone does not
+    # dedup evidence.
+    _emit(event, stage="assemble", status="running")
+    mentions: dict[str, Mention] = {}
+    chunks = {chunk.chunk_id: chunk for chunk in document.chunks}
+    entity_mentions: dict[str, list[str]] = {}
+    definitions: dict[str, str] = {}
+    claims = []
+    for packet_id, extraction, decisions, pending in batches:
+        for entity in extraction.entities:
+            key = f"{packet_id}:{entity.local_id}"
+            ids = []
+            for span in entity.evidence:
+                mention_id = stable_id(
+                    "mention",
+                    document.document_version_id,
+                    json_value(_source_key(chunks, span)),
+                    entity.label,
+                    entity.kind.value,
+                )
+                mention = Mention(
+                    mention_id=mention_id,
+                    chunk_id=span.chunk_id,
+                    surface_text=span.quote,
+                    canonical_text=entity.label,
+                    start=span.start,
+                    end=span.end,
+                    type_candidates=[entity.kind],
+                    mention_role="entity",
+                )
+                mentions.setdefault(mention_id, mention)
+                ids.append(mention_id)
+            entity_mentions[key] = ids
+            if entity.definition:
+                definitions[key] = entity.definition
+        for claim in extraction.claims:
+            mapping = {
+                e.local_id: f"{packet_id}:{e.local_id}"
+                for e in extraction.entities
+            }
+            data = claim.model_dump()
+            data["roles"] = {
+                role: mapping[ref] for role, ref in claim.roles.items()
+            }
+            data["qualifiers"] = _refs(claim.qualifiers, mapping)
+            data["values"] = _refs(claim.values, mapping)
+            decision = decisions.get(claim.claim_id)
+            state = (
+                decision.decision if decision and not pending else "unclear"
+            )
+            claims.append(
+                (
+                    data,
+                    state,
+                    decision.reason if decision else "Review unavailable",
+                )
+            )
+    if ner is not None and metadata["ner"]["status"] == "ok":
+        _combine(mentions, found, hybrid, metadata)
+    _emit(event, stage="resolution", status="running", mentions=len(mentions))
+    concepts, resolutions = resolve_mentions(
+        list(mentions.values()), deepcopy(list(registry)), semantic
+    )
+    mention_concept = {
+        d.mention_id: d.concept_id
+        for d in resolutions
+        if d.status in {"accepted", "provisional"} and d.concept_id
+    }
+    identities = {}
+    for entity_key, ids in entity_mentions.items():
+        resolved = {mention_concept.get(mid) for mid in ids}
+        if len(resolved) == 1 and None not in resolved:
+            identities[entity_key] = resolved.pop()
+    metadata["entity_bindings"] = {
+        key: {
+            "mention_ids": ids,
+            "concept_id": identities.get(key),
+            "local_definition": definitions.get(key),
+        }
+        for key, ids in entity_mentions.items()
+    }
+    assertions: dict[str, Assertion] = {}
+    conflicted = set()
+    for data, state, reason in claims:
+        try:
+            roles = {
+                role: identities[ref] for role, ref in data["roles"].items()
+            }
+            qualifiers, values = (
+                _refs(data["qualifiers"], identities),
+                _refs(data["values"], identities),
+            )
+        except KeyError:
+            metadata["unresolved_claims"].append(
+                {
+                    "claim": data,
+                    "reason": "Entity identity ambiguous",
+                    "review": state,
+                }
+            )
+            continue
+        evidence = [EvidenceSpan(**span) for span in data["evidence"]]
+        identity = {
+            key: data[key]
+            for key in (
+                "predicate",
+                "polarity",
+                "modality",
+                "attribution_kind",
+            )
+        }
+        identity.update(
+            roles=roles,
+            qualifiers=qualifiers,
+            values=values,
+            evidence=sorted(
+                [
+                    {"source": _source_key(chunks, s), "quote": s.quote}
+                    for s in evidence
+                ],
+                key=json_value,
+            ),
+        )
+        aid = stable_id(
+            "assertion", document.document_version_id, json_value(identity)
+        )
+        assertion = Assertion(
+            assertion_id=aid,
+            predicate=data["predicate"],
+            roles=roles,
+            qualifiers=qualifiers,
+            values=values,
+            evidence=evidence,
+            polarity=data["polarity"],
+            modality=data["modality"],
+            attribution_kind=data["attribution_kind"],
+            verification_status={
+                "supported": "supported",
+                "unsupported": "unsupported",
+                "unclear": "unverified",
+            }[state],
+            status={
+                "supported": "accepted",
+                "unsupported": "rejected",
+                "unclear": "needs_review",
+            }[state],
+        )
+        previous = assertions.get(aid)
+        if previous:
+            assertion.evidence = previous.evidence
+        if (
+            aid in conflicted
+            or previous
+            and previous.verification_status != assertion.verification_status
+        ):
+            conflicted.add(aid)
+            assertion.status, assertion.verification_status = (
+                "needs_review",
+                "unverified",
+            )
+            metadata["issues"].append(
+                {"assertion_id": aid, "code": "conflicting_reviews"}
+            )
+        assertions[aid] = assertion
+        trace.append(
+            {
+                "stage": "assemble",
+                "assertion_id": aid,
+                "review": state,
+                "reason": reason,
+            }
+        )
+    covered = set(processed)
+    metadata["coverage"] = {
+        "total_chunks": len(document.chunks),
+        "processed_focus_chunk_ids": sorted(covered),
+        "unprocessed_chunk_ids": [
+            c.chunk_id for c in document.chunks if c.chunk_id not in covered
+        ],
+        "omitted_chunk_ids": plan.omitted_chunk_ids,
+        "failed_packet_ids": failed,
+    }
+    metadata["budgets"] = settings.model_dump()
+    metadata["model_calls"] = budget.used
+    metadata["provider_calls"] = deepcopy(
+        getattr(provider, "calls", [])[call_offset:]
+    )
+    metadata["model_events"] = deepcopy(getattr(provider, "model_events", []))
+    trace.append(
+        {
+            "stage": "resolution",
+            "accepted": sum(d.status == "accepted" for d in resolutions),
+            "provisional": sum(d.status == "provisional" for d in resolutions),
+            "ambiguous": sum(d.status == "ambiguous" for d in resolutions),
+        }
+    )
+    run.status = (
+        "succeeded"
+        if len(covered) == len(document.chunks)
+        and document.chunks
+        and not metadata["issues"]
+        and not metadata["unresolved_claims"]
+        else ("partial" if covered else "failed")
+    )
+    result = ExtractionResult(
+        document_version_id=document.document_version_id,
+        run=run,
+        mentions=list(mentions.values()),
+        concepts=concepts,
+        resolutions=resolutions,
+        assertions=list(assertions.values()),
+        economic_evidence=extract_economic_evidence(
+            document.chunks, list(mentions.values()), concepts, resolutions
+        ),
+    )
+    validate_extraction(document, result)
+    logger.info(
+        "%s: run %s, chunks %d/%d, model calls %d, issues %d",
+        document.document_version_id,
+        run.status,
+        len(covered),
+        len(document.chunks),
+        budget.used,
+        len(metadata["issues"]),
+    )
+    _emit(
+        event,
+        stage="done",
+        status=run.status,
+        mentions=len(result.mentions),
+        assertions=len(result.assertions),
+        model_calls=budget.used,
+        processed_chunks=len(covered),
+        total_chunks=len(document.chunks),
+    )
+    return result

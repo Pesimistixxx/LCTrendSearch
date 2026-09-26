@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "explicit_aliases": [
+    {"kind": "Technology", "names": ["NLP", "natural language processing"]}
+  ],
+  "semantic": {
+    "cosine_threshold": 0.78,
+    "decision_threshold": 0.80,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "decision_model": "cross-encoder/stsb-distilroberta-base",
+    "max_length": 128
+  }
+}

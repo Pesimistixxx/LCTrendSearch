@@ -1,0 +1,9 @@
+{
+  "assertion_roles": {
+    "subject": "SUBJECT", "problem": "PROBLEM", "task": "TASK", "method": "METHOD",
+    "baseline": "BASELINE", "application": "APPLICATION", "metric": "METRIC", "material": "MATERIAL"
+  },
+  "organization_relationships": {"owner": "OWNED_BY", "applicant": "APPLIED_BY"},
+  "organization_labels": {"university": "University", "company": "Company"},
+  "solution_predicates": ["solves_task"]
+}

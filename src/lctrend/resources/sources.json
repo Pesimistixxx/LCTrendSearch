@@ -1,0 +1,24 @@
+{
+  "domains": [
+    {"name": "Natural language processing", "parent_name": "Artificial intelligence", "aliases": ["natural language processing", "named entity recognition", "ner"]},
+    {"name": "Computer vision", "parent_name": "Artificial intelligence", "aliases": ["computer vision", "image recognition"]},
+    {"name": "Machine learning", "parent_name": "Artificial intelligence", "aliases": ["machine learning", "deep learning"]},
+    {"name": "Bioinformatics", "parent_name": "Life sciences", "aliases": ["bioinformatics", "computational biology", "genomics"]},
+    {"name": "Edge computing", "parent_name": "Computer systems", "aliases": ["edge computing", "fog computing", "edge ai"]},
+    {"name": "Artificial intelligence", "parent_name": null, "aliases": ["artificial intelligence"]},
+    {"name": "Robotics", "parent_name": "Engineering", "aliases": ["robotics", "robotic"]},
+    {"name": "Cybersecurity", "parent_name": "Computer systems", "aliases": ["cybersecurity", "computer security", "information security"]},
+    {"name": "Quantum computing", "parent_name": "Physical sciences", "aliases": ["quantum computing", "quantum information"]},
+    {"name": "Semiconductors", "parent_name": "Physical sciences", "aliases": ["semiconductor", "integrated circuit"]},
+    {"name": "Energy technology", "parent_name": "Engineering", "aliases": ["renewable energy", "energy storage", "smart grid"]}
+  ],
+  "platforms": {
+    "openalex": {"name": "OpenAlex", "source_type": "scholarly_api", "source_family": "scholarly", "reliability_tier": 3, "api_base": "https://api.openalex.org/works", "organization_types": {"education": "university", "company": "company"}},
+    "github": {"name": "GitHub", "source_type": "code_host", "source_family": "code", "reliability_tier": 2, "api_base": "https://api.github.com/repos", "public_base": "https://github.com", "api_version": "2022-11-28", "releases_per_page": 20},
+    "pypi": {"name": "PyPI", "source_type": "package_registry", "source_family": "package_registry", "reliability_tier": 2, "api_base": "https://pypi.org/pypi", "public_base": "https://pypi.org/project", "simple_index": "https://pypi.org/simple/", "simple_media_type": "application/vnd.pypi.simple.v1+json", "people_fields": {"author": "author", "maintainer": "maintainer"}},
+    "epo": {"name": "EPO OPS", "source_type": "patent_api", "source_family": "patent", "reliability_tier": 1, "people_tags": {"applicant": "applicant", "inventor": "inventor"}, "name_tags": ["name", "last-name"]}
+  },
+  "http": {"user_agent": "LCTrendSearch/0.1 (+local research project)", "timeout_seconds": 30},
+  "markdown": {"max_chars": 1000, "overlap_chars": 150},
+  "openalex_topic_fields": ["subfield", "field", "domain"]
+}

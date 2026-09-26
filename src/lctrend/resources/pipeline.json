@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "primary_chunks": 6,
+    "max_context_chunks": 12,
+    "max_source_chars": 24000,
+    "max_payload_chars": 30000,
+    "max_model_calls": 8,
+    "max_context_rounds": 2,
+    "max_requests_per_round": 4,
+    "search_limit": 3,
+    "max_map_entries": 60,
+    "max_retries": 1,
+    "retry_delay_seconds": 0.5,
+    "max_retry_delay_seconds": 2.0
+  },
+  "metadata_fields": ["description", "summary", "version", "license", "full_name", "country_status", "parser", "parse_warnings", "text_encoding"],
+  "navigation_locator_fields": ["path", "json_pointer", "xpath", "part", "element_path", "release_id", "tag", "page", "self_ref", "source_start", "source_end"],
+  "file_formats": {
+    ".txt": {"adapter": "text", "media_type": "text/plain"},
+    ".md": {"adapter": "markdown", "media_type": "text/markdown"},
+    ".markdown": {"adapter": "markdown", "media_type": "text/markdown"},
+    ".html": {"adapter": "html", "media_type": "text/html"},
+    ".htm": {"adapter": "html", "media_type": "text/html"},
+    ".docx": {"adapter": "docx", "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ".pdf": {"adapter": "pdf", "media_type": "application/pdf"}
+  },
+  "file_limits": {"max_file_bytes": 52428800, "docx_document_xml_bytes": 26214400, "docx_core_xml_bytes": 1048576},
+  "openalex_fulltext": {
+    "max_candidates": 3,
+    "skipped_labels": ["page_header", "page_footer", "reference"],
+    "bibliography_heading": "^\\s*(?:\\d+\\.?\\s*)?(?:references|bibliography|literature cited|список литературы|литература)\\s*$"
+  },
+  "html": {"excluded_tags": ["script", "style", "noscript", "template"], "block_tags": ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote", "td", "th"], "void_tags": ["area", "base", "br", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]},
+  "file_warnings": {
+    "docx": ["docx_pages_not_rendered; headers_footers_footnotes_images_not_extracted", "docx_table_cells_retained; merged_cell_geometry_not_reconstructed"],
+    "html": ["html_rendered_text; scripts_styles_templates_not_extracted; browser_layout_not_rendered", "html_table_cells_retained_without_row_column_geometry"],
+    "pdf": ["pdf_layout_and_ocr_require_validation; table_markdown_is_a_derived_representation"]
+  }
+}
