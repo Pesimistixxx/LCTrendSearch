@@ -3,6 +3,7 @@
   "ner_model": "urchade/gliner_medium-v2.1",
   "default_extractor": "hybrid",
   "raw_directory": "artifacts/raw",
+  "ingestion": {"workers": 4},
   "openalex": {"limit": 500, "per_page": 100, "checkpoint": ".openalex-crawl.json"},
   "pypi": {"limit": 5000, "sample_phase": 0.0, "checkpoint": ".pypi-crawl.json"},
   "training": {

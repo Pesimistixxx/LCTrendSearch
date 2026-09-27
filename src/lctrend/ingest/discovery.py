@@ -13,6 +13,7 @@ import re
 from typing import Any, Mapping
 from urllib.parse import unquote, urlencode, urlsplit
 
+from ..core.aio import resolve
 from ..core.config import load_catalog
 from .connectors import fetch_json, fetch_openalex_page
 
@@ -130,10 +131,16 @@ def material_identity(
     return f"{source}:{str(source_id).strip()}"
 
 
-def discover_openalex(topic: str, cursor: str | None = "*") -> dict:
+async def discover_openalex(topic: str, cursor: str | None = "*") -> dict:
     """Fetch one cursor page from OpenAlex, preserving the source's total."""
-    payload = fetch_openalex_page(
-        _topic(topic), cursor or "*", 100, os.getenv("OPENALEX_MAILTO"), None
+    payload = await resolve(
+        fetch_openalex_page(
+            _topic(topic),
+            cursor or "*",
+            100,
+            os.getenv("OPENALEX_MAILTO"),
+            None,
+        )
     )
     records, meta = payload.get("results"), payload.get("meta", {})
     if not isinstance(records, list) or not isinstance(meta, Mapping):
@@ -189,7 +196,7 @@ def discover_openalex(topic: str, cursor: str | None = "*") -> dict:
     }
 
 
-def discover_github(topic: str, cursor: str | None = None) -> dict:
+async def discover_github(topic: str, cursor: str | None = None) -> dict:
     """Fetch repository search pages; never claim coverage beyond the API cap.
 
     GitHub permits at most 1,000 matches per query:
@@ -210,11 +217,13 @@ def discover_github(topic: str, cursor: str | None = None) -> dict:
     token = os.getenv("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    payload = fetch_json(
-        base[:-6]
-        + "/search/repositories?"
-        + urlencode({"q": topic, "per_page": 100, "page": page}),
-        headers,
+    payload = await resolve(
+        fetch_json(
+            base[:-6]
+            + "/search/repositories?"
+            + urlencode({"q": topic, "per_page": 100, "page": page}),
+            headers,
+        )
     )
     records = payload.get("items")
     if not isinstance(records, list):

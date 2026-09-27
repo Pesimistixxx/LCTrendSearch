@@ -6,18 +6,20 @@ writes. Only the caller publishes its validated result to Neo4j.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from time import sleep
 from typing import Any, Iterable
 from uuid import uuid4
 
+from ..core.aio import resolve
 from ..core.config import RESOURCE_DIR, load_catalog
 from ..core.models import (
+    SEMANTIC_CANDIDATE_METHOD,
     Assertion,
     Concept,
     ConceptKind,
@@ -32,8 +34,8 @@ from ..core.models import (
 )
 from ..extraction.economics import extract_economic_evidence
 from ..extraction.ner import extract_mentions
-from ..extraction.resolver import resolve_mentions
-from .client import LLMError, Provider
+from ..extraction.resolver import ConceptRegistry, resolve_mentions
+from .client import CALL_LOG, LLMError, Provider
 from .context import (
     ContextBudgetError,
     PipelineSettings,
@@ -46,6 +48,8 @@ from .contracts import Extraction, Review
 from .validation import validate_local_extraction, validate_review
 
 logger = logging.getLogger(__name__)
+# Indirection lets offline tests skip real backoff pauses.
+_sleep = asyncio.sleep
 
 
 def _emit(event, **value):
@@ -78,6 +82,14 @@ def _refs(value: Any, mapping: dict[str, str]) -> Any:
             for key, item in value.items()
         }
     return value
+
+
+ITEM_ISSUE_CODES = {"review_unclear", "conflicting_reviews"}
+
+
+def _item_issue(issue: dict) -> bool:
+    """One entity or claim was gated; the packet itself was processed."""
+    return "item" in issue or issue.get("code") in ITEM_ISSUE_CODES
 
 
 def _source_key(chunks: dict, span: Any) -> list:
@@ -210,6 +222,51 @@ def _combine(
     metadata["ner"].update(stats)
 
 
+async def _concept_embeddings(
+    concepts: list[Concept],
+    resolutions: list,
+    semantic: Any,
+    metadata: dict,
+) -> tuple[dict[str, list[float]], str | None]:
+    """Label vectors for graph storage; mostly cached by resolution.
+
+    An unavailable semantic layer is recorded, never a document failure.
+    """
+    candidates = sum(
+        item.method == SEMANTIC_CANDIDATE_METHOD for item in resolutions
+    )
+    embed = getattr(semantic, "embed", None)
+    if embed is None:
+        metadata["semantic"] = {"status": "disabled"}
+        return {}, None
+    kinds = set(load_catalog("resolver")["semantic"]["embedded_kinds"])
+    chosen = [concept for concept in concepts if concept.kind.value in kinds]
+    vectors = (
+        await asyncio.to_thread(
+            embed, [concept.preferred_label for concept in chosen]
+        )
+        if chosen
+        else []
+    )
+    if vectors is None or getattr(semantic, "failure", None):
+        metadata["semantic"] = {
+            "status": "unavailable",
+            "error": getattr(semantic, "failure", None),
+            "candidates": candidates,
+        }
+        return {}, None
+    model = getattr(semantic, "embedding_model_name", None)
+    metadata["semantic"] = {
+        "status": "ok",
+        "model": model,
+        "embedded_concepts": len(chosen),
+        "candidates": candidates,
+    }
+    return {
+        concept.concept_id: vector for concept, vector in zip(chosen, vectors)
+    }, model
+
+
 class _Budget:
     def __init__(
         self,
@@ -219,12 +276,15 @@ class _Budget:
         event=None,
     ):
         self.provider, self.settings, self.trace = provider, settings, trace
+        self.limit = settings.max_model_calls
         self.used = 0
         self.event = event
 
-    def call(self, schema, prompt, payload, stage: str, reserve: int = 0):
+    async def call(
+        self, schema, prompt, payload, stage: str, reserve: int = 0
+    ):
         for attempt in range(self.settings.max_retries + 1):
-            if self.used + reserve >= self.settings.max_model_calls:
+            if self.used + reserve >= self.limit:
                 raise LLMError(
                     "call_budget", "Document model call budget exhausted"
                 )
@@ -234,12 +294,14 @@ class _Budget:
                 stage=stage,
                 status="running",
                 model_calls=self.used,
-                max_model_calls=self.settings.max_model_calls,
+                max_model_calls=self.limit,
                 attempt=attempt + 1,
             )
             try:
-                result = self.provider.generate(
-                    schema, prompt, payload, stage=stage
+                result = await resolve(
+                    self.provider.generate(
+                        schema, prompt, payload, stage=stage
+                    )
                 )
                 result = schema.model_validate(
                     result.model_dump()
@@ -281,16 +343,18 @@ class _Budget:
                 if (
                     not exc.retryable
                     or attempt == self.settings.max_retries
-                    or self.used + reserve >= self.settings.max_model_calls
+                    or self.used + reserve >= self.limit
                 ):
                     logger.warning(
                         "LLM %s call failed: %s (%s)", stage, exc.code, exc
                     )
                     raise
+                # Exponential backoff unless the provider named a delay:
+                # a rate-limited provider needs longer than a fixed pause.
                 delay = (
                     exc.retry_after
                     if exc.retry_after is not None
-                    else self.settings.retry_delay_seconds
+                    else self.settings.retry_delay_seconds * 2**attempt
                 )
                 delay = min(
                     max(0, delay), self.settings.max_retry_delay_seconds
@@ -302,7 +366,7 @@ class _Budget:
                     exc.code,
                     delay,
                 )
-                sleep(delay)
+                await _sleep(delay)
             except Exception:
                 self.trace.append(
                     {
@@ -327,15 +391,47 @@ class _Budget:
                 ) from None
 
 
-def process_document(
+async def process_document(
     document: DocumentEnvelope,
     provider: Provider,
-    registry: Iterable[Concept] = (),
+    registry: Iterable[Concept] | ConceptRegistry = (),
     settings: PipelineSettings | None = None,
     semantic=None,
     ner: Any = None,
     ner_name: str | None = None,
     event=None,
+) -> ExtractionResult:
+    """Process one document; its provider calls are audited separately
+    even when one provider serves several concurrent documents.
+    """
+    log: list = []
+    token = CALL_LOG.set(log)
+    try:
+        return await _process_document(
+            document,
+            provider,
+            registry,
+            settings,
+            semantic,
+            ner,
+            ner_name,
+            event,
+            log,
+        )
+    finally:
+        CALL_LOG.reset(token)
+
+
+async def _process_document(
+    document: DocumentEnvelope,
+    provider: Provider,
+    registry: Iterable[Concept] | ConceptRegistry,
+    settings: PipelineSettings | None,
+    semantic,
+    ner: Any,
+    ner_name: str | None,
+    event,
+    call_log: list,
 ) -> ExtractionResult:
     """Return an auditable extraction.
 
@@ -391,15 +487,19 @@ def process_document(
     # containers.
     metadata, trace = run.metadata, run.trace
     budget = _Budget(provider, settings, trace, event)
+    # Providers that do not use CALL_LOG (test doubles) keep a plain list.
     call_offset = len(getattr(provider, "calls", []))
     found = (
-        _machine_mentions(document, ner, metadata, trace)
+        await asyncio.to_thread(
+            _machine_mentions, document, ner, metadata, trace
+        )
         if ner is not None
         else []
     )
     hints = _hints(found, hybrid) if ner is not None else None
     _emit(event, stage="plan", status="running")
     plan = plan_packets(document, settings)
+    budget.limit = settings.call_limit(len(plan.packets))
     logger.info(
         "%s: %d chunks planned into %d packets",
         document.document_version_id,
@@ -433,7 +533,7 @@ def process_document(
             packet_number=packet_number,
             total_packets=len(plan.packets),
         )
-        if budget.used + 2 > settings.max_model_calls:
+        if budget.used + 2 > budget.limit:
             failed.append(original.packet_id)
             metadata["issues"].append(
                 {"packet_id": original.packet_id, "code": "call_budget"}
@@ -461,7 +561,7 @@ def process_document(
                     hybrid["max_hints_per_packet"],
                 )
             )
-            extraction = budget.call(
+            extraction = await budget.call(
                 Extraction,
                 prompts["extract"],
                 build_payload(document, packet, settings, hints=packet_hints),
@@ -478,7 +578,7 @@ def process_document(
             for context_round in range(settings.max_context_rounds):
                 if (
                     not extraction.context_requests
-                    or budget.used + 2 > settings.max_model_calls
+                    or budget.used + 2 > budget.limit
                 ):
                     break
                 _emit(
@@ -538,7 +638,7 @@ def process_document(
                     )
                     break
                 packet = expanded
-                extraction = budget.call(
+                extraction = await budget.call(
                     Extraction,
                     prompts["extract"],
                     next_payload,
@@ -635,7 +735,7 @@ def process_document(
                         visible,
                         settings,
                     )
-                    review = budget.call(
+                    review = await budget.call(
                         Review, prompts["review"], payload, "review"
                     )
                     review = validate_review(
@@ -717,20 +817,27 @@ def process_document(
     for packet_id, extraction, decisions, pending in batches:
         for entity in extraction.entities:
             key = f"{packet_id}:{entity.local_id}"
+            # The ISO code, not a language-specific name, identifies a
+            # country across documents and links it to metadata countries.
+            canonical = (
+                entity.country_code
+                if entity.kind == ConceptKind.COUNTRY and entity.country_code
+                else entity.label
+            )
             ids = []
             for span in entity.evidence:
                 mention_id = stable_id(
                     "mention",
                     document.document_version_id,
                     json_value(_source_key(chunks, span)),
-                    entity.label,
+                    canonical,
                     entity.kind.value,
                 )
                 mention = Mention(
                     mention_id=mention_id,
                     chunk_id=span.chunk_id,
                     surface_text=span.quote,
-                    canonical_text=entity.label,
+                    canonical_text=canonical,
                     start=span.start,
                     end=span.end,
                     type_candidates=[entity.kind],
@@ -766,9 +873,21 @@ def process_document(
     if ner is not None and metadata["ner"]["status"] == "ok":
         _combine(mentions, found, hybrid, metadata)
     _emit(event, stage="resolution", status="running", mentions=len(mentions))
-    concepts, resolutions = resolve_mentions(
-        list(mentions.values()), deepcopy(list(registry)), semantic
-    )
+    if isinstance(registry, ConceptRegistry):
+        # Shared job registry: resolution is serialized so concurrent
+        # documents see each other's new concepts, without a per-document
+        # copy of the whole registry.
+        concepts, resolutions = await registry.resolve(
+            list(mentions.values()), semantic, semantic_candidates=True
+        )
+    else:
+        concepts, resolutions = await asyncio.to_thread(
+            resolve_mentions,
+            list(mentions.values()),
+            deepcopy(list(registry)),
+            semantic,
+            True,
+        )
     mention_concept = {
         d.mention_id: d.concept_id
         for d in resolutions
@@ -888,10 +1007,13 @@ def process_document(
         "omitted_chunk_ids": plan.omitted_chunk_ids,
         "failed_packet_ids": failed,
     }
-    metadata["budgets"] = settings.model_dump()
+    metadata["budgets"] = {
+        **settings.model_dump(),
+        "effective_model_calls": budget.limit,
+    }
     metadata["model_calls"] = budget.used
     metadata["provider_calls"] = deepcopy(
-        getattr(provider, "calls", [])[call_offset:]
+        call_log or list(getattr(provider, "calls", []))[call_offset:]
     )
     metadata["model_events"] = deepcopy(getattr(provider, "model_events", []))
     trace.append(
@@ -902,13 +1024,20 @@ def process_document(
             "ambiguous": sum(d.status == "ambiguous" for d in resolutions),
         }
     )
+    # Rejected or unclear items are already excluded or stored as
+    # needs_review, and projections use accepted assertions only; they do not
+    # make the document's coverage incomplete. Packet-level gaps do.
+    blocking = [item for item in metadata["issues"] if not _item_issue(item)]
+    metadata["item_issue_count"] = len(metadata["issues"]) - len(blocking)
     run.status = (
         "succeeded"
         if len(covered) == len(document.chunks)
         and document.chunks
-        and not metadata["issues"]
-        and not metadata["unresolved_claims"]
+        and not blocking
         else ("partial" if covered else "failed")
+    )
+    embeddings, embedding_model = await _concept_embeddings(
+        concepts, resolutions, semantic, metadata
     )
     result = ExtractionResult(
         document_version_id=document.document_version_id,
@@ -920,6 +1049,8 @@ def process_document(
         economic_evidence=extract_economic_evidence(
             document.chunks, list(mentions.values()), concepts, resolutions
         ),
+        concept_embeddings=embeddings,
+        embedding_model=embedding_model,
     )
     validate_extraction(document, result)
     logger.info(

@@ -27,7 +27,10 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from lctrend.core import aio
 from lctrend.core.config import load_catalog, load_environment
+
+from .jobs import MAX_WORKERS, default_workers
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,7 @@ class CollectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=5000)
-    workers: int = Field(default=1, ge=1, le=1)
+    workers: Optional[int] = Field(default=None, ge=1, le=MAX_WORKERS)
     mode: Literal["hybrid", "llm", "gliner", "none"] = "hybrid"
     fulltext: bool = True
     filter: Optional[str] = Field(default=None, max_length=2000)
@@ -60,6 +63,9 @@ class ModelSettings(BaseModel):
 class CrawlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     topic: str = Field(default="", max_length=1000)
+    # Materials per direction and search source; None follows the full
+    # source listing.
+    limit: Optional[int] = Field(default=None, ge=1, le=10000)
 
     @field_validator("topic")
     @classmethod
@@ -81,12 +87,16 @@ def _status() -> dict:
     try:
         from lctrend.graph.store import GraphStore
 
-        with GraphStore(
-            os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            os.getenv("NEO4J_USER", "neo4j"),
-            os.getenv("NEO4J_PASSWORD", "change-me-now"),
-        ) as store:
-            store.verify_connectivity()
+        async def check():
+            async with GraphStore(
+                os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+                os.getenv("NEO4J_USER", "neo4j"),
+                os.getenv("NEO4J_PASSWORD", "change-me-now"),
+            ) as store:
+                await store.verify_connectivity()
+
+        # Sync endpoints run in a worker thread without an event loop.
+        aio.run_sync(check())
         neo.update(available=True, message="Neo4j подключён")
     except Exception as exc:
         # Polled every few seconds by the page: keep it out of the console.
@@ -141,10 +151,12 @@ def _status() -> dict:
         "pdf": {"installed": _installed("docling")},
         "defaults": {
             "mode": "hybrid",
-            "workers": 1,
-            "max_workers": 1,
+            "workers": default_workers(),
+            "max_workers": MAX_WORKERS,
             "limit": 10,
+            "crawl_limit": 50,
         },
+        "directions": load_catalog("sources").get("crawl_directions", []),
         "server": {"local": True},
     }
 
@@ -265,7 +277,9 @@ def create_app(
     @app.post("/api/ingest/crawls", status_code=202)
     def create_crawl(body: CrawlRequest):
         with settings_lock:
-            return known(get_crawls().create, topic=body.topic)
+            return known(
+                get_crawls().create, topic=body.topic, limit=body.limit
+            )
 
     @app.get("/api/ingest/crawls/{crawl_id}")
     def crawl(crawl_id: str):
@@ -317,7 +331,9 @@ def create_app(
     @app.post("/api/ingest/jobs", status_code=202)
     def collect(body: CollectRequest):
         with settings_lock:
-            return known(get_manager().create_openalex, **body.model_dump())
+            values = body.model_dump()
+            values["workers"] = values["workers"] or default_workers()
+            return known(get_manager().create_openalex, **values)
 
     @app.get("/api/ingest/jobs/{job_id}")
     def job(job_id: str):
@@ -345,12 +361,12 @@ def create_app(
     async def upload(
         files: list[UploadFile] = File(...),
         mode: str = Form("hybrid"),
-        workers: int = Form(1),
+        workers: Optional[int] = Form(None),
         direction: str = Form(""),
     ):
         if (
             mode not in ("hybrid", "llm", "gliner", "none")
-            or workers != 1
+            or not 1 <= (workers or default_workers()) <= MAX_WORKERS
             or not 1 <= len(files) <= 100
             or len(direction) > 1000
         ):
@@ -402,7 +418,7 @@ def create_app(
                     get_manager().create_files,
                     paths,
                     mode=mode,
-                    workers=workers,
+                    workers=workers or default_workers(),
                     direction=direction.strip(),
                 )
         except Exception as exc:

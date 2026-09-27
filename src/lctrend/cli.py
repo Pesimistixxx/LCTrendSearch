@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
+from .core.aio import resolve
 from .core.config import load_catalog, load_environment
 from .core.logging_config import setup_logging
 from .extraction.processing import (
     _semantic_deduplicator,
     process_material,
 )
+from .extraction.resolver import ConceptRegistry
 from .graph.store import GraphStore
 from .graph.training import (
     build_feature_rows,
@@ -55,7 +60,11 @@ def _parse(kind: str, path: Path):
         return parse_file(path)
     raw = path.read_bytes()
     if kind == "epo":
-        document = parse_epo(raw.decode("utf-8"), path.resolve().as_uri())
+        document = parse_epo(
+            raw.decode("utf-8"),
+            path.resolve().as_uri(),
+            datetime.now(timezone.utc).isoformat(),
+        )
     else:
         payload = json.loads(raw)
         document = PARSERS[kind](payload, raw=raw)
@@ -95,7 +104,18 @@ def _auxiliary_ner(extract: bool, extractor: str, model_name: str):
         return None
 
 
-def _write_ingested(
+@asynccontextmanager
+async def _opened(store):
+    """Open a graph store; offline test doubles may be synchronous."""
+    if hasattr(store, "__aenter__"):
+        async with store as opened:
+            yield opened
+    else:
+        with store as opened:
+            yield opened
+
+
+async def _write_ingested_async(
     document,
     extract: bool,
     model_name: str,
@@ -105,10 +125,12 @@ def _write_ingested(
     extractor: str = "llm",
     provider=None,
     extraction_output: Optional[Path] = None,
+    registry=None,
+    publication: Optional[asyncio.Lock] = None,
 ) -> None:
     result = None
     if extract:
-        result = process_material(
+        result = await process_material(
             document,
             mode=extractor,
             provider=provider,
@@ -116,13 +138,19 @@ def _write_ingested(
             if extractor == "gliner"
             else model,
             model_name=model_name,
-            registry=store.read_concepts(),
+            registry=registry
+            if registry is not None
+            else await resolve(store.read_concepts()),
             semantic=(semantic or _semantic_deduplicator())
             if extractor == "gliner"
             else None,
         )
+    async with publication or _NoLock():
+        if result is not None:
+            await resolve(store.write_processed(document, result))
+        else:
+            await resolve(store.write_document(document))
     if result is not None:
-        store.write_processed(document, result)
         if extraction_output:
             extraction_output.parent.mkdir(parents=True, exist_ok=True)
             extraction_output.write_text(
@@ -136,11 +164,22 @@ def _write_ingested(
             result.run.run_id,
         )
     else:
-        store.write_document(document)
         logger.info(
             "document=%s stored without extraction",
             document.document_version_id,
         )
+
+
+class _NoLock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+
+def _write_ingested(*args, **kwargs) -> None:
+    asyncio.run(_write_ingested_async(*args, **kwargs))
 
 
 def _ingest(
@@ -152,18 +191,22 @@ def _ingest(
 ) -> None:
     provider = _provider(extract, extractor)
     model = _auxiliary_ner(extract, extractor, model_name)
-    with _store() as store:
-        store.ensure_schema()
-        _write_ingested(
-            document,
-            extract,
-            model_name,
-            store,
-            model,
-            extractor=extractor,
-            provider=provider,
-            extraction_output=extraction_output,
-        )
+
+    async def run():
+        async with _opened(_store()) as store:
+            await resolve(store.ensure_schema())
+            await _write_ingested_async(
+                document,
+                extract,
+                model_name,
+                store,
+                model,
+                extractor=extractor,
+                provider=provider,
+                extraction_output=extraction_output,
+            )
+
+    asyncio.run(run())
 
 
 def _provider(extract: bool, extractor: str):
@@ -172,6 +215,13 @@ def _provider(extract: bool, extractor: str):
 
         return JsonLLM.from_environment()
     return None
+
+
+async def _job_registry(store, extract: bool):
+    """One in-memory registry for a whole crawl, read from the graph once."""
+    if not extract:
+        return None
+    return ConceptRegistry(await resolve(store.read_concepts()))
 
 
 def _crawl_openalex(
@@ -184,9 +234,12 @@ def _crawl_openalex(
     extractor: str = "llm",
     fulltext: bool = True,
     filter: Optional[str] = None,
+    workers: int = 1,
 ) -> None:
     if limit <= 0 or not 1 <= per_page <= 200:
         raise ValueError("limit must be positive and per-page must be 1..200")
+    if not 1 <= workers <= 16:
+        raise ValueError("workers must be 1..16")
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     state = (
         json.loads(checkpoint.read_text(encoding="utf-8"))
@@ -201,12 +254,14 @@ def _crawl_openalex(
             f"{state.get('query')!r} filter={state.get('filter')!r}"
         )
     processed = int(state.get("processed", 0))
+    failures = int(state.get("failures", 0))
     cursor = state.get("cursor", "*")
     logger.info(
-        "OpenAlex crawl query=%r filter=%r limit=%d resumed_at=%d",
+        "OpenAlex crawl query=%r filter=%r limit=%d workers=%d resumed_at=%d",
         query,
         filter,
         limit,
+        workers,
         processed,
     )
     started = perf_counter()
@@ -221,34 +276,34 @@ def _crawl_openalex(
     semantic = (
         _semantic_deduplicator() if extract and extractor == "gliner" else None
     )
-    with _store() as store:
-        store.ensure_schema()
-        while processed < limit and cursor:
-            page = fetch_openalex_page(
-                query,
-                cursor,
-                min(per_page, limit - processed),
-                os.getenv("OPENALEX_MAILTO"),
-                filter,
-            )
-            works = page.get("results", [])
-            if not works:
-                logger.info("OpenAlex returned no more works")
-                break
-            for payload in works:
+
+    async def one(payload, store, registry, slots, publication) -> bool:
+        async with slots:
+            try:
                 raw = json.dumps(
                     payload, ensure_ascii=False, sort_keys=True
                 ).encode("utf-8")
                 document = _snapshot(parse_openalex(payload, raw=raw), raw)
+                lookup = getattr(store, "processed_versions", None)
+                if extract and lookup is not None:
+                    done = await resolve(
+                        lookup([document.document_version_id])
+                    )
+                    if document.document_version_id in done:
+                        logger.info(
+                            "work=%s already processed; skipped",
+                            document.source.record_id,
+                        )
+                        return True
                 if fulltext:
-                    attach_openalex_fulltext(document, payload)
+                    await resolve(attach_openalex_fulltext(document, payload))
                     logger.info(
                         "work=%s fulltext=%s chunks=%d",
                         document.source.record_id,
                         document.metadata["fulltext"]["status"],
                         len(document.chunks),
                     )
-                _write_ingested(
+                await _write_ingested_async(
                     document,
                     extract,
                     model_name,
@@ -257,28 +312,77 @@ def _crawl_openalex(
                     semantic,
                     extractor,
                     provider,
+                    registry=registry,
+                    publication=publication,
                 )
-                processed += 1
-            cursor = page.get("meta", {}).get("next_cursor")
-            checkpoint.write_text(
-                json.dumps(
-                    {
-                        "query": query,
-                        "filter": filter,
-                        "processed": processed,
-                        "cursor": cursor,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            elapsed = perf_counter() - started
-            logger.info(
-                "processed=%d/%d elapsed=%.1fs rate=%.2f works/s",
-                processed,
-                limit,
-                elapsed,
-                processed / elapsed,
-            )
+                return True
+            except Exception as exc:
+                if type(exc).__module__.startswith("neo4j"):
+                    raise  # the graph is unavailable: stop, keep checkpoint
+                # One bad work (dead PDF link, provider error) must not stop
+                # a crawl of thousands.
+                logger.warning(
+                    "work=%s failed: %s: %s",
+                    payload.get("id"),
+                    type(exc).__name__,
+                    exc,
+                )
+                logger.debug("Work traceback", exc_info=True)
+                return False
+
+    async def crawl():
+        nonlocal processed, failures, cursor
+        slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
+        async with _opened(_store()) as store:
+            await resolve(store.ensure_schema())
+            registry = await _job_registry(store, extract)
+            while processed < limit and cursor:
+                page = await resolve(
+                    fetch_openalex_page(
+                        query,
+                        cursor,
+                        min(per_page, limit - processed),
+                        os.getenv("OPENALEX_MAILTO"),
+                        filter,
+                    )
+                )
+                works = page.get("results", [])
+                if not works:
+                    logger.info("OpenAlex returned no more works")
+                    break
+                outcomes = await asyncio.gather(
+                    *(
+                        one(payload, store, registry, slots, publication)
+                        for payload in works
+                    )
+                )
+                processed += len(works)
+                failures += outcomes.count(False)
+                cursor = page.get("meta", {}).get("next_cursor")
+                checkpoint.write_text(
+                    json.dumps(
+                        {
+                            "query": query,
+                            "filter": filter,
+                            "processed": processed,
+                            "failures": failures,
+                            "cursor": cursor,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                elapsed = perf_counter() - started
+                logger.info(
+                    "processed=%d/%d failures=%d elapsed=%.1fs "
+                    "rate=%.2f works/s",
+                    processed,
+                    limit,
+                    failures,
+                    elapsed,
+                    processed / elapsed,
+                )
+
+    asyncio.run(crawl())
 
 
 def _uniform_sample(
@@ -320,7 +424,11 @@ def _crawl_pypi(
     packages = (
         state.get("packages")
         or requested_packages
-        or _uniform_sample(fetch_pypi_projects(), limit * 2, sample_phase)
+        or _uniform_sample(
+            asyncio.run(resolve(fetch_pypi_projects())),
+            limit * 2,
+            sample_phase,
+        )
     )
     processed = int(state.get("processed", 0))
     successful = int(state.get("successful", 0))
@@ -341,60 +449,67 @@ def _crawl_pypi(
     semantic = (
         _semantic_deduplicator() if extract and extractor == "gliner" else None
     )
-    with _store() as store:
-        store.ensure_schema()
-        for package in packages[processed:]:
-            if successful >= limit:
-                break
-            try:
-                payload = fetch_pypi(package)
-                raw = json.dumps(
-                    payload, ensure_ascii=False, sort_keys=True
-                ).encode("utf-8")
-                document = _snapshot(parse_pypi(payload, raw=raw), raw)
-                _write_ingested(
-                    document,
-                    extract,
-                    model_name,
-                    store,
-                    model,
-                    semantic,
-                    extractor,
-                    provider,
-                )
-                successful += 1
-            except Exception as exc:
-                failures += 1
-                logger.warning("skipped=%s error=%s", package, exc)
-                logger.debug("Package %s failed", package, exc_info=True)
-            processed += 1
-            if (
-                processed % 25 == 0
-                or successful == limit
-                or processed == len(packages)
-            ):
-                checkpoint.write_text(
-                    json.dumps(
-                        {
-                            "packages": packages,
-                            "processed": processed,
-                            "successful": successful,
-                            "failures": failures,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                elapsed = perf_counter() - started
-                logger.info(
-                    "successful=%d/%d processed=%d failures=%d "
-                    "elapsed=%.1fs rate=%.2f packages/s",
-                    successful,
-                    limit,
-                    processed,
-                    failures,
-                    elapsed,
-                    processed / elapsed,
-                )
+
+    async def crawl():
+        nonlocal processed, successful, failures
+        async with _opened(_store()) as store:
+            await resolve(store.ensure_schema())
+            registry = await _job_registry(store, extract)
+            for package in packages[processed:]:
+                if successful >= limit:
+                    break
+                try:
+                    payload = await resolve(fetch_pypi(package))
+                    raw = json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True
+                    ).encode("utf-8")
+                    document = _snapshot(parse_pypi(payload, raw=raw), raw)
+                    await _write_ingested_async(
+                        document,
+                        extract,
+                        model_name,
+                        store,
+                        model,
+                        semantic,
+                        extractor,
+                        provider,
+                        registry=registry,
+                    )
+                    successful += 1
+                except Exception as exc:
+                    failures += 1
+                    logger.warning("skipped=%s error=%s", package, exc)
+                    logger.debug("Package %s failed", package, exc_info=True)
+                processed += 1
+                if (
+                    processed % 25 == 0
+                    or successful == limit
+                    or processed == len(packages)
+                ):
+                    checkpoint.write_text(
+                        json.dumps(
+                            {
+                                "packages": packages,
+                                "processed": processed,
+                                "successful": successful,
+                                "failures": failures,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    elapsed = perf_counter() - started
+                    logger.info(
+                        "successful=%d/%d processed=%d failures=%d "
+                        "elapsed=%.1fs rate=%.2f packages/s",
+                        successful,
+                        limit,
+                        processed,
+                        failures,
+                        elapsed,
+                        processed / elapsed,
+                    )
+
+    asyncio.run(crawl())
 
 
 def main() -> None:
@@ -515,6 +630,15 @@ def main() -> None:
         "--extractor", choices=EXTRACTORS, default=default_extractor
     )
     crawl_command.add_argument("--ner-model", default=ner_model)
+    crawl_command.add_argument(
+        "--workers",
+        type=int,
+        default=int(
+            os.getenv("LCTREND_WORKERS", "").strip()
+            or settings.get("ingestion", {}).get("workers", 1)
+        ),
+        help="Works processed concurrently (LLM, PDF, Neo4j), 1..16",
+    )
 
     pypi_crawl_command = subparsers.add_parser(
         "crawl-pypi", help="Crawl a uniform PyPI sample into Neo4j"
@@ -597,10 +721,27 @@ def main() -> None:
     logger.debug("Command %s finished", args.command)
 
 
+async def _graph(action):
+    async with _opened(_store()) as store:
+        return await action(store)
+
+
+async def _ensure_schema(store):
+    await resolve(store.ensure_schema())
+
+
+async def _training_data(store):
+    return await resolve(store.read_training_data())
+
+
+async def _feature_data(store):
+    mentions, documents, tasks = await resolve(store.read_training_data())
+    return mentions, documents, tasks, await resolve(store.read_signal_data())
+
+
 def _run(args: argparse.Namespace) -> None:
     if args.command == "init-graph":
-        with _store() as store:
-            store.ensure_schema()
+        asyncio.run(_graph(_ensure_schema))
         return
 
     if args.command == "crawl-openalex":
@@ -614,6 +755,7 @@ def _run(args: argparse.Namespace) -> None:
             args.extractor,
             fulltext=args.fulltext,
             filter=args.filter,
+            workers=args.workers,
         )
         return
 
@@ -630,8 +772,7 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "build-training-set":
-        with _store() as store:
-            mentions, documents, tasks = store.read_training_data()
+        mentions, documents, tasks = asyncio.run(_graph(_training_data))
         rows = build_training_rows(
             mentions,
             documents,
@@ -650,9 +791,12 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "export-features":
-        with _store() as store:
-            mentions, documents, tasks = store.read_training_data()
-        rows = build_feature_rows(mentions, documents, tasks, args.snapshot)
+        mentions, documents, tasks, signals = asyncio.run(
+            _graph(_feature_data)
+        )
+        rows = build_feature_rows(
+            mentions, documents, tasks, args.snapshot, signals
+        )
         logger.info(
             "rows=%d output=%s",
             write_feature_rows(args.output, rows),
@@ -670,13 +814,13 @@ def _run(args: argparse.Namespace) -> None:
             ),
             "pypi": lambda: fetch_pypi(args.identifier),
         }
-        payload: Dict[str, Any] = fetchers[args.kind]()
+        payload: Dict[str, Any] = asyncio.run(resolve(fetchers[args.kind]()))
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode(
             "utf-8"
         )
         document = _snapshot(PARSERS[args.kind](payload, raw=raw), raw)
         if args.kind == "openalex" and args.fulltext:
-            attach_openalex_fulltext(document, payload)
+            asyncio.run(resolve(attach_openalex_fulltext(document, payload)))
         if args.output:
             args.output.write_text(
                 document.model_dump_json(indent=2), encoding="utf-8"

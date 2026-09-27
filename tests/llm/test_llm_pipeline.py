@@ -2,6 +2,7 @@
 benchmarks.
 """
 
+import asyncio
 from copy import deepcopy
 
 import pytest
@@ -127,9 +128,9 @@ class RecordingReplay(ReplayProvider):
         super().__init__(answers)
         self.payloads = []
 
-    def generate(self, schema, system, payload, *, stage="extract"):
+    async def generate(self, schema, system, payload, *, stage="extract"):
         self.payloads.append({"stage": stage, "payload": deepcopy(payload)})
-        return super().generate(schema, system, payload, stage=stage)
+        return await super().generate(schema, system, payload, stage=stage)
 
 
 class ScriptProvider:
@@ -165,7 +166,7 @@ def codes(result):
 def test_supported_source_claim_is_accepted_with_exact_anchors_and_local_roles():  # noqa: E501
     doc = document()
     provider = RecordingReplay([extracted(doc), reviewed()])
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert len(result.assertions) == 1
     claim = result.assertions[0]
     assert claim.status == "accepted"
@@ -192,7 +193,7 @@ def test_invalid_quote_is_not_sent_to_reviewer_and_has_an_audit_gate():
     response = extracted(doc)
     response["claims"][0]["evidence"][0]["quote"] = "Invented source sentence."
     provider = RecordingReplay([response])
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert result.assertions == []
     assert len(provider.calls) == 1
     assert any(
@@ -200,7 +201,9 @@ def test_invalid_quote_is_not_sent_to_reviewer_and_has_an_audit_gate():
         and "quote_not_found" in item["reasons"]
         for item in result.run.metadata["issues"]
     )
-    assert result.run.status == "partial"
+    # The gated claim is audited; the chunk itself was fully processed.
+    assert result.run.status == "succeeded"
+    assert result.run.metadata["item_issue_count"] == 1
 
 
 def test_context_loop_adds_original_chunk_and_replaces_previous_answer():
@@ -223,8 +226,8 @@ def test_context_loop_adds_original_chunk_and_replaces_previous_answer():
         ],
     }
     provider = RecordingReplay([first, extracted(doc), reviewed()])
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=3)
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=3))
     )
     assert [item["stage"] for item in provider.payloads] == [
         "extract",
@@ -261,8 +264,8 @@ def test_context_budget_preserves_the_reviewer_call_and_blocks_acceptance():
         }
     ]
     provider = RecordingReplay([first, reviewed()])
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=2)
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=2))
     )
     assert [call["stage"] for call in provider.calls] == ["extract", "review"]
     assert result.run.metadata["model_calls"] == 2
@@ -294,8 +297,10 @@ def test_already_visible_context_request_reextracts_only_with_reviewer_reserve(
         else [first, reviewed()]
     )
     provider = RecordingReplay(answers)
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=max_calls)
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_model_calls=max_calls)
+        )
     )
 
     assert result.run.metadata["model_calls"] == max_calls
@@ -351,16 +356,20 @@ def test_non_supporting_review_never_becomes_accepted(
     decision, status, verification
 ):
     doc = document()
-    result = process_document(
-        doc,
-        ReplayProvider([extracted(doc), reviewed(decision)]),
-        settings=settings(),
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider([extracted(doc), reviewed(decision)]),
+            settings=settings(),
+        )
     )
     assert result.assertions[0].status == status
     assert result.assertions[0].verification_status == verification
     assert GraphStore._solution_links(doc, result) == []
     if decision == "unclear":
-        assert result.run.status == "partial"
+        # Stored as needs_review and kept out of projections; the document
+        # is still completely processed.
+        assert result.run.status == "succeeded"
         assert "review_unclear" in codes(result)
     else:
         # A definite rejection completes review; it is not an incomplete run.
@@ -372,7 +381,7 @@ def test_reviewer_failure_preserves_anchored_candidate_and_records_failure():
     provider = ScriptProvider(
         [extracted(doc), LLMError("timeout", "Offline timeout")]
     )
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert result.assertions[0].status == "needs_review"
     assert result.assertions[0].verification_status == "unverified"
     assert "timeout" in codes(result)
@@ -392,8 +401,12 @@ def test_reviewer_failure_preserves_anchored_candidate_and_records_failure():
 )
 def test_bad_reviewer_id_contract_cannot_accept_claim(bad_review):
     doc = document()
-    result = process_document(
-        doc, ReplayProvider([extracted(doc), bad_review]), settings=settings()
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider([extracted(doc), bad_review]),
+            settings=settings(),
+        )
     )
     assert result.assertions[0].status == "needs_review"
     assert "review_contract" in codes(result)
@@ -408,8 +421,10 @@ def test_retryable_failure_counts_against_the_document_budget():
             reviewed(),
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=3, max_retries=1)
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_model_calls=3, max_retries=1)
+        )
     )
     assert len(provider.calls) == 3
     assert result.run.metadata["model_calls"] == 3
@@ -429,8 +444,10 @@ def test_retry_limit_stops_before_a_third_attempt():
             extracted(doc),
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=8, max_retries=1)
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_model_calls=8, max_retries=1)
+        )
     )
     assert len(provider.calls) == 2
     assert result.run.metadata["model_calls"] == 2
@@ -448,8 +465,10 @@ def test_retry_cannot_consume_reserved_reviewer_budget():
             reviewed(),
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=2, max_retries=4)
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_model_calls=2, max_retries=4)
+        )
     )
     assert len(provider.calls) == 1
     assert result.run.metadata["model_calls"] == 1
@@ -461,7 +480,9 @@ def test_nonretryable_invalid_schema_does_not_retry():
     provider = ScriptProvider(
         [{"entities": [], "claims": [], "unexpected": True}, extracted(doc)]
     )
-    result = process_document(doc, provider, settings=settings(max_retries=4))
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_retries=4))
+    )
     assert len(provider.calls) == 1
     assert result.run.status == "failed"
     assert "invalid_response" in codes(result)
@@ -472,10 +493,12 @@ def test_omitted_and_unvisited_chunks_are_explicit_and_successful_packet_is_kept
         ["Sensor S solves monitoring.", "X" * 1000, "A third valid chunk."]
     )
     provider = ReplayProvider([extracted(doc), reviewed()])
-    result = process_document(
-        doc,
-        provider,
-        settings=settings(max_model_calls=2, max_source_chars=100),
+    result = asyncio.run(
+        process_document(
+            doc,
+            provider,
+            settings=settings(max_model_calls=2, max_source_chars=100),
+        )
     )
     assert result.assertions[0].status == "accepted"
     assert result.run.status == "partial"
@@ -498,8 +521,13 @@ def test_ambiguous_registry_identity_keeps_source_claim_out_of_compiled_assertio
         for index in range(2)
     ]
     original = deepcopy(registry)
-    result = process_document(
-        doc, ReplayProvider([extracted(doc), reviewed()]), registry, settings()
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider([extracted(doc), reviewed()]),
+            registry,
+            settings(),
+        )
     )
     assert result.assertions == []
     assert any(item.status == "ambiguous" for item in result.resolutions)
@@ -510,15 +538,17 @@ def test_ambiguous_registry_identity_keeps_source_claim_out_of_compiled_assertio
         ]
         == doc.chunks[0].text
     )
-    assert result.run.status == "partial"
+    assert result.run.status == "succeeded"
     assert registry == original
 
 
 def test_negation_and_planned_modality_survive_supported_text_review():
     doc = document(["Sensor S will not solve monitoring."])
     response = extracted(doc, polarity="negated", modality="planned")
-    result = process_document(
-        doc, ReplayProvider([response, reviewed()]), settings=settings()
+    result = asyncio.run(
+        process_document(
+            doc, ReplayProvider([response, reviewed()]), settings=settings()
+        )
     )
     claim = result.assertions[0]
     assert (
@@ -539,12 +569,21 @@ def test_exact_claim_repeated_in_overlapping_context_is_one_assertion():
         shared_stream=True,
     )
     response = extracted(doc, "c2")
-    result = process_document(
-        doc,
-        ReplayProvider(
-            [response, reviewed(), response, reviewed(), response, reviewed()]
-        ),
-        settings=settings(max_model_calls=6),
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider(
+                [
+                    response,
+                    reviewed(),
+                    response,
+                    reviewed(),
+                    response,
+                    reviewed(),
+                ]
+            ),
+            settings=settings(max_model_calls=6),
+        )
     )
     assert len(result.assertions) == 1
     assert len(result.mentions) == 2
@@ -574,8 +613,10 @@ def test_conflicting_reviews_for_same_source_claim_cannot_restore_acceptance():
         response,
         reviewed(),
     ]
-    result = process_document(
-        doc, ReplayProvider(answers), settings=settings(max_model_calls=6)
+    result = asyncio.run(
+        process_document(
+            doc, ReplayProvider(answers), settings=settings(max_model_calls=6)
+        )
     )
     assert len(result.assertions) == 1
     assert result.assertions[0].status == "needs_review"
@@ -588,8 +629,8 @@ def test_empty_document_makes_no_model_calls_and_has_failed_coverage():
     doc = document()
     doc.chunks = []
     provider = ReplayProvider([])
-    result = process_document(doc, provider, settings=settings())
-    assert provider.calls == []
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
+    assert list(provider.calls) == []
     assert result.run.status == "failed"
     assert result.assertions == []
     assert result.run.metadata["coverage"]["total_chunks"] == 0
@@ -609,8 +650,8 @@ def test_failed_packet_does_not_discard_a_later_successful_packet():
             reviewed(),
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=3)
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=3))
     )
     assert result.run.status == "partial"
     assert result.run.metadata["model_calls"] == 3
@@ -633,8 +674,10 @@ def test_entity_refs_in_nested_qualifiers_and_values_remap_to_the_same_concept()
     response["claims"][0]["values"] = [
         {"entity_ref": "sensor", "value": 1, "raw": "1 test"}
     ]
-    result = process_document(
-        doc, ReplayProvider([response, reviewed()]), settings=settings()
+    result = asyncio.run(
+        process_document(
+            doc, ReplayProvider([response, reviewed()]), settings=settings()
+        )
     )
     claim = result.assertions[0]
     assert claim.status == "accepted"
@@ -653,7 +696,7 @@ def test_nonfinite_numeric_value_is_gated_before_reviewer():
         {"value": float("nan"), "raw": "1 test"}
     ]
     provider = ScriptProvider([response])
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert len(provider.calls) == 1
     assert result.assertions == []
     assert any(
@@ -671,7 +714,7 @@ def test_typed_replay_response_cannot_sanitize_nonfinite_value_into_acceptance()
     provider = ReplayProvider(
         [Extraction.model_validate(response), reviewed()]
     )
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert not any(claim.status == "accepted" for claim in result.assertions)
     assert len(provider.calls) == 1
 
@@ -681,8 +724,8 @@ def test_reused_provider_run_audit_contains_only_current_attempts():
     provider = ReplayProvider(
         [extracted(doc), reviewed(), extracted(doc), reviewed()]
     )
-    first = process_document(doc, provider, settings=settings())
-    second = process_document(doc, provider, settings=settings())
+    first = asyncio.run(process_document(doc, provider, settings=settings()))
+    second = asyncio.run(process_document(doc, provider, settings=settings()))
     assert first.run.run_id != second.run.run_id
     assert len(provider.calls) == 4
     assert len(first.run.metadata["provider_calls"]) == 2
@@ -714,8 +757,8 @@ def test_failed_context_reextraction_keeps_initial_source_response_in_audit():
     provider = ScriptProvider(
         [first, LLMError("timeout", "Offline context extraction failure")]
     )
-    result = process_document(
-        doc, provider, settings=settings(max_model_calls=3)
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=3))
     )
     assert result.run.status == "failed"
     assert result.assertions == []

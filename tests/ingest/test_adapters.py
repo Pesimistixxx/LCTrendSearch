@@ -58,7 +58,7 @@ def test_openalex_reconstructs_abstract_and_stable_identity():
     ]
 
 
-def test_openalex_maps_one_canonical_domain_from_topics():
+def test_openalex_maps_every_topic_to_a_canonical_domain():
     document = parse_openalex(
         {
             "id": "https://openalex.org/W2",
@@ -76,7 +76,8 @@ def test_openalex_maps_one_canonical_domain_from_topics():
         }
     )
     assert [domain.name for domain in document.domains] == [
-        "Natural language processing"
+        "Natural language processing",
+        "Bioinformatics",
     ]
     assert document.domains[0].parent_name == "Artificial intelligence"
 

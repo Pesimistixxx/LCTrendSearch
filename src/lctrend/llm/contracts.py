@@ -27,6 +27,9 @@ class LocalEntity(LocalModel):
     label: str = Field(min_length=1)
     kind: ConceptKind
     definition: Optional[str] = None
+    # ISO 3166-1 alpha-2 for Country entities only; it canonicalizes
+    # "Germany"/"Германия"/"German" to one concept across documents.
+    country_code: Optional[str] = None
     evidence: List[SourceSpan] = Field(min_length=1)
 
 

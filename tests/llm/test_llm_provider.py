@@ -1,5 +1,6 @@
 """Offline provider contract tests; no live network or paid API requests."""
 
+import asyncio
 import json
 from copy import deepcopy
 from typing import Any
@@ -93,13 +94,20 @@ def test_stage_models_schema_request_and_safe_audit(monkeypatch):
 
     provider = JsonLLM.from_environment(transport=httpx.MockTransport(respond))
     assert (
-        provider.generate(
-            Answer, "Read evidence", {"document_version": "v1"}
+        asyncio.run(
+            provider.generate(
+                Answer, "Read evidence", {"document_version": "v1"}
+            )
         ).text
         == "source-backed"
     )
-    provider.generate(
-        Answer, "Review evidence", {"document_version": "v1"}, stage="review"
+    asyncio.run(
+        provider.generate(
+            Answer,
+            "Review evidence",
+            {"document_version": "v1"},
+            stage="review",
+        )
     )
     assert [request["model"] for request in sent] == ["extractor", "reviewer"]
     assert all(
@@ -114,7 +122,7 @@ def test_stage_models_schema_request_and_safe_audit(monkeypatch):
         "total_tokens": 120,
     }
     assert provider.calls[0]["estimated_cost_usd"] is None
-    audit = json.dumps(provider.calls)
+    audit = json.dumps(list(provider.calls))
     assert "secret-test-key" not in audit and "raw-secret" not in audit
     assert (
         provider.calls[0]["request_sha256"]
@@ -180,7 +188,7 @@ def test_http_error_is_single_attempt_sanitized_and_classified(
 
     provider = client(respond)
     with pytest.raises(LLMError) as failure:
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert len(attempted) == 1
     assert failure.value.code == "http_error"
     assert failure.value.retryable is retryable
@@ -202,7 +210,7 @@ def test_transport_errors_are_retryable_but_never_retried(exception, code):
 
     provider = client(respond)
     with pytest.raises(LLMError) as failure:
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert len(attempted) == 1
     assert failure.value.code == code and failure.value.retryable
     assert "untrusted-secret" not in str(failure.value)
@@ -225,7 +233,7 @@ def test_transport_errors_are_retryable_but_never_retried(exception, code):
 def test_invalid_answers_fail_without_fallback(data, code):
     provider = client(lambda _: httpx.Response(200, json=data))
     with pytest.raises(LLMError) as failure:
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert failure.value.code == code and not failure.value.retryable
     assert "raw-source-secret" not in str(failure.value)
     assert provider.calls[0]["status"] == "error"
@@ -234,11 +242,11 @@ def test_invalid_answers_fail_without_fallback(data, code):
 def test_json_and_request_failures_are_explicit():
     provider = client(lambda _: httpx.Response(200, text="not-json-secret"))
     with pytest.raises(LLMError, match="invalid_response"):
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     with pytest.raises(LLMError, match="invalid_request"):
-        provider.generate(Answer, "s", {"number": float("nan")})
+        asyncio.run(provider.generate(Answer, "s", {"number": float("nan")}))
     with pytest.raises(LLMError, match="Stage must"):
-        provider.generate(Answer, "s", {}, stage="search")
+        asyncio.run(provider.generate(Answer, "s", {}, stage="search"))
 
 
 def test_cache_disabled_by_default(tmp_path):
@@ -251,8 +259,8 @@ def test_cache_disabled_by_default(tmp_path):
         return httpx.Response(200, json=completion())
 
     provider = client(respond, config=config)
-    provider.generate(Answer, "s", {})
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert len(attempted) == 2
     assert not (tmp_path / "disabled").exists()
 
@@ -272,8 +280,12 @@ def test_success_cache_full_request_key_and_revalidation(tmp_path):
         )
 
     provider = client(respond, config=config)
-    provider.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
-    provider.generate(Answer, "s", {"chunk_id": "c1", "version": "v1"})
+    asyncio.run(
+        provider.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+    )
+    asyncio.run(
+        provider.generate(Answer, "s", {"chunk_id": "c1", "version": "v1"})
+    )
     assert len(attempted) == 1 and provider.calls[-1]["cache_hit"]
     assert provider.calls[-1]["tokens"] == {}
     assert provider.calls[-1]["cached_response_tokens"] == {
@@ -281,12 +293,18 @@ def test_success_cache_full_request_key_and_revalidation(tmp_path):
         "completion_tokens": 2,
     }
     assert provider.calls[-1]["estimated_cost_usd"] is None
-    provider.generate(Answer, "s", {"version": "v2", "chunk_id": "c1"})
-    provider.generate(
-        Answer, "changed prompt", {"version": "v1", "chunk_id": "c1"}
+    asyncio.run(
+        provider.generate(Answer, "s", {"version": "v2", "chunk_id": "c1"})
     )
-    provider.generate(
-        Answer, "s", {"version": "v1", "chunk_id": "c1"}, stage="review"
+    asyncio.run(
+        provider.generate(
+            Answer, "changed prompt", {"version": "v1", "chunk_id": "c1"}
+        )
+    )
+    asyncio.run(
+        provider.generate(
+            Answer, "s", {"version": "v1", "chunk_id": "c1"}, stage="review"
+        )
     )
     other = JsonLLM(
         "different-model",
@@ -294,21 +312,27 @@ def test_success_cache_full_request_key_and_revalidation(tmp_path):
         config=config,
         transport=httpx.MockTransport(respond),
     )
-    other.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+    asyncio.run(
+        other.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+    )
     endpoint = JsonLLM(
         "extract-model",
         base_url="http://localhost:12345/v1",
         config=config,
         transport=httpx.MockTransport(respond),
     )
-    endpoint.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+    asyncio.run(
+        endpoint.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+    )
     assert len(attempted) == 6
     path = tmp_path / (provider.calls[0]["request_sha256"] + ".json")
     cached = json.loads(path.read_text(encoding="utf-8"))
     cached["response"] = {"wrong": "raw-secret"}
     path.write_text(json.dumps(cached), encoding="utf-8")
     with pytest.raises(LLMError, match="invalid_schema"):
-        provider.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+        asyncio.run(
+            provider.generate(Answer, "s", {"version": "v1", "chunk_id": "c1"})
+        )
     assert len(attempted) == 6
 
 
@@ -320,7 +344,7 @@ def test_only_success_is_cached(tmp_path):
         config=config,
     )
     with pytest.raises(LLMError):
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert not list(tmp_path.iterdir())
 
 
@@ -363,7 +387,7 @@ def test_nonfinite_nested_any_in_http_response_never_enters_success_cache(
     provider = client(respond, config=config)
     for _ in range(2):
         with pytest.raises(LLMError) as failure:
-            provider.generate(Extraction, "s", {})
+            asyncio.run(provider.generate(Extraction, "s", {}))
         assert failure.value.code == "invalid_schema"
         assert not failure.value.retryable
     assert len(attempted) == 2
@@ -386,13 +410,13 @@ def test_nonfinite_cached_answer_is_revalidated_and_rejected(tmp_path):
         ),
         config=config,
     )
-    provider.generate(NestedAnswer, "s", {})
+    asyncio.run(provider.generate(NestedAnswer, "s", {}))
     path = tmp_path / (provider.calls[0]["request_sha256"] + ".json")
     saved = json.loads(path.read_text(encoding="utf-8"))
     saved["response"]["data"]["values"] = [{"nested": float("nan")}]
     path.write_text(json.dumps(saved), encoding="utf-8")
     with pytest.raises(LLMError) as failure:
-        provider.generate(NestedAnswer, "s", {})
+        asyncio.run(provider.generate(NestedAnswer, "s", {}))
     assert failure.value.code == "invalid_schema"
     assert (
         provider.calls[-1]["cache_hit"]
@@ -412,7 +436,7 @@ def test_typed_replay_rejects_nonfinite_any_before_json_normalization(
     typed = NestedAnswer(data={"conditions": [{"nested": nonfinite}]})
     provider = ReplayProvider([typed])
     with pytest.raises(LLMError) as failure:
-        provider.generate(NestedAnswer, "s", {})
+        asyncio.run(provider.generate(NestedAnswer, "s", {}))
     assert failure.value.code == "invalid_schema"
     assert provider.calls[0]["status"] == "error"
 
@@ -431,7 +455,7 @@ def test_cost_is_only_explicit_and_requires_known_cached_rate():
         ),
         config=config,
     )
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert provider.calls[0]["estimated_cost_usd"] == pytest.approx(0.00026)
     cached_config = deepcopy(config)
     provider = client(
@@ -447,7 +471,7 @@ def test_cost_is_only_explicit_and_requires_known_cached_rate():
         ),
         config=cached_config,
     )
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert provider.calls[0]["estimated_cost_usd"] is None
 
 
@@ -470,10 +494,13 @@ def test_replay_is_explicit_validated_sequence_and_no_network(tmp_path):
     )
     provider = ReplayProvider.from_file(path)
     assert provider.demo is True
-    assert provider.generate(Answer, "s", {}).text == "first"
-    assert provider.generate(Answer, "s", {}, stage="review").text == "second"
+    assert asyncio.run(provider.generate(Answer, "s", {})).text == "first"
+    assert (
+        asyncio.run(provider.generate(Answer, "s", {}, stage="review")).text
+        == "second"
+    )
     with pytest.raises(LLMError, match="replay_exhausted"):
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert len(provider.calls) == 3
     assert all(call["demo"] for call in provider.calls)
 
@@ -494,7 +521,7 @@ def test_replay_is_explicit_validated_sequence_and_no_network(tmp_path):
 )
 def test_replay_rejects_wrong_stage_schema_or_answer(answer, code):
     with pytest.raises(LLMError) as failure:
-        ReplayProvider([answer]).generate(Answer, "s", {})
+        asyncio.run(ReplayProvider([answer]).generate(Answer, "s", {}))
     assert failure.value.code == code
 
 
@@ -529,8 +556,10 @@ def test_exhausted_model_falls_down_the_ladder_and_stays_retired():
         config=ladder_config(model_ladder=["strong", "middle", "weak"]),
     )
     assert provider.models == {"extract": "strong", "review": "strong"}
-    assert provider.generate(Answer, "s", {}).text == "source-backed"
-    provider.generate(Answer, "s", {}, stage="review")
+    assert (
+        asyncio.run(provider.generate(Answer, "s", {})).text == "source-backed"
+    )
+    asyncio.run(provider.generate(Answer, "s", {}, stage="review"))
     assert sent == ["strong", "middle", "middle"]
     assert provider.models == {"extract": "middle", "review": "middle"}
     assert [
@@ -545,7 +574,7 @@ def test_exhausted_model_falls_down_the_ladder_and_stays_retired():
         ("strong", "model_exhausted")
     ]
     assert "raw-secret" not in json.dumps(
-        provider.calls + provider.model_events
+        list(provider.calls) + provider.model_events
     )
 
 
@@ -556,7 +585,7 @@ def test_all_models_exhausted_is_explicit_and_not_retryable():
         config=ladder_config(model_ladder=["a", "b"]),
     )
     with pytest.raises(LLMError) as failure:
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert (
         failure.value.code == "models_exhausted"
         and not failure.value.retryable
@@ -587,7 +616,7 @@ def test_other_http_errors_do_not_move_down_the_ladder():
         config=ladder_config(model_ladder=["a", "b"]),
     )
     with pytest.raises(LLMError) as failure:
-        provider.generate(Answer, "s", {})
+        asyncio.run(provider.generate(Answer, "s", {}))
     assert failure.value.code == "http_error" and failure.value.retryable
     assert provider.retired == {} and len(provider.calls) == 1
 
@@ -674,10 +703,10 @@ def test_gigachat_oauth_schema_request_and_default_ladder():
         "GigaChat-2",
     ]
     assert (
-        provider.generate(Answer, "Read evidence", {"v": 1}).text
+        asyncio.run(provider.generate(Answer, "Read evidence", {"v": 1})).text
         == "source-backed"
     )
-    provider.generate(Answer, "Review", {"v": 1}, stage="review")
+    asyncio.run(provider.generate(Answer, "Review", {"v": 1}, stage="review"))
     auth = server.auth[0]
     assert len(server.auth) == 1, "access token is reused until it expires"
     assert auth.headers["authorization"] == "Basic basic-secret"
@@ -695,13 +724,13 @@ def test_gigachat_oauth_schema_request_and_default_ladder():
         provider.balance_status == "http_403" and not provider.balance_enabled
     )
     assert "basic-secret" not in json.dumps(
-        provider.calls
-    ) and "token-1" not in json.dumps(provider.calls)
+        list(provider.calls)
+    ) and "token-1" not in json.dumps(list(provider.calls))
 
 
 def test_gigachat_schema_has_no_unresolved_local_references():
     server = GigaChatServer(content=json.dumps({"entities": [], "claims": []}))
-    gigachat(server).generate(Extraction, "s", {})
+    asyncio.run(gigachat(server).generate(Extraction, "s", {}))
     schema = json.dumps(server.chat[0]["response_format"]["schema"])
     assert "$ref" not in schema and "$defs" not in schema
 
@@ -716,7 +745,7 @@ def test_gigachat_balance_skips_low_models_and_402_moves_on():
         statuses={"GigaChat-2-Max": 402},
     )
     provider = gigachat(server)
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert [body["model"] for body in server.chat] == [
         "GigaChat-2-Max",
         "GigaChat-2-Pro",
@@ -726,7 +755,7 @@ def test_gigachat_balance_skips_low_models_and_402_moves_on():
         ("GigaChat-2-Max", "model_exhausted"),
     ]
     assert provider.balance["GigaChat-2-Pro"] == 69_000
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert server.chat[-1]["model"] == "GigaChat-2-Pro"
     assert server.balance_requests == 1, (
         "balance is re-read only after refresh_seconds"
@@ -740,8 +769,8 @@ def test_gigachat_local_balance_estimate_retires_model_below_reserve():
         balance={"GigaChat-3-Ultra": 25_000, "GigaChat-2-Max": 1_000_000}
     )
     provider = gigachat(server)
-    provider.generate(Answer, "s", {})
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert [body["model"] for body in server.chat] == [
         "GigaChat-3-Ultra",
         "GigaChat-2-Max",
@@ -752,7 +781,7 @@ def test_gigachat_local_balance_estimate_retires_model_below_reserve():
 def test_gigachat_ultra_forbidden_for_paid_account_falls_through():
     server = GigaChatServer(statuses={"GigaChat-3-Ultra": 403})
     provider = gigachat(server)
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert [body["model"] for body in server.chat] == [
         "GigaChat-3-Ultra",
         "GigaChat-2-Max",
@@ -763,9 +792,9 @@ def test_gigachat_ultra_forbidden_for_paid_account_falls_through():
 def test_gigachat_expired_token_is_renewed_once():
     server = GigaChatServer()
     provider = gigachat(server)
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     server.expired.add("token-1")
-    provider.generate(Answer, "s", {})
+    asyncio.run(provider.generate(Answer, "s", {}))
     assert len(server.auth) == 2 and len(provider.calls) == 2
     assert provider.calls[-1]["status"] == "ok"
 
@@ -802,7 +831,65 @@ def test_gigachat_auth_failure_is_sanitized(status):
         return httpx.Response(status, text="raw-auth-secret")
 
     with pytest.raises(LLMError) as failure:
-        gigachat(respond).generate(Answer, "s", {})
+        asyncio.run(gigachat(respond).generate(Answer, "s", {}))
     assert failure.value.code == "auth_error"
     assert failure.value.retryable is (status == 500)
     assert "raw-auth-secret" not in str(failure.value)
+
+
+def test_gigachat_embeddings_share_oauth_and_keep_input_order():
+    requests = []
+
+    def respond(request):
+        if request.url.host == "ngw.devices.sberbank.ru":
+            return httpx.Response(
+                200,
+                json={"access_token": "token-1", "expires_at": 4102444800000},
+            )
+        body = json.loads(request.content)
+        requests.append((request.url.path, request.headers, body))
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": body["model"],
+                "data": [
+                    {
+                        "object": "embedding",
+                        "index": 1,
+                        "embedding": [0.0, 2.0],
+                        "usage": {"prompt_tokens": 3},
+                    },
+                    {
+                        "object": "embedding",
+                        "index": 0,
+                        "embedding": [1.0, 0.0],
+                        "usage": {"prompt_tokens": 4},
+                    },
+                ],
+            },
+        )
+
+    provider = gigachat(respond)
+    vectors = asyncio.run(provider.embed(["a", "b"], "EmbeddingsGigaR"))
+    assert vectors == [[1.0, 0.0], [0.0, 2.0]]
+    path, headers, body = requests[0]
+    assert path == "/v1/embeddings"
+    assert headers["authorization"] == "Bearer token-1"
+    assert body == {"model": "EmbeddingsGigaR", "input": ["a", "b"]}
+    assert provider.calls[-1]["stage"] == "embed"
+    assert provider.calls[-1]["tokens"] == {"prompt_tokens": 7}
+
+
+def test_gigachat_embeddings_reject_mismatched_response():
+    def respond(request):
+        if request.url.host == "ngw.devices.sberbank.ru":
+            return httpx.Response(
+                200,
+                json={"access_token": "t", "expires_at": 4102444800000},
+            )
+        return httpx.Response(200, json={"data": [{"embedding": [1.0]}]})
+
+    with pytest.raises(LLMError) as failure:
+        asyncio.run(gigachat(respond).embed(["a", "b"], "EmbeddingsGigaR"))
+    assert failure.value.code == "invalid_response"

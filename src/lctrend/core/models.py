@@ -16,6 +16,11 @@ def stable_id(namespace: str, *parts: object) -> str:
     return f"{namespace}:{digest}"
 
 
+# A semantic match proposes a review candidate; the mention keeps its own
+# provisional concept (see resolver.json semantic.use_in_llm).
+SEMANTIC_CANDIDATE_METHOD = "new_provisional_semantic_candidate"
+
+
 class DocumentType(str, Enum):
     ARTICLE = "article"
     PATENT = "patent"
@@ -23,6 +28,11 @@ class DocumentType(str, Enum):
     PACKAGE = "package"
     REPORT = "report"
     TRANSCRIPT = "transcript"
+    STANDARD = "standard"
+    JOB_POSTING = "job_posting"
+    GRANT = "grant"
+    REGULATORY = "regulatory"
+    NEWS = "news"
 
 
 class ConceptKind(str, Enum):
@@ -152,8 +162,11 @@ class DocumentEnvelope(BaseModel):
             raise ValueError(
                 "chunk_id must be unique within a document version"
             )
-        if len(self.domains) > 1:
-            raise ValueError("a document may have at most one domain")
+        # Several domains are what makes a cross-domain (bridge) signal
+        # visible; they only need to be distinct.
+        domain_ids = [domain.domain_id for domain in self.domains]
+        if len(domain_ids) != len(set(domain_ids)):
+            raise ValueError("domain_id must be unique within a document")
         return self
 
 
@@ -252,6 +265,8 @@ class EconomicEvidence(BaseModel):
     start: int
     end: int
     amount_text: Optional[str] = None
+    # Numeric reading of amount_text (scale words applied), same currency.
+    amount_value: Optional[float] = None
     currency: Optional[str] = None
     confidence: Optional[float] = None
     polarity: str = "affirmed"
@@ -267,6 +282,10 @@ class ExtractionResult(BaseModel):
     assertions: List[Assertion] = Field(default_factory=list)
     resolutions: List[ResolutionDecision] = Field(default_factory=list)
     economic_evidence: List[EconomicEvidence] = Field(default_factory=list)
+    # Unit vectors of concept labels (semantic layer), keyed by concept_id;
+    # stored on concept nodes for similarity search and taxonomy building.
+    concept_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
+    embedding_model: Optional[str] = None
 
 
 def json_value(value: Any) -> str:

@@ -1,5 +1,7 @@
 """Prior graph extractions retain their material identities in crawl state."""
 
+import asyncio
+
 from lctrend.graph.store import GraphStore
 
 
@@ -12,10 +14,10 @@ class Session:
     def __init__(self, records):
         self.records = records
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *_):
+    async def __aexit__(self, *_):
         pass
 
     def run(self, query):
@@ -58,7 +60,11 @@ def test_prior_repository_uses_url_not_github_node_id_and_paper_uses_doi():
             ),
         ]
     )
-    repo, paper = list(store.processed_materials())
+
+    async def collect():
+        return [item async for item in store.processed_materials()]
+
+    repo, paper = asyncio.run(collect())
     assert repo["canonical_id"] == "github:owner/project"
     assert repo["source_id"] == "owner/project"
     assert repo["status"] == "parsed"

@@ -24,6 +24,38 @@ def _currency(amount: str, currencies: dict[str, str]) -> Optional[str]:
     )
 
 
+def amount_value(amount: str, scales: dict[str, float]) -> Optional[float]:
+    """Read "$1,5 млн" or "2.3 billion EUR" as a number in its currency.
+
+    Returns None when the digits are ambiguous rather than guessing.
+    """
+    match = re.search(r"\d[\d\s.,]*", amount)
+    if not match:
+        return None
+    digits = re.sub(r"\s", "", match.group()).rstrip(".,")
+    if "," in digits and "." in digits:
+        digits = digits.replace(",", "")
+    elif "," in digits:
+        digits = (
+            digits.replace(",", "")
+            if re.fullmatch(r"\d{1,3}(?:,\d{3})+", digits)
+            else digits.replace(",", ".")
+        )
+    if digits.count(".") > 1:
+        if not re.fullmatch(r"\d{1,3}(?:\.\d{3})+", digits):
+            return None
+        digits = digits.replace(".", "")
+    try:
+        value = float(digits)
+    except ValueError:
+        return None
+    lowered = amount.casefold()
+    for word, factor in scales.items():
+        if re.search(r"\b" + re.escape(word), lowered):
+            return value * factor
+    return value
+
+
 def extract_economic_evidence(
     chunks: Iterable[Chunk],
     mentions: Sequence[Mention],
@@ -160,6 +192,9 @@ def extract_economic_evidence(
                         start=start,
                         end=end,
                         amount_text=amount_text,
+                        amount_value=amount_value(amount_text, rules["scales"])
+                        if amount_text
+                        else None,
                         currency=_currency(amount_text, rules["currencies"])
                         if amount_text
                         else None,

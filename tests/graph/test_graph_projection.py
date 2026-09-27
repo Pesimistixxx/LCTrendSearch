@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 
@@ -94,7 +95,7 @@ def test_reparsed_document_preserves_historical_chunks_and_run_input_links():
         {"id": "https://openalex.org/W1", "title": "Original title"}
     )
     tx = Transaction()
-    GraphStore._write_document(tx, document)
+    asyncio.run(GraphStore._write_document(tx, document))
     cleanup = next(
         query for query, _ in tx.queries if "WHERE NOT c.chunk_id IN" in query
     )
@@ -109,7 +110,7 @@ def test_reparsed_document_preserves_historical_chunks_and_run_input_links():
             started_at="2026-09-26T00:00:00Z",
         ),
     )
-    GraphStore._write_extraction(tx, document, result)
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
     query, parameters = next(
         (q, p) for q, p in tx.queries if "MERGE (r:ProcessingRun" in q
     )
@@ -143,7 +144,7 @@ def test_document_projection_builds_queries_without_dynamic_cypher_errors():
         }
     )
     tx = Transaction()
-    GraphStore._write_document(tx, document)
+    asyncio.run(GraphStore._write_document(tx, document))
     assert any("MERGE (c:Contributor" in query for query, _ in tx.queries)
     assert any("r.roles" in query for query, _ in tx.queries)
     assert not any("ExternalId" in query for query, _ in tx.queries)
@@ -207,14 +208,20 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
             )
         ],
     )
-    GraphStore._write_extraction(
-        tx,
-        type(
-            "Doc",
-            (),
-            {"document_version_id": "v1", "published_at": None, "chunks": []},
-        )(),
-        result,
+    asyncio.run(
+        GraphStore._write_extraction(
+            tx,
+            type(
+                "Doc",
+                (),
+                {
+                    "document_version_id": "v1",
+                    "published_at": None,
+                    "chunks": [],
+                },
+            )(),
+            result,
+        )
     )
     queries = "\n".join(query for query, _ in tx.queries)
     assert "ConceptName" not in queries

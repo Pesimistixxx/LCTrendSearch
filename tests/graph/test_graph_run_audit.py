@@ -1,5 +1,6 @@
 """Verify Neo4j-compatible audit projection without a database connection."""
 
+import asyncio
 import json
 
 import pytest
@@ -20,24 +21,26 @@ from lctrend.ingest.adapters import parse_openalex
 
 
 class Result:
-    def __init__(self, count=0):
+    def __init__(self, count=0, published=0):
         self.count = count
+        self.published = published
 
     def consume(self):
         return None
 
     def single(self):
-        return {"count": self.count}
+        return {"count": self.count, "published": self.published}
 
 
 class Transaction:
-    def __init__(self, existing_count=0):
+    def __init__(self, existing_count=0, published=0):
         self.queries = []
         self.existing_count = existing_count
+        self.published = published
 
     def run(self, query, **parameters):
         self.queries.append((query, parameters))
-        return Result(self.existing_count)
+        return Result(self.existing_count, self.published)
 
 
 def project(run):
@@ -48,7 +51,7 @@ def project(run):
     extraction = ExtractionResult(
         document_version_id=document.document_version_id, run=run
     )
-    GraphStore._write_extraction(tx, document, extraction)
+    asyncio.run(GraphStore._write_extraction(tx, document, extraction))
     query, parameters = next(
         (query, parameters)
         for query, parameters in tx.queries
@@ -232,7 +235,7 @@ def test_incomplete_run_preserves_prior_active_projection(
         ]
     validate_extraction(document, extraction)
     tx = Transaction()
-    GraphStore._write_extraction(tx, document, extraction)
+    asyncio.run(GraphStore._write_extraction(tx, document, extraction))
     assert len(tx.queries) == 1
     query, parameters = tx.queries[0]
     assert "MERGE (r:ProcessingRun" in query
@@ -253,7 +256,10 @@ def test_incomplete_run_preserves_prior_active_projection(
     assert stored_metadata["coverage"] == run.metadata["coverage"]
     assert json.loads(parameters["trace_json"]) == run.trace
     staged = stored_metadata["staged_result"]
-    assert staged == extraction.model_dump(mode="json", exclude={"run"})
+    # Label vectors are recomputable and would bloat the run audit.
+    assert staged == extraction.model_dump(
+        mode="json", exclude={"run", "concept_embeddings"}
+    )
     assert stored_metadata["staged_chunks"] == [
         chunk.model_dump(mode="json") for chunk in document.chunks
     ]
@@ -275,18 +281,21 @@ def test_incomplete_run_preserves_prior_active_projection(
 
 
 @pytest.mark.parametrize(
-    "status,existing_count,expected",
+    "status,existing_count,published,expected,publish",
     [
-        ("failed", 1, ["extraction"]),
-        ("partial", 1, ["extraction"]),
-        ("partial", 0, ["document", "extraction"]),
-        ("failed", 0, ["document", "extraction"]),
-        ("succeeded", 1, ["document", "extraction"]),
-        ("succeeded", 0, ["document", "extraction"]),
+        ("failed", 1, 0, ["extraction"], False),
+        # A partial rerun never replaces an active projection...
+        ("partial", 1, 1, ["extraction"], False),
+        # ...but is published when the version has none yet.
+        ("partial", 1, 0, ["document", "extraction"], True),
+        ("partial", 0, 0, ["document", "extraction"], True),
+        ("failed", 0, 0, ["document", "extraction"], False),
+        ("succeeded", 1, 1, ["document", "extraction"], True),
+        ("succeeded", 0, 0, ["document", "extraction"], True),
     ],
 )
 def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
-    monkeypatch, status, existing_count, expected
+    monkeypatch, status, existing_count, published, expected, publish
 ):
     document = parse_openalex(
         {"id": "https://openalex.org/W88", "title": "Transaction fixture"}
@@ -301,7 +310,7 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
             status=status,
         ),
     )
-    tx = Transaction(existing_count)
+    tx = Transaction(existing_count, published)
     calls = []
     monkeypatch.setattr(
         GraphStore,
@@ -316,15 +325,16 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
         GraphStore,
         "_write_extraction",
         staticmethod(
-            lambda transaction, doc, extraction: calls.append(
-                ("extraction", transaction, doc, extraction)
+            lambda transaction, doc, extraction, publish=None: calls.append(
+                ("extraction", transaction, doc, extraction, publish)
             )
         ),
     )
-    GraphStore._write_processed(tx, document, result)
+    asyncio.run(GraphStore._write_processed(tx, document, result))
     assert [call[0] for call in calls] == expected
     assert all(call[1] is tx and call[2] is document for call in calls)
     assert calls[-1][3] is result
+    assert calls[-1][4] is publish
     assert len(tx.queries) == 1
     assert "RETURN count(v) AS count" in tx.queries[0][0]
     assert tx.queries[0][1]["version_id"] == document.document_version_id
@@ -350,10 +360,10 @@ def test_document_and_extraction_share_one_execute_write_transaction(
     transactions = []
 
     class Session:
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             pass
 
         def execute_write(self, callback, *args):
@@ -379,18 +389,18 @@ def test_document_and_extraction_share_one_execute_write_transaction(
         GraphStore,
         "_write_extraction",
         staticmethod(
-            lambda transaction, doc, result: writes.append(
+            lambda transaction, doc, result, publish=None: writes.append(
                 ("extraction", transaction)
             )
         ),
     )
-    store.write_processed(document, result)
+    asyncio.run(store.write_processed(document, result))
     assert len(transactions) == 1
     assert transactions[0] == GraphStore._write_processed
     assert writes == [("document", tx), ("extraction", tx)]
     result.document_version_id = "another-document-version"
     with pytest.raises(ValueError, match="another document version"):
-        store.write_processed(document, result)
+        asyncio.run(store.write_processed(document, result))
     assert len(transactions) == 1
 
 
@@ -479,7 +489,7 @@ def test_review_history_is_saved_on_each_run_creation_link():
         )
         validate_extraction(document, extraction)
         tx = Transaction()
-        GraphStore._write_extraction(tx, document, extraction)
+        asyncio.run(GraphStore._write_extraction(tx, document, extraction))
         query, parameters = next(
             (statement, values)
             for statement, values in tx.queries

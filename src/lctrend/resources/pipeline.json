@@ -1,20 +1,32 @@
 {
   "settings": {
-    "primary_chunks": 6,
-    "max_context_chunks": 12,
+    "primary_chunks": 10,
+    "max_context_chunks": 16,
     "max_source_chars": 24000,
     "max_payload_chars": 30000,
     "max_model_calls": 8,
+    "model_calls_per_packet": 3,
+    "max_document_model_calls": 120,
     "max_context_rounds": 2,
     "max_requests_per_round": 4,
     "search_limit": 3,
     "max_map_entries": 60,
-    "max_retries": 1,
-    "retry_delay_seconds": 0.5,
-    "max_retry_delay_seconds": 2.0
+    "max_retries": 4,
+    "retry_delay_seconds": 2.0,
+    "max_retry_delay_seconds": 60.0
   },
   "metadata_fields": ["description", "summary", "version", "license", "full_name", "country_status", "parser", "parse_warnings", "text_encoding"],
-  "navigation_locator_fields": ["path", "json_pointer", "xpath", "part", "element_path", "release_id", "tag", "page", "self_ref", "source_start", "source_end"],
+  "navigation_locator_fields": ["path", "json_pointer", "xpath", "part", "element_path", "release_id", "tag", "page", "self_ref", "source_start", "source_end", "section_heading", "section_role"],
+  "section_roles": {
+    "abstract": "^\\W*(?:\\d+\\.?\\s*)?(?:abstract|summary|аннотация|реферат)\\b",
+    "introduction": "\\b(?:introduction|background|motivation|введение|актуальность)\\b",
+    "related_work": "\\b(?:related work|prior work|literature review|state of the art|обзор)\\b",
+    "method": "\\b(?:methods?|methodology|approach|materials|experimental setup|model|architecture|design|метод\\w*|подход|материалы)\\b",
+    "results": "\\b(?:results?|evaluation|experiments?|findings|performance|результат\\w*|эксперимент\\w*)\\b",
+    "discussion": "\\b(?:discussion|analysis|обсуждение|анализ)\\b",
+    "limitations": "\\b(?:limitations?|threats to validity|future work|ограничени\\w*)\\b",
+    "conclusion": "\\b(?:conclusions?|concluding|заключение|выводы)\\b"
+  },
   "file_formats": {
     ".txt": {"adapter": "text", "media_type": "text/plain"},
     ".md": {"adapter": "markdown", "media_type": "text/markdown"},
@@ -24,7 +36,7 @@
     ".docx": {"adapter": "docx", "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     ".pdf": {"adapter": "pdf", "media_type": "application/pdf"}
   },
-  "file_limits": {"max_file_bytes": 52428800, "docx_document_xml_bytes": 26214400, "docx_core_xml_bytes": 1048576},
+  "file_limits": {"max_file_bytes": 52428800, "docx_document_xml_bytes": 26214400, "docx_core_xml_bytes": 1048576, "pdf_max_pages": 200, "pdf_timeout_seconds": 900},
   "openalex_fulltext": {
     "max_candidates": 3,
     "skipped_labels": ["page_header", "page_footer", "reference"],

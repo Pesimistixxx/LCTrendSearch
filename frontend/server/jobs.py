@@ -4,29 +4,31 @@ Job files contain progress and references, not an alternative graph
 database. Original source snapshots and per-document results survive a
 restart; interrupted jobs are never resumed automatically because resuming
 can spend model credits.
+
+Jobs run on one dedicated asyncio loop. Documents of a job are processed
+concurrently (bounded by ``workers``); network calls (LLM, Neo4j, sources)
+are awaited, CPU-bound steps and injected synchronous callables run in
+worker threads. One LLM provider and one concept registry serve a job.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
 import tempfile
-from concurrent.futures import (
-    FIRST_COMPLETED,
-    Future,
-    ThreadPoolExecutor,
-    wait,
-)
+from concurrent.futures import Future
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, RLock
-from time import sleep
+from time import monotonic, sleep
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
+from lctrend.core import aio
 from lctrend.core.models import DocumentEnvelope, ExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = {"queued", "running", "cancelling"}
 TERMINAL_DOCUMENT_STATUSES = {"succeeded", "partial", "failed", "cancelled"}
 MODES = {"hybrid", "llm", "gliner", "none"}
+MAX_WORKERS = 16
+# Progress events arrive many times per document; a 5000-document job file
+# is megabytes. Progress is flushed at most this often, status changes at once.
+SAVE_INTERVAL_SECONDS = 1.0
 
 
 def _now() -> str:
@@ -111,6 +117,19 @@ def _error(exc: Exception, stage: str) -> dict[str, str]:
     }
 
 
+def default_workers() -> int:
+    """Concurrent documents per job: LCTREND_WORKERS or runtime.json."""
+    from lctrend.core.config import load_catalog
+
+    value = os.getenv("LCTREND_WORKERS") or load_catalog("runtime").get(
+        "ingestion", {}
+    ).get("workers", 1)
+    try:
+        return max(1, min(MAX_WORKERS, int(value)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _store_factory():
     from lctrend.core.config import load_environment
     from lctrend.graph.store import GraphStore
@@ -161,6 +180,7 @@ class JobManager:
     ):
         if not 1 <= max_active_jobs <= 4:
             raise ValueError("max_active_jobs must be 1..4")
+        self._max_active_jobs = max_active_jobs
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
@@ -184,10 +204,15 @@ class JobManager:
         self._pdf_support_checker = pdf_support_checker
         self._payload_hydrator = payload_hydrator
         self._shared_ner_runtime = None
+        self._saved_at: dict[str, float] = {}
+        self._dirty: set[str] = set()
+        self._started: set[str] = set()
         self._recover()
-        self._pool = ThreadPoolExecutor(
-            max_workers=max_active_jobs, thread_name_prefix="ingestion-job"
-        )
+        self._loop = aio.LoopThread("ingestion-jobs")
+        self._slots = None
+        self._stopping = False
+        self._wake = None
+        self._flusher = self._loop.submit(self._flush_progress())
 
     def _recover(self) -> None:
         for path in self.directory.glob("*/job.json"):
@@ -297,19 +322,57 @@ class JobManager:
                 ]:
                     mapping.pop(job_id, None)
 
-    def _save(self, job: dict) -> None:
+    def _save(self, job: dict, force: bool = True) -> None:
+        job_id = job["job_id"]
         self._count(job)
         job["updated_at"] = _now()
-        _write_json(self.directory / job["job_id"] / "job.json", job)
+        now = monotonic()
+        if (
+            not force
+            and now - self._saved_at.get(job_id, 0.0) < SAVE_INTERVAL_SECONDS
+        ):
+            self._dirty.add(job_id)
+            return
+        _write_json(self.directory / job_id / "job.json", job)
+        self._saved_at[job_id] = now
+        self._dirty.discard(job_id)
+
+    async def _flush_progress(self) -> None:
+        self._wake = asyncio.Event()
+        while not self._stopping:
+            try:
+                await asyncio.wait_for(
+                    self._wake.wait(), SAVE_INTERVAL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                pass
+            if not self._dirty:
+                continue
+            with self._lock:
+                for job_id in list(self._dirty):
+                    job = self._jobs.get(job_id)
+                    if job is None:
+                        self._dirty.discard(job_id)
+                        continue
+                    try:
+                        self._save(job)
+                    except OSError as exc:
+                        logger.warning(
+                            "Cannot save progress of job %s: %s", job_id, exc
+                        )
+
+    def run(self, coroutine, timeout: float | None = None):
+        """Run a coroutine on the job loop from synchronous code."""
+        return self._loop.run(coroutine, timeout)
 
     @staticmethod
     def _validate(workers: int, mode: str) -> None:
         if (
             isinstance(workers, bool)
             or not isinstance(workers, int)
-            or not 1 <= workers <= 4
+            or not 1 <= workers <= MAX_WORKERS
         ):
-            raise ValueError("workers must be 1..4")
+            raise ValueError("workers must be 1..{MAX_WORKERS}")
         if mode not in MODES:
             raise ValueError("mode must be hybrid, llm, gliner or none")
 
@@ -386,7 +449,7 @@ class JobManager:
                 except Exception as exc:
                     self._finish(job, "failed", _error(exc, "storage"))
                     raise
-            self._futures[job_id] = self._pool.submit(self._run, job_id)
+            self._futures[job_id] = self._loop.submit(self._run(job_id))
             self._futures[job_id].add_done_callback(self._prune)
             logger.info(
                 "Job %s queued: source=%s mode=%s limit=%d workers=%d",
@@ -600,8 +663,8 @@ class JobManager:
                 return deepcopy(job)
             self._cancel[job_id].set()
             logger.info("Job %s cancellation requested", job_id)
-            future = self._futures.get(job_id)
-            if future is not None and future.cancel():
+            if job_id not in self._started:
+                # Still waiting for a slot: it never opens the graph.
                 self._finish(job, "cancelled")
             else:
                 job.update(status="cancelling", stage="cancelling")
@@ -614,7 +677,22 @@ class JobManager:
             for job_id, job in self._jobs.items():
                 if job["status"] in ACTIVE_STATUSES:
                     self.cancel_job(job_id)
-        self._pool.shutdown(wait=wait, cancel_futures=True)
+            futures = list(self._futures.values())
+        if wait:
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:
+                    logger.debug("Job ended with an error", exc_info=True)
+            self._stopping = True
+            if self._wake is not None:
+                self._loop.loop.call_soon_threadsafe(self._wake.set)
+            self._flusher.result()
+            with self._lock:
+                for job_id in list(self._dirty):
+                    if job_id in self._jobs:
+                        self._save(self._jobs[job_id])
+            self._loop.stop(wait=True)
 
     shutdown = close
 
@@ -652,16 +730,20 @@ class JobManager:
             job = self._jobs[job_id]
             if job["status"] != "cancelling":
                 job["stage"] = stage
-            self._save(job)
+            self._save(job, force=False)
 
-    def _update_document(self, job_id: str, doc_id: str, **updates) -> None:
+    def _update_document(
+        self, job_id: str, doc_id: str, force: bool | None = None, **updates
+    ) -> None:
         with self._lock:
             job = self._jobs[job_id]
             document = next(
                 item for item in job["documents"] if item["doc_id"] == doc_id
             )
             document.update(updates)
-            self._save(job)
+            if force is None:
+                force = updates.get("status") in TERMINAL_DOCUMENT_STATUSES
+            self._save(job, force=force)
 
     def _progress(self, job_id: str, doc_id: str, event: dict) -> None:
         allowed = {
@@ -683,9 +765,24 @@ class JobManager:
             if event.get(key) in {"running", "succeeded", "partial", "failed"}:
                 allowed[key] = event[key]
         if allowed:
-            self._update_document(job_id, doc_id, **allowed)
+            self._update_document(job_id, doc_id, force=False, **allowed)
 
-    def _run(self, job_id: str) -> None:
+    async def _run(self, job_id: str) -> None:
+        if self._slots is None:
+            self._slots = asyncio.Semaphore(self._max_active_jobs)
+        async with self._slots:
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None or job["status"] not in ACTIVE_STATUSES:
+                    return  # cancelled while waiting for a slot
+                self._started.add(job_id)
+            try:
+                await self._execute(job_id)
+            finally:
+                with self._lock:
+                    self._started.discard(job_id)
+
+    async def _execute(self, job_id: str) -> None:
         stage = "neo4j"
         store = None
         try:
@@ -701,12 +798,12 @@ class JobManager:
                     task["cached_results"]
                 ) < len(job["documents"])
             logger.info("Job %s started", job_id)
-            store = self._store_factory()
+            store = await aio.call(self._store_factory)
             # All graph connectivity checks precede any potentially paid call.
             verify = getattr(store, "verify_connectivity", None)
             if verify is not None:
-                verify()
-            store.ensure_schema()
+                await aio.call(verify)
+            await aio.call(store.ensure_schema)
             if self._cancel[job_id].is_set():
                 with self._lock:
                     self._finish(job, "cancelled")
@@ -724,11 +821,13 @@ class JobManager:
                     checker = require_pdf_support
                 else:
                     checker = self._pdf_support_checker
-                checker()
+                await aio.call(checker)
             stage = "provider"
             self._stage(job_id, stage)
-            first_provider = (
-                self._provider_factory()
+            # One provider per job: one OAuth token, one request semaphore
+            # and one record of exhausted models for all its documents.
+            provider = (
+                await aio.call(self._provider_factory)
                 if requires_models and job["mode"] in {"hybrid", "llm"}
                 else None
             )
@@ -745,7 +844,7 @@ class JobManager:
                         runtime = self._shared_ner_runtime
                     prepare = getattr(runtime, "prepare", None)
                     if prepare is not None:
-                        prepare()
+                        await aio.call(prepare)
                 except Exception as exc:
                     if job["mode"] == "gliner":
                         raise
@@ -753,62 +852,42 @@ class JobManager:
                         "Auxiliary NER disabled (%s)", type(exc).__name__
                     )
                     runtime = None
-            provider_lock = RLock()
-            providers = [first_provider]
+            registry = None
+            if requires_models and job["mode"] != "none":
+                from lctrend.extraction.resolver import ConceptRegistry
 
-            def provider_for_document():
-                if job["mode"] not in {"hybrid", "llm"}:
-                    return None
-                with provider_lock:
-                    if providers:
-                        return providers.pop()
-                return self._provider_factory()
+                # Read once; the job keeps it current as documents resolve.
+                registry = ConceptRegistry(await aio.call(store.read_concepts))
+                logger.info(
+                    "Job %s: %d registry concepts", job_id, len(registry)
+                )
+            context = {
+                "store": store,
+                "runtime": runtime,
+                "provider": provider,
+                "registry": registry,
+                "publication": asyncio.Lock(),
+                "workers": asyncio.Semaphore(job["workers"]),
+            }
 
             stage = "discovery"
             self._stage(job_id, stage)
-            with ThreadPoolExecutor(
-                max_workers=job["workers"],
-                thread_name_prefix="ingestion-document",
-            ) as workers:
-                if job["source"] == "files":
-                    batch = [
-                        (record["doc_id"], Path(path))
-                        for record, path in zip(
-                            job["documents"], task["paths"]
-                        )
-                    ]
-                    self._process_batch(
-                        job_id,
-                        batch,
-                        workers,
-                        store,
-                        runtime,
-                        provider_for_document,
+            if job["source"] == "files":
+                batch = [
+                    (record["doc_id"], Path(path))
+                    for record, path in zip(job["documents"], task["paths"])
+                ]
+                await self._process_batch(job_id, batch, context)
+            elif "payloads" in task:
+                batch = [
+                    (record["doc_id"], payload)
+                    for record, payload in zip(
+                        job["documents"], task["payloads"]
                     )
-                elif "payloads" in task:
-                    batch = [
-                        (record["doc_id"], payload)
-                        for record, payload in zip(
-                            job["documents"], task["payloads"]
-                        )
-                    ]
-                    self._process_batch(
-                        job_id,
-                        batch,
-                        workers,
-                        store,
-                        runtime,
-                        provider_for_document,
-                    )
-                else:
-                    self._openalex(
-                        job_id,
-                        task,
-                        workers,
-                        store,
-                        runtime,
-                        provider_for_document,
-                    )
+                ]
+                await self._process_batch(job_id, batch, context)
+            else:
+                await self._openalex(job_id, task, context)
             with self._lock:
                 if self._cancel[job_id].is_set():
                     self._finish(job, "cancelled")
@@ -855,7 +934,7 @@ class JobManager:
         finally:
             if store is not None:
                 try:
-                    store.close()
+                    await aio.call(store.close)
                 except Exception as exc:
                     logger.warning(
                         "Job %s: cannot close graph store (%s)",
@@ -864,9 +943,7 @@ class JobManager:
                     )
                     logger.debug("Graph store close traceback", exc_info=True)
 
-    def _openalex(
-        self, job_id: str, task: dict, workers, store, runtime, provider
-    ) -> None:
+    async def _openalex(self, job_id: str, task: dict, context: dict) -> None:
         if self._source_fetcher is None:
             from lctrend.ingest.connectors import fetch_openalex_page
 
@@ -875,117 +952,107 @@ class JobManager:
             fetch = self._source_fetcher
         cursor, seen_cursors, seen_records = "*", set(), set()
         job = self._jobs[job_id]
-        while cursor and not self._cancel[job_id].is_set():
-            with self._lock:
-                remaining = job["limit"] - len(job["documents"])
-            if remaining <= 0:
-                break
-            if cursor in seen_cursors:
-                raise ValueError("Repeated OpenAlex cursor")
-            seen_cursors.add(cursor)
-            self._stage(job_id, "discovery")
-            page = fetch(
-                task["query"],
-                cursor,
-                min(100, remaining),
-                os.getenv("OPENALEX_MAILTO"),
-                task.get("filter"),
-            )
-            payloads = page.get("results", [])
-            if not isinstance(payloads, list):
-                raise ValueError("Invalid OpenAlex results")
-            if not payloads:
-                break
-            batch = []
-            with self._lock:
-                for payload in payloads:
-                    if not isinstance(payload, dict):
-                        raise ValueError("Invalid OpenAlex record")
-                    source_id = str(payload.get("id") or "")
-                    if source_id and source_id in seen_records:
-                        continue
-                    if len(job["documents"]) >= job["limit"]:
-                        break
-                    if source_id:
-                        seen_records.add(source_id)
-                    doc_id = f"d{len(job['documents']) + 1:06d}"
-                    record = self._document_record(
-                        doc_id,
-                        str(
-                            payload.get("title")
-                            or payload.get("display_name")
-                            or source_id
-                        ),
-                        source_id,
-                    )
-                    if job["mode"] not in {"llm", "hybrid"}:
-                        record["llm_status"] = "disabled"
-                    if job["mode"] not in {"gliner", "hybrid"}:
-                        record["gliner_status"] = "disabled"
-                    job["documents"].append(record)
-                    batch.append((doc_id, payload))
-                self._save(job)
-            self._process_batch(
-                job_id, batch, workers, store, runtime, provider
-            )
-            cursor = page.get("meta", {}).get("next_cursor")
+        pending: set[asyncio.Task] = set()
+        try:
+            while cursor and not self._cancel[job_id].is_set():
+                with self._lock:
+                    remaining = job["limit"] - len(job["documents"])
+                if remaining <= 0:
+                    break
+                if cursor in seen_cursors:
+                    raise ValueError("Repeated OpenAlex cursor")
+                seen_cursors.add(cursor)
+                self._stage(job_id, "discovery")
+                page = await aio.call(
+                    fetch,
+                    task["query"],
+                    cursor,
+                    min(100, remaining),
+                    os.getenv("OPENALEX_MAILTO"),
+                    task.get("filter"),
+                )
+                payloads = page.get("results", [])
+                if not isinstance(payloads, list):
+                    raise ValueError("Invalid OpenAlex results")
+                if not payloads:
+                    break
+                batch = []
+                with self._lock:
+                    for payload in payloads:
+                        if not isinstance(payload, dict):
+                            raise ValueError("Invalid OpenAlex record")
+                        source_id = str(payload.get("id") or "")
+                        if source_id and source_id in seen_records:
+                            continue
+                        if len(job["documents"]) >= job["limit"]:
+                            break
+                        if source_id:
+                            seen_records.add(source_id)
+                        doc_id = f"d{len(job['documents']) + 1:06d}"
+                        record = self._document_record(
+                            doc_id,
+                            str(
+                                payload.get("title")
+                                or payload.get("display_name")
+                                or source_id
+                            ),
+                            source_id,
+                        )
+                        if job["mode"] not in {"llm", "hybrid"}:
+                            record["llm_status"] = "disabled"
+                        if job["mode"] not in {"gliner", "hybrid"}:
+                            record["gliner_status"] = "disabled"
+                        job["documents"].append(record)
+                        batch.append((doc_id, payload))
+                    self._save(job)
+                # Discovery of the next page overlaps with processing of this
+                # one; the worker semaphore still bounds document concurrency.
+                pending |= self._schedule(job_id, batch, context)
+                pending = {task for task in pending if not task.done()}
+                cursor = page.get("meta", {}).get("next_cursor")
+            if pending:
+                await asyncio.gather(*pending)
+        except BaseException:
+            for waiting in pending:
+                waiting.cancel()
+            raise
         with self._lock:
             job["discovery_finished"] = not self._cancel[job_id].is_set()
             self._save(job)
 
-    def _process_batch(
-        self, job_id: str, batch: list, workers, store, runtime, provider
-    ) -> None:
-        """Submit at most ``workers`` documents.
-
-        Cancellation stops new submits.
-        """
-        waiting = iter(batch)
-        pending: set[Future] = set()
-        exhausted = False
-        while pending or not exhausted:
-            while (
-                len(pending) < self._jobs[job_id]["workers"] and not exhausted
-            ):
-                # Serialize the scheduling decision with cancel_job so no new
+    def _schedule(
+        self, job_id: str, batch: list, context: dict
+    ) -> set[asyncio.Task]:
+        async def one(doc_id, source):
+            async with context["workers"]:
+                # Serialize the start decision with cancel_job so no new
                 # document can slip in after cancellation has been recorded.
                 with self._lock:
                     if self._cancel[job_id].is_set():
-                        exhausted = True
-                        break
-                    try:
-                        doc_id, source = next(waiting)
-                    except StopIteration:
-                        exhausted = True
-                        break
-                    pending.add(
-                        workers.submit(
-                            self._process_document,
-                            job_id,
-                            doc_id,
-                            source,
-                            store,
-                            runtime,
-                            provider,
-                        )
-                    )
-            if self._cancel[job_id].is_set():
-                exhausted = True
-            if pending:
-                completed, pending = wait(pending, return_when=FIRST_COMPLETED)
-                for future in completed:
-                    future.result()
+                        return
+                await self._process_document(job_id, doc_id, source, context)
 
-    def _process_document(
-        self,
-        job_id: str,
-        doc_id: str,
-        source,
-        store,
-        runtime,
-        provider_factory,
+        return {
+            asyncio.create_task(one(doc_id, source))
+            for doc_id, source in batch
+        }
+
+    async def _process_batch(
+        self, job_id: str, batch: list, context: dict
+    ) -> None:
+        """Process up to ``workers`` documents at a time.
+
+        Cancellation stops new starts; running documents finish.
+        """
+        tasks = self._schedule(job_id, batch, context)
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def _process_document(
+        self, job_id: str, doc_id: str, source, context: dict
     ) -> None:
         stage = "parse"
+        store = context["store"]
         try:
             with self._lock:
                 if self._cancel[job_id].is_set():
@@ -1027,7 +1094,9 @@ class JobManager:
                     source_id=document.source.record_id,
                     source_coverage=document.coverage,
                 )
-                self._publish_result(job_id, doc_id, document, result, store)
+                await self._publish_result(
+                    job_id, doc_id, document, result, context
+                )
                 return
             if job["source"] == "files":
                 if self._file_parser is None:
@@ -1036,7 +1105,8 @@ class JobManager:
                     parser = parse_file
                 else:
                     parser = self._file_parser
-                document = parser(source)
+                # Docling and the other parsers are CPU-bound.
+                document = await aio.call(parser, source)
             else:
                 from lctrend.ingest.adapters import (
                     parse_github,
@@ -1045,11 +1115,13 @@ class JobManager:
                 )
 
                 if self._payload_hydrator is not None:
-                    source = self._payload_hydrator(job["source"], source)
+                    source = await aio.call(
+                        self._payload_hydrator, job["source"], source
+                    )
                 elif job["source"] == "github" and "commit" not in source:
                     from lctrend.ingest.connectors import fetch_github
 
-                    source = fetch_github(
+                    source = await fetch_github(
                         source.get("full_name")
                         or source["repository"]["full_name"],
                         os.getenv("GITHUB_TOKEN"),
@@ -1057,7 +1129,7 @@ class JobManager:
                 elif job["source"] == "pypi" and "info" not in source:
                     from lctrend.ingest.connectors import fetch_pypi
 
-                    source = fetch_pypi(source["name"])
+                    source = await fetch_pypi(source["name"])
 
                 raw = json.dumps(
                     source, ensure_ascii=False, sort_keys=True
@@ -1073,7 +1145,10 @@ class JobManager:
                     writer = persist_snapshot
                 else:
                     writer = self._snapshot_writer
-                document = writer(document, raw)
+                document = await aio.call(writer, document, raw)
+                if await self._already_processed(job, document, store):
+                    await self._skip(job_id, doc_id, document)
+                    return
                 if job["fulltext"]:
                     stage = "fulltext"
                     self._update_document(job_id, doc_id, stage=stage)
@@ -1085,10 +1160,15 @@ class JobManager:
                         attacher = attach_openalex_fulltext
                     else:
                         attacher = self._fulltext_attacher
-                    attached = attacher(document, source)
+                    attached = await aio.call(attacher, document, source)
                     if attached is not None:
                         document = attached
             document = DocumentEnvelope.model_validate(document)
+            if job["source"] == "files" and await self._already_processed(
+                job, document, store
+            ):
+                await self._skip(job_id, doc_id, document)
+                return
             self._update_document(
                 job_id,
                 doc_id,
@@ -1097,10 +1177,6 @@ class JobManager:
                 source_coverage=document.coverage,
                 stage="processing",
             )
-            with self._publication_lock:
-                registry = (
-                    store.read_concepts() if job["mode"] != "none" else []
-                )
             stage = "processing"
             if self._document_processor is None:
                 from lctrend.extraction.processing import process_material
@@ -1108,16 +1184,20 @@ class JobManager:
                 processor = process_material
             else:
                 processor = self._document_processor
-            result = processor(
+            registry = context["registry"]
+            result = await aio.call(
+                processor,
                 document,
                 mode=job["mode"],
-                provider=provider_factory(),
-                ner_runtime=runtime,
-                registry=registry,
+                provider=context["provider"],
+                ner_runtime=context["runtime"],
+                registry=registry if registry is not None else [],
                 event=lambda event: self._progress(job_id, doc_id, event),
             )
             result = ExtractionResult.model_validate(result)
-            self._publish_result(job_id, doc_id, document, result, store)
+            await self._publish_result(
+                job_id, doc_id, document, result, context
+            )
         except Exception as exc:
             # Raw exception text may hold URLs or secrets; it stays in the
             # DEBUG traceback of the log file.
@@ -1153,9 +1233,52 @@ class JobManager:
                 **branch_updates,
             )
 
-    def _publish_result(self, job_id, doc_id, document, result, store):
+    async def _already_processed(self, job, document, store) -> bool:
+        """A complete extraction of this exact version is already in Neo4j."""
+        lookup = getattr(store, "processed_versions", None)
+        if job["mode"] == "none" or lookup is None:
+            return False
+        try:
+            found = await aio.call(lookup, [document.document_version_id])
+        except Exception as exc:
+            # The check only saves money; it never blocks processing.
+            logger.debug("Processed-version lookup failed: %s", exc)
+            return False
+        return document.document_version_id in found
+
+    async def _skip(self, job_id, doc_id, document) -> None:
+        await asyncio.to_thread(
+            _write_json,
+            self.directory / job_id / "results" / f"{doc_id}.json",
+            {
+                "document": document.model_dump(mode="json"),
+                "extraction": None,
+                "skipped": "already_processed",
+            },
+        )
+        logger.info(
+            "Job %s document %s already processed; skipped",
+            job_id,
+            doc_id,
+        )
+        self._update_document(
+            job_id,
+            doc_id,
+            title=document.title,
+            source_id=document.source.record_id,
+            source_coverage=document.coverage,
+            status="succeeded",
+            stage="already_processed",
+            llm_status="skipped",
+            gliner_status="skipped",
+            result_ready=True,
+            finished_at=_now(),
+        )
+
+    async def _publish_result(self, job_id, doc_id, document, result, context):
         stage = "storage"
         job = self._jobs[job_id]
+        store = context["store"]
         try:
             llm_status = (
                 result.run.status
@@ -1169,17 +1292,19 @@ class JobManager:
                 if job["mode"] == "gliner"
                 else "disabled"
             )
-            stage = "storage"
             body = {
                 "document": document.model_dump(mode="json"),
                 "extraction": result.model_dump(mode="json"),
             }
-            _write_json(
-                self.directory / job_id / "results" / f"{doc_id}.json", body
+            await asyncio.to_thread(
+                _write_json,
+                self.directory / job_id / "results" / f"{doc_id}.json",
+                body,
             )
             self._update_document(
                 job_id,
                 doc_id,
+                force=True,
                 result_ready=True,
                 stage="publication",
                 assertions_count=len(result.assertions),
@@ -1192,11 +1317,13 @@ class JobManager:
                 ),
             )
             stage = "publication"
-            with self._publication_lock:
+            # One writer at a time keeps concept MERGEs of concurrent
+            # documents from deadlocking in Neo4j.
+            async with context["publication"]:
                 if job["mode"] == "none":
-                    store.write_document(document)
+                    await aio.call(store.write_document, document)
                 else:
-                    store.write_processed(document, result)
+                    await aio.call(store.write_processed, document, result)
             status = (
                 result.run.status
                 if result.run.status in {"succeeded", "partial", "failed"}

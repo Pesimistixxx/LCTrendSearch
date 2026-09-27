@@ -9,6 +9,9 @@ from lctrend.core.logging_config import remove_handlers
 def isolated_log_file(monkeypatch, tmp_path):
     """Keep CLI runs from writing to the project's logs/ directory."""
     monkeypatch.setenv("LCTREND_LOG_FILE", str(tmp_path / "lctrend.log"))
+    # Offline tests never call the embeddings API; tests of the semantic
+    # layer inject a fake deduplicator.
+    monkeypatch.setenv("DEDUP_IN_LLM", "0")
     yield
     for name in ("lctrend", "frontend.server"):
         logger = logging.getLogger(name)

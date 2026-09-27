@@ -195,3 +195,15 @@ def test_explicit_cost_of_technology_is_kept():
     items = extract_economic_evidence(*data)
     assert len(items) == 1
     assert items[0].amount_text == "$10"
+
+
+def test_amounts_are_read_with_scale_words_and_ambiguity_is_not_guessed():
+    from lctrend.core.config import load_catalog
+    from lctrend.extraction.economics import amount_value
+
+    scales = load_catalog("extraction")["economics"]["scales"]
+    assert amount_value("$5 million", scales) == 5e6
+    assert amount_value("1,5 млрд руб", scales) == 1.5e9
+    assert amount_value("1 000 000 USD", scales) == 1e6
+    assert amount_value("$1,200,000", scales) == 1.2e6
+    assert amount_value("1.2.3 EUR", scales) is None

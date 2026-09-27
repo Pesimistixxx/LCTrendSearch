@@ -1,12 +1,34 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "explicit_aliases_note": "Curated equivalences only: an abbreviation is listed when it has one dominant meaning in technology texts. Mention and concept kinds must still be compatible.",
   "explicit_aliases": [
-    {"kind": "Technology", "names": ["NLP", "natural language processing"]}
+    {"kind": "Technology", "names": ["NLP", "natural language processing", "обработка естественного языка"]},
+    {"kind": "Technology", "names": ["LLM", "LLMs", "large language model", "large language models", "большая языковая модель", "большие языковые модели"]},
+    {"kind": "Technology", "names": ["RAG", "retrieval-augmented generation", "retrieval augmented generation"]},
+    {"kind": "Technology", "names": ["GNN", "graph neural network", "graph neural networks", "графовая нейронная сеть"]},
+    {"kind": "Technology", "names": ["CNN", "convolutional neural network", "convolutional neural networks", "свёрточная нейронная сеть", "сверточная нейронная сеть"]},
+    {"kind": "Technology", "names": ["GAN", "generative adversarial network", "generative adversarial networks"]},
+    {"kind": "Technology", "names": ["ViT", "vision transformer", "vision transformers"]},
+    {"kind": "Method", "names": ["reinforcement learning", "обучение с подкреплением"]},
+    {"kind": "Method", "names": ["RLHF", "reinforcement learning from human feedback"]},
+    {"kind": "Method", "names": ["federated learning", "федеративное обучение"]},
+    {"kind": "Method", "names": ["LoRA", "low-rank adaptation"]},
+    {"kind": "Technology", "names": ["IoT", "internet of things", "интернет вещей"]},
+    {"kind": "Technology", "names": ["digital twin", "digital twins", "цифровой двойник", "цифровые двойники"]},
+    {"kind": "Technology", "names": ["solid-state battery", "solid-state batteries", "all-solid-state battery", "твердотельный аккумулятор"]}
   ],
   "semantic": {
+    "use_in_llm": true,
+    "use_in_llm_note": "In llm/hybrid modes a semantic match never merges: the mention gets its own provisional concept and the match is kept as a review candidate (POSSIBLY_SAME_AS), so the claim is not lost.",
+    "embedded_kinds": ["Technology", "Method", "Task", "Problem", "ApplicationContext", "Material"],
     "cosine_threshold": 0.78,
     "decision_threshold": 0.80,
-    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_provider": "gigachat",
+    "embedding_models": {
+      "gigachat": "EmbeddingsGigaR",
+      "transformers": "sentence-transformers/all-MiniLM-L6-v2"
+    },
+    "embedding_batch_size": 64,
     "decision_model": "cross-encoder/stsb-distilroberta-base",
     "max_length": 128
   }

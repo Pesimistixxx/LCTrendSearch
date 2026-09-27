@@ -5,6 +5,7 @@
     {"name": "Machine learning", "parent_name": "Artificial intelligence", "aliases": ["machine learning", "deep learning"]},
     {"name": "Bioinformatics", "parent_name": "Life sciences", "aliases": ["bioinformatics", "computational biology", "genomics"]},
     {"name": "Edge computing", "parent_name": "Computer systems", "aliases": ["edge computing", "fog computing", "edge ai"]},
+    {"name": "Fintech", "parent_name": "Economics", "aliases": ["fintech", "financial technology", "digital payments", "digital banking"]},
     {"name": "Artificial intelligence", "parent_name": null, "aliases": ["artificial intelligence"]},
     {"name": "Robotics", "parent_name": "Engineering", "aliases": ["robotics", "robotic"]},
     {"name": "Cybersecurity", "parent_name": "Computer systems", "aliases": ["cybersecurity", "computer security", "information security"]},
@@ -12,13 +13,20 @@
     {"name": "Semiconductors", "parent_name": "Physical sciences", "aliases": ["semiconductor", "integrated circuit"]},
     {"name": "Energy technology", "parent_name": "Engineering", "aliases": ["renewable energy", "energy storage", "smart grid"]}
   ],
+  "crawl_directions": ["Artificial intelligence", "Robotics", "Edge computing", "Fintech"],
   "platforms": {
-    "openalex": {"name": "OpenAlex", "source_type": "scholarly_api", "source_family": "scholarly", "reliability_tier": 3, "api_base": "https://api.openalex.org/works", "organization_types": {"education": "university", "company": "company"}},
+    "openalex": {"name": "OpenAlex", "source_type": "scholarly_api", "source_family": "scholarly", "reliability_tier": 3, "api_base": "https://api.openalex.org/works", "organization_types": {"education": "university", "company": "company", "funder": "funder"}, "fallback_domain": {"name_field": "subfield", "parent_field": "field"}},
     "github": {"name": "GitHub", "source_type": "code_host", "source_family": "code", "reliability_tier": 2, "api_base": "https://api.github.com/repos", "public_base": "https://github.com", "api_version": "2022-11-28", "releases_per_page": 20},
     "pypi": {"name": "PyPI", "source_type": "package_registry", "source_family": "package_registry", "reliability_tier": 2, "api_base": "https://pypi.org/pypi", "public_base": "https://pypi.org/project", "simple_index": "https://pypi.org/simple/", "simple_media_type": "application/vnd.pypi.simple.v1+json", "people_fields": {"author": "author", "maintainer": "maintainer"}},
-    "epo": {"name": "EPO OPS", "source_type": "patent_api", "source_family": "patent", "reliability_tier": 1, "people_tags": {"applicant": "applicant", "inventor": "inventor"}, "name_tags": ["name", "last-name"]}
+    "epo": {"name": "EPO OPS", "source_type": "patent_api", "source_family": "patent", "reliability_tier": 1, "people_tags": {"applicant": "applicant", "inventor": "inventor"}, "name_tags": ["name", "last-name"], "preferred_name_format": "epodoc", "text_sections": {"claims": "claim", "description": "p"}}
   },
-  "http": {"user_agent": "LCTrendSearch/0.1 (+local research project)", "timeout_seconds": 30},
+  "http": {"user_agent": "LCTrendSearch/0.1 (+local research project)", "timeout_seconds": 30, "max_attempts": 5, "backoff_seconds": 1.0, "max_backoff_seconds": 60.0, "retry_statuses": [408, 425, 429, 500, 502, 503, 504], "max_rate_limit_wait_seconds": 900},
   "markdown": {"max_chars": 1000, "overlap_chars": 150},
-  "openalex_topic_fields": ["subfield", "field", "domain"]
+  "openalex_topic_fields": ["subfield", "field", "domain"],
+  "organization_type_note": "Name patterns type organizations that a source leaves untyped (patent applicants, GitHub owners). University is checked first.",
+  "organization_type_patterns": {
+    "university": "\\b(?:universit\\w*|univ|college|polytechnic\\w*|institute of technology|school of \\w+|университет\\w*|вуз)\\b",
+    "company": "(?:\\b(?:inc|incorporated|corp|corporation|company|co|ltd|limited|llc|llp|plc|gmbh|ag|kg|kgaa|se|sa|sas|sarl|srl|spa|nv|bv|ab|asa|oy|oyj|kk|pte|pty|holdings?|technologies|aktiengesellschaft)\\b\\.?|\\b(?:ооо|оао|зао|пао|ао)\\b|株式会社)"
+  },
+  "local_files": {"sidecar_suffix": ".meta.json", "cyrillic_share_for_ru": 0.3, "english_markers": ["the", "and", "of", "with", "for"]}
 }

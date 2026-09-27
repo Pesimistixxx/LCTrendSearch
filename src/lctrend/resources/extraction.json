@@ -50,6 +50,7 @@
     },
     "non_monetary_cost": "\\b(?:(?:computational|computation|inference|time|memory|energy|communication|algorithmic|search)\\s+(?:costs?|expenses?)|вычислительн\\w*\\s+затрат\\w*|затрат\\w*\\s+(?:памяти|энергии|времени))\\b",
     "money_pattern": "(?:[$€£₽]\\s?\\d[\\d\\s.,]*(?:\\s?(?:million|billion|млн|млрд))?|\\d[\\d\\s.,]*(?:\\s?(?:million|billion|млн|млрд))?\\s?(?:USD|EUR|RUB|GBP|доллар\\w*|евро|рубл\\w*))",
+    "scales": {"thousand": 1e3, "тыс": 1e3, "million": 1e6, "млн": 1e6, "billion": 1e9, "млрд": 1e9},
     "currencies": {"$": "USD", "usd": "USD", "€": "EUR", "eur": "EUR", "£": "GBP", "gbp": "GBP", "₽": "RUB", "rub": "RUB", "руб": "RUB", "доллар": "USD", "евро": "EUR"}
   }
 }

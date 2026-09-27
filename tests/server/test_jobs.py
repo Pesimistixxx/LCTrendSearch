@@ -173,7 +173,8 @@ def test_files_have_truthful_progress_and_persistent_results(tmp_path):
         assert final["counts"]["partial"] == 2
         assert final["documents"][0]["llm_status"] == "partial"
         assert final["documents"][0]["gliner_status"] == "failed"
-        assert providers[0] is not providers[1]
+        # One provider per job: one token, one rate limit, one ladder.
+        assert providers[0] is providers[1]
         assert instance.fixture_store.events[:2] == ["verify", "schema"]
         result = instance.get_result(
             job["job_id"], final["documents"][0]["doc_id"]
@@ -583,7 +584,7 @@ def test_result_lookup_cannot_escape_job_directory_and_snapshots_are_detached(
 
 @pytest.mark.parametrize(
     "workers,mode",
-    [(0, "hybrid"), (5, "hybrid"), (True, "hybrid"), (1, "search")],
+    [(0, "hybrid"), (17, "hybrid"), (True, "hybrid"), (1, "search")],
 )
 def test_invalid_worker_or_mode_is_rejected_before_scheduling(
     tmp_path, workers, mode

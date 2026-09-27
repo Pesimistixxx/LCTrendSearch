@@ -16,9 +16,10 @@ from threading import Event, RLock
 from time import sleep
 from uuid import uuid4
 
+from lctrend.core import aio
 from lctrend.core.config import load_catalog
 
-from .jobs import _error
+from .jobs import _error, default_workers
 
 
 def _now():
@@ -29,7 +30,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
-def _hydrate(item):
+async def _hydrate(item):
     from lctrend.ingest.connectors import fetch_github, fetch_pypi
 
     if item["source"] == "github":
@@ -40,9 +41,9 @@ def _hydrate(item):
             and "commit" in payload
         ):
             return payload
-        return fetch_github(item["source_id"], os.getenv("GITHUB_TOKEN"))
+        return await fetch_github(item["source_id"], os.getenv("GITHUB_TOKEN"))
     if item["source"] == "pypi":
-        return item.get("payload") or fetch_pypi(item["source_id"])
+        return item.get("payload") or await fetch_pypi(item["source_id"])
     return item["payload"]
 
 
@@ -131,6 +132,14 @@ class CrawlManager:
                 self._db.execute(
                     f"ALTER TABLE materials ADD COLUMN {column} TEXT"
                 )
+        crawl_columns = {
+            row[1] for row in self._db.execute("PRAGMA table_info(crawls)")
+        }
+        if "max_per_source" not in crawl_columns:
+            # Materials per direction and search source; NULL is unlimited.
+            self._db.execute(
+                "ALTER TABLE crawls ADD COLUMN max_per_source INTEGER"
+            )
         self._db.commit()
         self._discoverers = (
             discoverers
@@ -141,11 +150,15 @@ class CrawlManager:
         self._pypi_discoverer = (
             pypi_discoverer or discover_pypi_from_github_payload
         )
-        self._domains = (
-            domains
-            if domains is not None
-            else load_catalog("sources")["domains"]
-        )
+        if domains is None:
+            catalog = load_catalog("sources")
+            selected = catalog.get("crawl_directions")
+            domains = [
+                domain
+                for domain in catalog["domains"]
+                if selected is None or domain["name"] in selected
+            ]
+        self._domains = domains
         self._batch_size = batch_size
         self._processed_reader = processed_reader or self._read_processed
         self._seeded = False
@@ -158,18 +171,34 @@ class CrawlManager:
             max_workers=1, thread_name_prefix="thematic-crawl"
         )
 
+    def _await(self, function, *args):
+        """Run a sync or async source/graph call from the crawl thread.
+
+        Network calls share the job manager's event loop.
+        """
+        coroutine = aio.call(function, *args)
+        runner = getattr(self.job_manager, "run", None)
+        return runner(coroutine) if runner else aio.run_sync(coroutine)
+
     def _read_processed(self):
         factory = getattr(self.job_manager, "_store_factory", None)
         if factory is None:
-            return
-        store = factory()
-        try:
-            verify = getattr(store, "verify_connectivity", None)
-            if verify is not None:
-                verify()
-            yield from store.processed_materials()
-        finally:
-            store.close()
+            return []
+
+        async def collect():
+            store = await aio.call(factory)
+            try:
+                verify = getattr(store, "verify_connectivity", None)
+                if verify is not None:
+                    await aio.call(verify)
+                materials = store.processed_materials()
+                if hasattr(materials, "__aiter__"):
+                    return [item async for item in materials]
+                return list(materials)
+            finally:
+                await aio.call(store.close)
+
+        return self._await(collect)
 
     def append_seed(self, materials):
         from lctrend.ingest.discovery import material_identity
@@ -265,11 +294,17 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             raise KeyError(crawl_id)
         return row
 
-    def create(self, topic=""):
+    def create(self, topic="", limit=None):
         if not isinstance(topic, str) or len(topic) > 1000:
             raise ValueError(
                 "topic must be a string of at most 1000 characters"
             )
+        if limit is not None and (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 10000
+        ):
+            raise ValueError("limit must be 1..10000")
         topic = topic.strip()
         domains = [{"name": topic, "aliases": []}] if topic else self._domains
         if not domains:
@@ -279,8 +314,10 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 raise RuntimeError("Crawl manager is closed")
             crawl_id, created = uuid4().hex, _now()
             self._db.execute(
-                "INSERT INTO crawls VALUES (?,?,?,'queued','queued',NULL,?,?)",
-                (crawl_id, topic, _json(domains), created, created),
+                "INSERT INTO crawls(crawl_id,topic,domains_json,status,"
+                "stage,error_json,created_at,updated_at,max_per_source) "
+                "VALUES (?,?,?,'queued','queued',NULL,?,?,?)",
+                (crawl_id, topic, _json(domains), created, created, limit),
             )
             for domain in domains:
                 seen = set()
@@ -391,6 +428,11 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                             if row["status"] == "running"
                             else "pending"
                         )
+                    elif any(
+                        item.get("code") == "user_limit"
+                        for item in limitations
+                    ):
+                        status = "capped"
                     else:
                         status = "complete" if complete else "limited"
                     # Overlapping domain/alias queries cannot have their totals
@@ -453,7 +495,32 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 ],
                 "counts": self._counts(crawl_id),
                 "sources": sources,
+                "limit": row["max_per_source"],
+                "directions": self._direction_counts(crawl_id),
             }
+
+    def _direction_counts(self, crawl_id):
+        """Discovered materials and their states per direction and source."""
+        rows = self._db.execute(
+            "SELECT l.domain,l.source,m.status,COUNT(*) n FROM links l "
+            "JOIN materials m ON m.material_id=l.material_id "
+            "WHERE l.crawl_id=? GROUP BY l.domain,l.source,m.status",
+            (crawl_id,),
+        ).fetchall()
+        directions = {
+            domain["name"]: {}
+            for domain in json.loads(self._known(crawl_id)["domains_json"])
+        }
+        for row in rows:
+            counts = directions.setdefault(row["domain"], {}).setdefault(
+                row["source"], {"discovered": 0}
+            )
+            counts[row["status"]] = counts.get(row["status"], 0) + row["n"]
+            counts["discovered"] += row["n"]
+        return [
+            {"name": name, "sources": sources}
+            for name, sources in directions.items()
+        ]
 
     def list_crawls(self):
         with self._lock:
@@ -667,14 +734,26 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             ).fetchone()
         if stream is None:
             return False
+        remaining = self._remaining(crawl_id, stream["domain"], source)
+        if remaining == 0:
+            with self._lock, self._db:
+                self._close_capped(crawl_id, stream["domain"], source)
+            return True
         try:
-            page = self._discoverers[source](stream["query"], stream["cursor"])
+            page = self._await(
+                self._discoverers[source], stream["query"], stream["cursor"]
+            )
             items = page["items"]
             cursor = page.get("next_cursor")
             if cursor is not None and str(cursor) == stream["cursor"]:
                 raise ValueError("Repeated discovery cursor")
+            if remaining is not None:
+                items = items[:remaining]
             with self._lock, self._db:
                 self._enqueue(crawl_id, stream["domain"], items)
+                if self._remaining(crawl_id, stream["domain"], source) == 0:
+                    self._close_capped(crawl_id, stream["domain"], source)
+                    return True
                 limitations = json.loads(stream["limitations_json"])
                 for limitation in page.get("limitations", []):
                     if limitation not in limitations:
@@ -720,6 +799,53 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     ),
                 )
         return True
+
+    def _remaining(self, crawl_id, domain, source):
+        """Materials still allowed for a direction/source; None: no limit.
+
+        Already processed duplicates count too: they are part of the
+        direction's coverage even though they are not analysed again.
+        """
+        with self._lock:
+            limit = self._known(crawl_id)["max_per_source"]
+            if limit is None:
+                return None
+            used = self._db.execute(
+                "SELECT COUNT(*) FROM links WHERE crawl_id=? AND domain=? "
+                "AND source=?",
+                (crawl_id, domain, source),
+            ).fetchone()[0]
+        return max(limit - used, 0)
+
+    def _close_capped(self, crawl_id, domain, source):
+        limit = self._known(crawl_id)["max_per_source"]
+        limitation = {
+            "code": "user_limit",
+            "limit": limit,
+            "message": (
+                f"Достигнут лимит запуска: {limit} материалов на направление."
+            ),
+        }
+        for stream in self._db.execute(
+            "SELECT * FROM streams WHERE crawl_id=? AND domain=? AND "
+            "source=? AND status='pending'",
+            (crawl_id, domain, source),
+        ).fetchall():
+            limitations = json.loads(stream["limitations_json"])
+            if limitation not in limitations:
+                limitations.append(limitation)
+            self._db.execute(
+                "UPDATE streams SET status='done',complete=0,"
+                "limitations_json=? WHERE crawl_id=? AND domain=? AND "
+                "query=? AND source=?",
+                (
+                    _json(limitations),
+                    crawl_id,
+                    domain,
+                    stream["query"],
+                    source,
+                ),
+            )
 
     def _process_pending(self, crawl_id):
         with self._lock, self._db:
@@ -781,7 +907,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     crawl_id, "running", f"hydration:{record['source']}"
                 )
                 payload = (
-                    self._hydrator(item)
+                    self._await(self._hydrator, item)
                     if cached is None and not record["hydrated"]
                     else item["payload"]
                 )
@@ -844,7 +970,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     first["source"],
                     payloads,
                     direction=self._known(crawl_id)["topic"],
-                    workers=1,
+                    workers=default_workers(),
                     on_created=register,
                     cached_results=cached_results,
                 )
@@ -911,7 +1037,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 else None
             )
             try:
-                payload = self._hydrator(item)
+                payload = self._await(self._hydrator, item)
                 refs = self._pypi_discoverer(payload)
                 with self._lock, self._db:
                     self._db.execute(

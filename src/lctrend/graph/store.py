@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+import re
+from typing import Any, Dict, Iterator, List, Tuple
 
+from ..core.aio import resolve
 from ..core.config import cypher_identifier, load_catalog, resource_path
 from ..core.models import (
+    SEMANTIC_CANDIDATE_METHOD,
     Concept,
     ConceptKind,
     ConceptName,
@@ -34,6 +37,41 @@ def _chunk_date(document: DocumentEnvelope, chunk_id: str) -> Any:
         if chunk
         else None
     ) or _version_date(document)
+
+
+BATCH_SIZE = 500
+COUNTRY_CODE = re.compile(r"[A-Z]{2}")
+
+
+def _batches(rows: List[Dict[str, Any]]) -> Iterator[List[Dict[str, Any]]]:
+    for start in range(0, len(rows), BATCH_SIZE):
+        yield rows[start : start + BATCH_SIZE]
+
+
+async def _run(tx: Any, query: str, **parameters: Any) -> None:
+    """Run one statement in a (sync or async) transaction and consume it."""
+    result = await resolve(tx.run(query, **parameters))
+    await resolve(result.consume())
+
+
+async def _single(tx: Any, query: str, **parameters: Any) -> Any:
+    result = await resolve(tx.run(query, **parameters))
+    return await resolve(result.single())
+
+
+async def _records(session: Any, query: str, **parameters: Any) -> list:
+    result = await resolve(session.run(query, **parameters))
+    if hasattr(result, "__aiter__"):
+        return [record async for record in result]
+    return list(result)
+
+
+def _data(record: Any) -> Dict[str, Any]:
+    return record.data() if hasattr(record, "data") else dict(record)
+
+
+# Kinds are node labels; a label scan per kind replaces a scan of all nodes.
+CONCEPT_LABELS = [kind.value for kind in ConceptKind]
 
 
 def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
@@ -72,29 +110,30 @@ class GraphStore:
         self, uri: str, user: str, password: str, database: str = "neo4j"
     ) -> None:
         try:
-            from neo4j import GraphDatabase
+            from neo4j import AsyncGraphDatabase
         except ImportError as exc:
             raise RuntimeError(
                 "Install the project first: pip install -e ."
             ) from exc
-        self._driver = GraphDatabase.driver(uri, auth=(user, password))
+        self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
         self._database = database
+        self._vector_indexes: set = set()
         logger.debug("Neo4j driver for %s, database %s", uri, database)
 
-    def close(self) -> None:
-        self._driver.close()
+    async def close(self) -> None:
+        await resolve(self._driver.close())
 
-    def verify_connectivity(self) -> None:
-        self._driver.verify_connectivity()
+    async def verify_connectivity(self) -> None:
+        await resolve(self._driver.verify_connectivity())
 
-    def __enter__(self) -> "GraphStore":
+    async def __aenter__(self) -> "GraphStore":
         return self
 
-    def __exit__(self, *_: object) -> None:
-        self.close()
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
 
-    def ensure_schema(self) -> None:
-        with self._driver.session(database=self._database) as session:
+    async def ensure_schema(self) -> None:
+        async with self._driver.session(database=self._database) as session:
             for query in (
                 resource_path("schema", ".cypher")
                 .read_text(encoding="utf-8")
@@ -102,10 +141,10 @@ class GraphStore:
             ):
                 if not query.strip():
                     continue
-                session.run(query).consume()
+                await _run(session, query)
         logger.debug("Neo4j schema ensured")
 
-    def processed_materials(self):
+    async def processed_materials(self):
         """Stream prior extractions into the crawler's deduplication ledger.
 
         A document-only import is not a completed extraction. Article,
@@ -126,17 +165,17 @@ class GraphStore:
                    d.external_ids AS external_ids,
                    collect(DISTINCT run.status) AS statuses
         """
-        with self._driver.session(database=self._database) as session:
+        async with self._driver.session(database=self._database) as session:
             labels = {
                 row["label"]
-                for row in session.run(
-                    "CALL db.labels() YIELD label RETURN label"
+                for row in await _records(
+                    session, "CALL db.labels() YIELD label RETURN label"
                 )
             }
             if not {"ProcessingRun", "Source", "Document"} <= labels:
                 return
-            for record in session.run(query):
-                row = record.data()
+            rows = [_data(record) for record in await _records(session, query)]
+            for row in rows:
                 source = row["source"].removeprefix("source:")
                 source_id = row["source_id"]
                 payload = {}
@@ -182,14 +221,15 @@ class GraphStore:
                     ),
                 }
 
-    def write_document(self, document: DocumentEnvelope) -> None:
-        with self._driver.session(database=self._database) as session:
-            session.execute_write(self._write_document, document)
+    async def write_document(self, document: DocumentEnvelope) -> None:
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(self._write_document, document)
         logger.debug("Document %s written", document.document_version_id)
 
     @staticmethod
-    def _write_document(tx: Any, document: DocumentEnvelope) -> None:
-        tx.run(
+    async def _write_document(tx: Any, document: DocumentEnvelope) -> None:
+        await _run(
+            tx,
             """
             MERGE (s:Source {source_id: $source.source_id})
             SET s.name = $source.name, s.source_type = $source.source_type,
@@ -259,32 +299,35 @@ class GraphStore:
             quality_status=document.quality_status,
             metadata_json=json_value(document.metadata),
             metrics_json=json_value(document.metrics),
-        ).consume()
+        )
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (d:Document {document_id: $document_id})
                   -[r:ASSOCIATED_WITH_COUNTRY|WRITTEN_IN|JURISDICTION]->()
             DELETE r
             """,
             document_id=document.document_id,
-        ).consume()
-        tx.run(
+        )
+        await _run(
+            tx,
             """
             MATCH (d:Document {document_id: $document_id})-[r:ABOUT_DOMAIN]->()
             DELETE r
             """,
             document_id=document.document_id,
-        ).consume()
-        tx.run(
+        )
+        await _run(
+            tx,
             """
             MATCH (d:Document {document_id: $document_id})
                   -[r:ASSOCIATED_WITH_ORGANIZATION|HAS_AFFILIATION
-                      |OWNED_BY|APPLIED_BY]->()
+                      |OWNED_BY|APPLIED_BY|FUNDED_BY]->()
             DELETE r
             """,
             document_id=document.document_id,
-        ).consume()
+        )
 
         for country in document.countries:
             relationship = (
@@ -292,7 +335,8 @@ class GraphStore:
                 if country.role == "jurisdiction"
                 else "WRITTEN_IN"
             )
-            tx.run(
+            await _run(
+                tx,
                 f"""
                 MATCH (d:Document {{document_id: $document_id}})
                 MERGE (c:Country {{country_id: $country_id}})
@@ -310,10 +354,11 @@ class GraphStore:
                 document_id=document.document_id,
                 observed_at=document.published_at,
                 **country.model_dump(),
-            ).consume()
+            )
 
         for domain in document.domains:
-            tx.run(
+            await _run(
+                tx,
                 """
                 MATCH (d:Document {document_id: $document_id})
                 MERGE (x:Domain {domain_id: $domain_id})
@@ -334,9 +379,10 @@ class GraphStore:
                 external_ids=[
                     item.external_id for item in domain.external_ids
                 ],
-            ).consume()
+            )
             if domain.parent_name:
-                tx.run(
+                await _run(
+                    tx,
                     """
                     MATCH (child:Domain {domain_id: $domain_id})
                     MERGE (parent:Domain {domain_id: $parent_id})
@@ -346,10 +392,10 @@ class GraphStore:
                     domain_id=domain.domain_id,
                     parent_id=stable_id("domain", domain.parent_name),
                     parent_name=domain.parent_name,
-                ).consume()
+                )
 
+        schema = load_catalog("graph")
         for organization in document.organizations:
-            schema = load_catalog("graph")
             relationship = cypher_identifier(
                 schema["organization_relationships"].get(
                     organization.role, "HAS_AFFILIATION"
@@ -360,7 +406,8 @@ class GraphStore:
             )
             if organization_label:
                 organization_label = cypher_identifier(organization_label)
-            tx.run(
+            await _run(
+                tx,
                 f"""
                 MATCH (d:Document {{document_id: $document_id}})
                 MERGE (o:Organization {{organization_id: $organization_id}})
@@ -384,35 +431,42 @@ class GraphStore:
                 external_ids=[
                     item.external_id for item in organization.external_ids
                 ],
-            ).consume()
+            )
             if organization_label:
-                tx.run(
+                await _run(
+                    tx,
                     f"""
                     MATCH (o:Organization
                            {{organization_id: $organization_id}})
                     SET o:{organization_label}
                     """,
                     organization_id=organization.organization_id,
-                ).consume()
+                )
             if organization.country_code:
-                tx.run(
+                # The country need not be one of the document's countries.
+                await _run(
+                    tx,
                     """
                     MATCH (o:Organization {organization_id: $organization_id})
-                    MATCH (c:Country {code: $country_code})
+                    MERGE (c:Country {country_id: $country_id})
+                    ON CREATE SET c.code = $country_code,
+                        c.name = $country_code
                     MERGE (o)-[:LOCATED_IN]->(c)
                     """,
                     organization_id=organization.organization_id,
+                    country_id=stable_id("country", organization.country_code),
                     country_code=organization.country_code,
-                ).consume()
+                )
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (d:Document {document_id: $document_id})
                   -[r:CONTRIBUTED_BY]->()
             DELETE r
             """,
             document_id=document.document_id,
-        ).consume()
+        )
 
         for contributor in document.contributors:
             query = """
@@ -432,7 +486,8 @@ class GraphStore:
                     ELSE coalesce(r.roles, []) + $role END,
                     r.observed_at = $observed_at
                 """
-            tx.run(
+            await _run(
+                tx,
                 query,
                 document_id=document.document_id,
                 observed_at=document.published_at,
@@ -442,9 +497,10 @@ class GraphStore:
                 **contributor.model_dump(
                     exclude={"external_ids", "affiliation_ids"}
                 ),
-            ).consume()
+            )
             for organization_id in contributor.affiliation_ids:
-                tx.run(
+                await _run(
+                    tx,
                     """
                     MATCH (c:Contributor {contributor_id: $contributor_id})
                     MATCH (o:Organization {organization_id: $organization_id})
@@ -454,34 +510,45 @@ class GraphStore:
                     contributor_id=contributor.contributor_id,
                     organization_id=organization_id,
                     observed_at=document.published_at,
-                ).consume()
+                )
 
-        for chunk in document.chunks:
-            tx.run(
+        # One statement per batch: a full text has hundreds of chunks.
+        for batch in _batches(
+            [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "kind": chunk.kind,
+                    "text": chunk.text,
+                    "order": chunk.order,
+                    "section_path": chunk.section_path,
+                    "locator_json": json_value(chunk.locator),
+                    "content_hash": chunk.content_hash,
+                    "parse_status": chunk.parse_status,
+                    "observed_at": _chunk_date(document, chunk.chunk_id),
+                }
+                for chunk in document.chunks
+            ]
+        ):
+            await _run(
+                tx,
                 """
                 MATCH (v:DocumentVersion {document_version_id: $version_id})
-                MERGE (c:Chunk {chunk_id: $chunk_id})
-                SET c.kind = $kind, c.text = $text, c.order = $order,
-                    c.section_path = $section_path,
-                    c.locator_json = $locator_json,
-                    c.content_hash = $content_hash,
-                    c.parse_status = $parse_status,
-                    c.created_at = $observed_at
+                UNWIND $rows AS row
+                MERGE (c:Chunk {chunk_id: row.chunk_id})
+                SET c.kind = row.kind, c.text = row.text, c.order = row.order,
+                    c.section_path = row.section_path,
+                    c.locator_json = row.locator_json,
+                    c.content_hash = row.content_hash,
+                    c.parse_status = row.parse_status,
+                    c.created_at = row.observed_at
                 MERGE (v)-[:HAS_CHUNK]->(c)
                 """,
                 version_id=document.document_version_id,
-                observed_at=_chunk_date(document, chunk.chunk_id),
-                chunk_id=chunk.chunk_id,
-                kind=chunk.kind,
-                text=chunk.text,
-                order=chunk.order,
-                section_path=chunk.section_path,
-                locator_json=json_value(chunk.locator),
-                content_hash=chunk.content_hash,
-                parse_status=chunk.parse_status,
-            ).consume()
+                rows=batch,
+            )
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
                   -[active:HAS_CHUNK]->(c:Chunk)
@@ -490,21 +557,66 @@ class GraphStore:
             """,
             version_id=document.document_version_id,
             chunk_ids=[chunk.chunk_id for chunk in document.chunks],
-        ).consume()
+        )
 
-    def write_extraction(
+    async def ensure_vector_indexes(self, result: ExtractionResult) -> None:
+        """Create per-label vector indexes once the dimension is known.
+
+        Schema changes cannot share the write transaction, and a Neo4j
+        without vector support must not block publication.
+        """
+        if not result.concept_embeddings:
+            return
+        dimensions = len(next(iter(result.concept_embeddings.values())))
+        kinds = {
+            concept.concept_id: concept.kind.value
+            for concept in result.concepts
+        }
+        labels = {
+            kinds[concept_id]
+            for concept_id in result.concept_embeddings
+            if concept_id in kinds
+        }
+        async with self._driver.session(database=self._database) as session:
+            for label in sorted(labels - self._vector_indexes):
+                name = re.sub(r"(?<!^)(?=[A-Z])", "_", label).lower()
+                try:
+                    await _run(
+                        session,
+                        f"""
+                        CREATE VECTOR INDEX {name}_embedding IF NOT EXISTS
+                        FOR (n:{cypher_identifier(label)}) ON (n.embedding)
+                        OPTIONS {{indexConfig: {{
+                            `vector.dimensions`: {int(dimensions)},
+                            `vector.similarity_function`: 'cosine'
+                        }}}}
+                        """,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Vector index for %s not created (%s); embeddings "
+                        "are stored without an index",
+                        label,
+                        type(exc).__name__,
+                    )
+                self._vector_indexes.add(label)
+
+    async def write_extraction(
         self, document: DocumentEnvelope, result: ExtractionResult
     ) -> None:
         validate_extraction(document, result)
-        with self._driver.session(database=self._database) as session:
-            session.execute_write(self._write_extraction, document, result)
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(
+                self._write_extraction, document, result
+            )
+        await self.ensure_vector_indexes(result)
         logger.debug(
             "Extraction %s written for %s",
             result.run.run_id,
             document.document_version_id,
         )
 
-    def write_processed(
+    async def write_processed(
         self, document: DocumentEnvelope, result: ExtractionResult
     ) -> None:
         """Publish document and extraction atomically.
@@ -512,8 +624,11 @@ class GraphStore:
         Incomplete runs preserve earlier chunks.
         """
         validate_extraction(document, result)
-        with self._driver.session(database=self._database) as session:
-            session.execute_write(self._write_processed, document, result)
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(
+                self._write_processed, document, result
+            )
+        await self.ensure_vector_indexes(result)
         logger.debug(
             "Document %s and run %s (%s) published",
             document.document_version_id,
@@ -522,29 +637,67 @@ class GraphStore:
         )
 
     @staticmethod
-    def _write_processed(
+    async def _write_processed(
         tx: Any, document: DocumentEnvelope, result: ExtractionResult
     ) -> None:
-        existing = tx.run(
+        existing = await _single(
+            tx,
             (
                 "MATCH (v:DocumentVersion {document_version_id: $version_id}) "
-                "RETURN count(v) AS count"
+                "OPTIONAL MATCH (v)<-[:PROCESSED]-(r:ProcessingRun) "
+                "WHERE r.status = 'succeeded' OR r.published = true "
+                "RETURN count(v) AS count, count(r) AS published"
             ),
             version_id=document.document_version_id,
-        ).single()
-        if result.run.status == "succeeded" or not existing["count"]:
-            GraphStore._write_document(tx, document)
-        GraphStore._write_extraction(tx, document, result)
+        )
+        existing = existing or {}
+        status = result.run.status
+        # A partial run is published when nothing better is active for this
+        # version: at scale one failed packet (e.g. HTTP 429) must not hide a
+        # whole document. A later complete run replaces it; a partial rerun
+        # never replaces an active projection.
+        publish = status == "succeeded" or (
+            status == "partial" and not existing.get("published")
+        )
+        if publish or not existing.get("count"):
+            await resolve(GraphStore._write_document(tx, document))
+        await resolve(
+            GraphStore._write_extraction(tx, document, result, publish)
+        )
 
-    def read_concepts(self) -> List[Concept]:
-        with self._driver.session(database=self._database) as session:
-            records = session.run(
+    async def processed_versions(self, version_ids: List[str]) -> set:
+        """Versions that already have a complete extraction.
+
+        Re-running a query or an overlapping crawl must not pay for the same
+        LLM extraction twice.
+        """
+        if not version_ids:
+            return set()
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(
+                session,
                 """
-                MATCH (c)
-                WHERE c.concept_id IS NOT NULL AND c.kind IS NOT NULL
-                RETURN properties(c) AS properties
-                """
+                UNWIND $ids AS id
+                MATCH (v:DocumentVersion {document_version_id: id})
+                      <-[:PROCESSED]-(r:ProcessingRun)
+                WHERE r.status = 'succeeded' AND r.parser <> 'metadata'
+                RETURN DISTINCT id
+                """,
+                ids=list(version_ids),
             )
+        return {record["id"] for record in records}
+
+    async def read_concepts(self) -> List[Concept]:
+        # Metadata nodes share some labels (Organization, Country, Domain)
+        # but carry no concept_id; UNION removes multi-label duplicates.
+        query = "\nUNION\n".join(
+            f"MATCH (c:{cypher_identifier(label)}) "
+            "WHERE c.concept_id IS NOT NULL AND c.kind IS NOT NULL "
+            "RETURN properties(c) AS properties"
+            for label in CONCEPT_LABELS
+        )
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(session, query)
             concepts = [
                 _concept_from_properties(record["properties"])
                 for record in records
@@ -552,15 +705,16 @@ class GraphStore:
         logger.debug("Read %d concepts from Neo4j", len(concepts))
         return concepts
 
-    def read_training_data(
+    async def read_training_data(
         self,
     ) -> Tuple[
         List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]
     ]:
-        with self._driver.session(database=self._database) as session:
+        async with self._driver.session(database=self._database) as session:
             mentions = [
-                record.data()
-                for record in session.run(
+                _data(record)
+                for record in await _records(
+                    session,
                     """
                 MATCH (t:Technology)<-[m:MENTIONS]-(c:Chunk)
                       <-[:HAS_CHUNK]-(:DocumentVersion)
@@ -568,12 +722,13 @@ class GraphStore:
                 RETURN t.concept_id AS technology_id,
                        t.preferred_label AS technology,
                        d.document_id AS document_id, count(m) AS mentions
-                """
+                """,
                 )
             ]
             documents = [
-                record.data()
-                for record in session.run(
+                _data(record)
+                for record in await _records(
+                    session,
                     """
                 MATCH (d:Document)-[:HAS_VERSION]->(:DocumentVersion)
                       -[:FROM_SOURCE]->(s:Source)
@@ -600,53 +755,87 @@ class GraphStore:
                        d.metrics_json AS metrics_json,
                        countries, companies, universities,
                        collect(DISTINCT domain.domain_id) AS domains
-                """
+                """,
                 )
             ]
             tasks = [
-                record.data()
-                for record in session.run(
+                _data(record)
+                for record in await _records(
+                    session,
                     """
                 MATCH (t:Technology)-[r:SOLVES]->(task:Task)
                 RETURN t.concept_id AS technology_id,
                        task.concept_id AS task_id,
                        r.observed_at AS observed_at
-                """
+                """,
                 )
             ]
         return mentions, documents, tasks
 
+    async def read_signal_data(self) -> List[Dict[str, Any]]:
+        """Dated per-technology signals projected from reviewed text claims:
+        organizations, countries, taxonomy parents, maturity and economics.
+        """
+        query = """
+            MATCH (t:Technology)-[r:DEVELOPED_BY|USED_BY|FUNDED_BY
+                                 |DEVELOPED_IN|SUBTECHNOLOGY_OF]->(x)
+            RETURN t.concept_id AS technology_id, type(r) AS signal,
+                   x.concept_id AS target_id, null AS value,
+                   r.observed_at AS observed_at
+            UNION ALL
+            MATCH (t:Technology)-[r:HAS_MATURITY_EVIDENCE]->(:Chunk)
+            RETURN t.concept_id AS technology_id, 'MATURITY' AS signal,
+                   r.trl AS target_id, r.stage_rank AS value,
+                   r.observed_at AS observed_at
+            UNION ALL
+            MATCH (t:Technology)-[r:HAS_ECONOMIC_EVIDENCE]->(:Chunk)
+            WHERE r.polarity = 'affirmed'
+            RETURN t.concept_id AS technology_id, 'ECONOMIC' AS signal,
+                   r.category AS target_id, r.amount_value AS value,
+                   r.observed_at AS observed_at
+        """
+        async with self._driver.session(database=self._database) as session:
+            return [_data(record) for record in await _records(session, query)]
+
     @staticmethod
-    def _solution_links(
+    def _reviewed(assertion: Any) -> bool:
+        """Only a reviewed, affirmative, reported or observed source claim
+        becomes a direct graph edge.
+        """
+        return (
+            assertion.status == "accepted"
+            and assertion.verification_status == "supported"
+            and assertion.polarity == "affirmed"
+            and assertion.modality in ("reported", "observed")
+        )
+
+    @staticmethod
+    def _projection_links(
         document: DocumentEnvelope, result: ExtractionResult
-    ) -> List[Tuple[str, str, str, str, int, int]]:
-        """A SOLVES edge projects a reviewed, affirmative source claim."""
-        kinds = {item.concept_id: item.kind for item in result.concepts}
-        predicates = load_catalog("graph")["solution_predicates"]
+    ) -> List[Dict[str, Any]]:
+        """Direct edges (SOLVES, DEVELOPED_BY, ...) from reviewed
+        assertions.
+        """
+        kinds = {item.concept_id: item.kind.value for item in result.concepts}
+        projections = load_catalog("graph")["projections"]
         links = []
         seen = set()
         for assertion in result.assertions:
-            if (
-                assertion.predicate not in predicates
-                or assertion.status != "accepted"
-                or assertion.verification_status != "supported"
-                or assertion.polarity != "affirmed"
-                or assertion.modality not in ("reported", "observed")
-            ):
+            rule = projections.get(assertion.predicate)
+            if rule is None or not GraphStore._reviewed(assertion):
                 continue
-            subject, task = (
-                assertion.roles.get("subject"),
-                assertion.roles.get("task"),
-            )
+            source = assertion.roles.get(rule["source_role"])
+            target = assertion.roles.get(rule["target_role"])
             if (
-                kinds.get(subject) != ConceptKind.TECHNOLOGY
-                or kinds.get(task) != ConceptKind.TASK
+                kinds.get(source) not in rule["source_kinds"]
+                or kinds.get(target) not in rule["target_kinds"]
             ):
                 continue
             for evidence in assertion.evidence:
                 key = (
-                    subject,
-                    task,
+                    rule["relationship"],
+                    source,
+                    target,
                     evidence.chunk_id,
                     evidence.start,
                     evidence.end,
@@ -654,37 +843,96 @@ class GraphStore:
                 if key not in seen:
                     seen.add(key)
                     links.append(
-                        (
-                            subject,
-                            task,
-                            evidence.chunk_id,
-                            evidence.quote,
-                            evidence.start,
-                            evidence.end,
-                        )
+                        {
+                            "relationship": rule["relationship"],
+                            "source": source,
+                            "source_label": kinds[source],
+                            "target": target,
+                            "target_label": kinds[target],
+                            "assertion_id": assertion.assertion_id,
+                            "chunk_id": evidence.chunk_id,
+                            "quote": evidence.quote,
+                            "start": evidence.start,
+                            "end": evidence.end,
+                        }
                     )
         return links
 
     @staticmethod
-    def _write_extraction(
-        tx: Any, document: DocumentEnvelope, result: ExtractionResult
+    def _solution_links(
+        document: DocumentEnvelope, result: ExtractionResult
+    ) -> List[Tuple[str, str, str, str, int, int]]:
+        """A SOLVES edge projects a reviewed, affirmative source claim."""
+        return [
+            (
+                link["source"],
+                link["target"],
+                link["chunk_id"],
+                link["quote"],
+                link["start"],
+                link["end"],
+            )
+            for link in GraphStore._projection_links(document, result)
+            if link["relationship"] == "SOLVES"
+        ]
+
+    @staticmethod
+    def _maturity_evidence(result: ExtractionResult) -> List[Dict[str, Any]]:
+        """Reviewed stage statements; the TRL is kept only when quoted."""
+        graph = load_catalog("graph")
+        kinds = {item.concept_id: item.kind.value for item in result.concepts}
+        rows = []
+        for assertion in result.assertions:
+            if assertion.predicate != graph[
+                "maturity_predicate"
+            ] or not GraphStore._reviewed(assertion):
+                continue
+            subject = assertion.roles.get("subject")
+            stage = assertion.qualifiers.get("stage")
+            for evidence in assertion.evidence:
+                rows.append(
+                    {
+                        "subject": subject,
+                        "label": kinds[subject],
+                        "assertion_id": assertion.assertion_id,
+                        "chunk_id": evidence.chunk_id,
+                        "quote": evidence.quote,
+                        "start": evidence.start,
+                        "end": evidence.end,
+                        "stage": stage,
+                        "stage_rank": graph["maturity_stage_rank"].get(stage),
+                        "trl": assertion.qualifiers.get("trl"),
+                    }
+                )
+        return rows
+
+    @staticmethod
+    async def _write_extraction(
+        tx: Any,
+        document: DocumentEnvelope,
+        result: ExtractionResult,
+        publish: bool | None = None,
     ) -> None:
         run = result.run
+        if publish is None:
+            publish = run.status == "succeeded"
         metadata = dict(run.metadata)
-        metadata["publication_status"] = {
-            "succeeded": "published",
-            "failed": "failed",
-        }.get(run.status, "staged")
-        if run.status != "succeeded":
+        metadata["publication_status"] = (
+            ("published" if run.status == "succeeded" else "published_partial")
+            if publish
+            else {"failed": "failed"}.get(run.status, "staged")
+        )
+        if not publish:
             # Preserve reviewable partial results without replacing an earlier
             # good graph.
             metadata["staged_result"] = result.model_dump(
-                exclude={"run"}, mode="json"
+                exclude={"run", "concept_embeddings"}, mode="json"
             )
             metadata["staged_chunks"] = [
                 chunk.model_dump(mode="json") for chunk in document.chunks
             ]
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
             MERGE (r:ProcessingRun {run_id: $run_id})
@@ -692,7 +940,7 @@ class GraphStore:
                 r.model_revision = $model_revision,
                 r.prompt_hash = $prompt_hash,
                 r.config_hash = $config_hash, r.started_at = $started_at,
-                r.status = $status,
+                r.status = $status, r.published = $published,
                 r.metadata_json = $metadata_json, r.trace_json = $trace_json
             MERGE (r)-[:PROCESSED]->(v)
             WITH r
@@ -705,12 +953,14 @@ class GraphStore:
             metadata_json=json.dumps(metadata, ensure_ascii=False),
             trace_json=json.dumps(run.trace, ensure_ascii=False),
             input_chunk_ids=[chunk.chunk_id for chunk in document.chunks],
-        ).consume()
+            published=publish,
+        )
 
-        if run.status != "succeeded":
+        if not publish:
             return
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
                   <-[:PROCESSED]-(prior:ProcessingRun)
@@ -719,11 +969,12 @@ class GraphStore:
             """,
             version_id=document.document_version_id,
             run_id=run.run_id,
-        ).consume()
+        )
 
         for concept in result.concepts:
             label = concept.kind.value
-            tx.run(
+            await _run(
+                tx,
                 """
                 MERGE (c:__LABEL__ {concept_id: $concept_id})
                 SET c.kind = $kind, c.preferred_label = $preferred_label,
@@ -764,9 +1015,88 @@ class GraphStore:
                 ),
                 observed_at=_version_date(document),
                 **concept.model_dump(exclude={"names"}, mode="json"),
-            ).consume()
+            )
 
-        tx.run(
+        # Every concept a mention, role or projection points to is in
+        # result.concepts (validate_extraction), so matches can use a label
+        # and its concept_id constraint instead of scanning all nodes.
+        labels = {
+            concept.concept_id: cypher_identifier(concept.kind.value)
+            for concept in result.concepts
+        }
+        graph = load_catalog("graph")
+
+        for concept in result.concepts:
+            if concept.kind == ConceptKind.COUNTRY and COUNTRY_CODE.fullmatch(
+                concept.preferred_label
+            ):
+                # An ISO-coded country from text is the same country as the
+                # metadata-level one.
+                await _run(
+                    tx,
+                    """
+                    MATCH (c:Country {concept_id: $concept_id})
+                    MERGE (x:Country {country_id: $country_id})
+                    ON CREATE SET x.code = $code, x.name = $code
+                    MERGE (c)-[:SAME_AS]->(x)
+                    """,
+                    concept_id=concept.concept_id,
+                    country_id=stable_id("country", concept.preferred_label),
+                    code=concept.preferred_label,
+                )
+
+        embedded: Dict[str, List[Dict[str, Any]]] = {}
+        for concept_id, vector in result.concept_embeddings.items():
+            if concept_id in labels:
+                embedded.setdefault(labels[concept_id], []).append(
+                    {"concept_id": concept_id, "vector": vector}
+                )
+        for label, rows in embedded.items():
+            for batch in _batches(rows):
+                await _run(
+                    tx,
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (c:{label} {{concept_id: row.concept_id}})
+                    SET c.embedding = row.vector,
+                        c.embedding_model = $model
+                    """,
+                    rows=batch,
+                    model=result.embedding_model,
+                )
+
+        # A semantic match is a review candidate, never an identity.
+        for decision in result.resolutions:
+            if (
+                decision.method != SEMANTIC_CANDIDATE_METHOD
+                or decision.concept_id not in labels
+            ):
+                continue
+            for candidate in decision.candidates:
+                kind = candidate.get("kind")
+                if kind not in {item.value for item in ConceptKind}:
+                    continue
+                await _run(
+                    tx,
+                    f"""
+                    MATCH (a:{labels[decision.concept_id]}
+                           {{concept_id: $source}})
+                    MATCH (b:{cypher_identifier(kind)} {{concept_id: $target}})
+                    MERGE (a)-[r:POSSIBLY_SAME_AS]->(b)
+                    SET r.score = $score, r.cosine = $cosine,
+                        r.method = $method, r.run_id = $run_id,
+                        r.review_status = 'pending'
+                    """,
+                    source=decision.concept_id,
+                    target=candidate["concept_id"],
+                    score=candidate.get("score"),
+                    cosine=candidate.get("cosine"),
+                    method=decision.method,
+                    run_id=run.run_id,
+                )
+
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
                   -[:HAS_CHUNK]->(c:Chunk)
@@ -774,38 +1104,45 @@ class GraphStore:
             DELETE r
             """,
             version_id=document.document_version_id,
-        ).consume()
+        )
 
-        tx.run(
-            """
-            MATCH ()-[r:SOLVES {document_version_id: $version_id}]->()
-            DELETE r
-            """,
-            version_id=document.document_version_id,
-        ).consume()
+        for projection in graph["projections"].values():
+            relationship = cypher_identifier(projection["relationship"])
+            await _run(
+                tx,
+                f"""
+                MATCH ()-[r:{relationship}]->()
+                WHERE r.document_version_id = $version_id
+                DELETE r
+                """,
+                version_id=document.document_version_id,
+            )
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
                   -[:HAS_CHUNK]->(chunk:Chunk)
-            MATCH ()-[r:HAS_ECONOMIC_EVIDENCE]->(chunk)
+            MATCH ()-[r:HAS_ECONOMIC_EVIDENCE|HAS_MATURITY_EVIDENCE]->(chunk)
             DELETE r
             """,
             version_id=document.document_version_id,
-        ).consume()
+        )
 
-        tx.run(
+        await _run(
+            tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
                   -[active:HAS_ASSERTION]->(:Assertion)
             DELETE active
             """,
             version_id=document.document_version_id,
-        ).consume()
+        )
 
         decisions = {
             decision.mention_id: decision for decision in result.resolutions
         }
+        mention_rows: Dict[str, List[Dict[str, Any]]] = {}
         for mention in result.mentions:
             decision = decisions.get(mention.mention_id)
             if (
@@ -814,65 +1151,100 @@ class GraphStore:
                 or decision.status not in ("accepted", "provisional")
             ):
                 continue
-            tx.run(
-                """
-                MATCH (chunk:Chunk {chunk_id: $chunk_id})
-                MATCH (concept {concept_id: $concept_id})
-                MERGE (chunk)-[r:MENTIONS {mention_id: $mention_id}]->(concept)
-                SET r.surface_text = $surface_text,
-                    r.canonical_text = $canonical_text,
-                    r.start = $start, r.end = $end,
-                    r.type_candidates = $type_candidates,
-                    r.confidence = $confidence,
-                    r.mention_role = $mention_role,
-                    r.status = $status,
-                    r.resolution_status = $resolution_status,
-                    r.method = $method, r.score = $score,
-                    r.basis = $basis, r.run_id = $run_id,
-                    r.observed_at = $observed_at
-                """,
-                run_id=run.run_id,
-                observed_at=_chunk_date(document, mention.chunk_id),
-                concept_id=decision.concept_id,
-                method=decision.method,
-                score=decision.score,
-                resolution_status=decision.status,
-                basis=decision.basis,
-                **mention.model_dump(mode="json"),
-            ).consume()
+            mention_rows.setdefault(labels[decision.concept_id], []).append(
+                {
+                    **mention.model_dump(mode="json"),
+                    "concept_id": decision.concept_id,
+                    "method": decision.method,
+                    "score": decision.score,
+                    "resolution_status": decision.status,
+                    "basis": decision.basis,
+                    "observed_at": _chunk_date(document, mention.chunk_id),
+                }
+            )
+        for label, rows in mention_rows.items():
+            for batch in _batches(rows):
+                await _run(
+                    tx,
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (chunk:Chunk {{chunk_id: row.chunk_id}})
+                    MATCH (concept:{label} {{concept_id: row.concept_id}})
+                    MERGE (chunk)-[r:MENTIONS
+                          {{mention_id: row.mention_id}}]->(concept)
+                    SET r.surface_text = row.surface_text,
+                        r.canonical_text = row.canonical_text,
+                        r.start = row.start, r.end = row.end,
+                        r.type_candidates = row.type_candidates,
+                        r.confidence = row.confidence,
+                        r.mention_role = row.mention_role,
+                        r.status = row.status,
+                        r.resolution_status = row.resolution_status,
+                        r.method = row.method, r.score = row.score,
+                        r.basis = row.basis, r.run_id = $run_id,
+                        r.observed_at = row.observed_at
+                    """,
+                    rows=batch,
+                    run_id=run.run_id,
+                )
 
-        for (
-            technology_id,
-            task_id,
-            chunk_id,
-            quote,
-            start,
-            end,
-        ) in GraphStore._solution_links(document, result):
-            tx.run(
-                """
-                MATCH (technology:Technology {concept_id: $technology_id})
-                MATCH (task:Task {concept_id: $task_id})
-                MERGE (technology)-[r:SOLVES
-                      {document_version_id: $version_id}]->(task)
+        for link in GraphStore._projection_links(document, result):
+            await _run(
+                tx,
+                f"""
+                MATCH (source:{cypher_identifier(link["source_label"])}
+                       {{concept_id: $source}})
+                MATCH (target:{cypher_identifier(link["target_label"])}
+                       {{concept_id: $target}})
+                MERGE (source)-[r:{cypher_identifier(link["relationship"])}
+                      {{document_version_id: $version_id}}]->(target)
                 SET r.chunk_id = $chunk_id, r.quote = $quote,
                     r.start = $start, r.end = $end,
+                    r.assertion_id = $assertion_id,
                     r.method = 'reviewed_assertion', r.run_id = $run_id,
                     r.observed_at = $observed_at
                 """,
-                technology_id=technology_id,
-                task_id=task_id,
-                chunk_id=chunk_id,
-                quote=quote,
-                start=start,
-                end=end,
+                source=link["source"],
+                target=link["target"],
+                chunk_id=link["chunk_id"],
+                quote=link["quote"],
+                start=link["start"],
+                end=link["end"],
+                assertion_id=link["assertion_id"],
                 version_id=document.document_version_id,
                 run_id=run.run_id,
-                observed_at=_chunk_date(document, chunk_id),
-            ).consume()
+                observed_at=_chunk_date(document, link["chunk_id"]),
+            )
+
+        for row in GraphStore._maturity_evidence(result):
+            await _run(
+                tx,
+                f"""
+                MATCH (subject:{cypher_identifier(row["label"])}
+                       {{concept_id: $subject}})
+                MATCH (chunk:Chunk {{chunk_id: $chunk_id}})
+                MERGE (subject)-[r:HAS_MATURITY_EVIDENCE
+                      {{assertion_id: $assertion_id, start: $start}}]->(chunk)
+                SET r.stage = $stage, r.stage_rank = $stage_rank,
+                    r.trl = $trl, r.quote = $quote, r.end = $end,
+                    r.run_id = $run_id, r.observed_at = $observed_at
+                """,
+                subject=row["subject"],
+                chunk_id=row["chunk_id"],
+                assertion_id=row["assertion_id"],
+                start=row["start"],
+                end=row["end"],
+                quote=row["quote"],
+                stage=row["stage"],
+                stage_rank=row["stage_rank"],
+                trl=row["trl"],
+                run_id=run.run_id,
+                observed_at=_chunk_date(document, row["chunk_id"]),
+            )
 
         for evidence in result.economic_evidence:
-            tx.run(
+            await _run(
+                tx,
                 """
                 MATCH (technology:Technology
                        {concept_id: $technology_concept_id})
@@ -881,7 +1253,8 @@ class GraphStore:
                       {evidence_id: $evidence_id}]->(chunk)
                 SET r.category = $category, r.quote = $quote,
                     r.start = $start, r.end = $end,
-                    r.amount_text = $amount_text, r.currency = $currency,
+                    r.amount_text = $amount_text,
+                    r.amount_value = $amount_value, r.currency = $currency,
                     r.confidence = $confidence, r.status = $status,
                     r.run_id = $run_id,
                     r.polarity = $polarity, r.modality = $modality,
@@ -890,10 +1263,11 @@ class GraphStore:
                 run_id=run.run_id,
                 observed_at=_chunk_date(document, evidence.chunk_id),
                 **evidence.model_dump(),
-            ).consume()
+            )
 
         for assertion in result.assertions:
-            tx.run(
+            await _run(
+                tx,
                 """
                 MATCH (v:DocumentVersion {document_version_id: $version_id})
                 MATCH (r:ProcessingRun {run_id: $run_id})
@@ -932,25 +1306,27 @@ class GraphStore:
                         "evidence_family_id",
                     }
                 ),
-            ).consume()
+            )
 
             for role, concept_id in assertion.roles.items():
-                relation = load_catalog("graph")["assertion_roles"].get(role)
+                relation = graph["assertion_roles"].get(role)
                 if relation is None:
                     raise ValueError(f"unsupported assertion role: {role}")
                 relation = cypher_identifier(relation)
-                tx.run(
+                await _run(
+                    tx,
                     f"""
                     MATCH (a:Assertion {{assertion_id: $assertion_id}})
-                    MATCH (c {{concept_id: $concept_id}})
+                    MATCH (c:{labels[concept_id]} {{concept_id: $concept_id}})
                     MERGE (a)-[:{relation}]->(c)
                     """,
                     assertion_id=assertion.assertion_id,
                     concept_id=concept_id,
-                ).consume()
+                )
 
             for evidence in assertion.evidence:
-                tx.run(
+                await _run(
+                    tx,
                     """
                     MATCH (a:Assertion {assertion_id: $assertion_id})
                     MATCH (c:Chunk {chunk_id: $chunk_id})
@@ -959,10 +1335,11 @@ class GraphStore:
                     """,
                     assertion_id=assertion.assertion_id,
                     **evidence.model_dump(),
-                ).consume()
+                )
 
             if assertion.claim_group_id:
-                tx.run(
+                await _run(
+                    tx,
                     """
                     MATCH (a:Assertion {assertion_id: $assertion_id})
                     MERGE (g:ClaimGroup {claim_group_id: $group_id})
@@ -970,9 +1347,10 @@ class GraphStore:
                     """,
                     assertion_id=assertion.assertion_id,
                     group_id=assertion.claim_group_id,
-                ).consume()
+                )
             if assertion.evidence_family_id:
-                tx.run(
+                await _run(
+                    tx,
                     """
                     MATCH (a:Assertion {assertion_id: $assertion_id})
                     MERGE (f:EvidenceFamily {family_id: $family_id})
@@ -980,4 +1358,4 @@ class GraphStore:
                     """,
                     assertion_id=assertion.assertion_id,
                     family_id=assertion.evidence_family_id,
-                ).consume()
+                )

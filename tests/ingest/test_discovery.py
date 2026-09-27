@@ -1,5 +1,6 @@
 """Source pagination and material identity; all requests are mocked."""
 
+import asyncio
 import base64
 from urllib.parse import parse_qs, urlsplit
 
@@ -131,7 +132,7 @@ def test_discovery_preserves_openalex_full_record_and_real_total(monkeypatch):
 
     monkeypatch.setenv("OPENALEX_MAILTO", "research@example.test")
     monkeypatch.setattr("lctrend.ingest.discovery.fetch_openalex_page", fetch)
-    page = discover_openalex(" edge computing ", "cursor")
+    page = asyncio.run(discover_openalex(" edge computing ", "cursor"))
     assert calls == [
         ("edge computing", "cursor", 100, "research@example.test", None)
     ]
@@ -151,7 +152,7 @@ def test_openalex_terminal_page_is_complete(monkeypatch):
             "meta": {"count": 0, "next_cursor": None},
         },
     )
-    page = discover_openalex("quantum")
+    page = asyncio.run(discover_openalex("quantum"))
     assert page == {
         "items": [],
         "next_cursor": None,
@@ -169,7 +170,7 @@ def test_openalex_empty_stale_cursor_reports_limited_coverage(monkeypatch):
             "meta": {"count": 100, "next_cursor": "stale"},
         },
     )
-    page = discover_openalex("quantum")
+    page = asyncio.run(discover_openalex("quantum"))
     assert page["next_cursor"] is None
     assert page["complete"] is False
     assert page["limitations"][0]["code"] == "empty_page_with_cursor"
@@ -198,7 +199,7 @@ def test_github_query_and_token_are_only_sent_to_repository_search(
 
     monkeypatch.setenv("GITHUB_TOKEN", "test-secret")
     monkeypatch.setattr("lctrend.ingest.discovery.fetch_json", fetch)
-    page = discover_github("edge + robots")
+    page = asyncio.run(discover_github("edge + robots"))
     url, headers = calls[0]
     assert urlsplit(url).path == "/search/repositories"
     assert parse_qs(urlsplit(url).query) == {
@@ -226,12 +227,12 @@ def test_github_next_page_and_final_cap_never_claim_entire_source_complete(
             "incomplete_results": False,
         },
     )
-    first = discover_github("robotics")
+    first = asyncio.run(discover_github("robotics"))
     assert first["next_cursor"] == "2"
     assert first["total"] == 1000
     assert first["complete"] is False
     assert first["limitations"][0]["reported_total"] == 12345
-    last = discover_github("robotics", "10")
+    last = asyncio.run(discover_github("robotics", "10"))
     assert last["next_cursor"] is None
     assert last["complete"] is False
     assert last["limitations"][0]["code"] == "github_search_cap"
@@ -246,8 +247,8 @@ def test_github_under_cap_final_page_is_complete(monkeypatch):
             "incomplete_results": False,
         },
     )
-    assert discover_github("robotics", "1")["next_cursor"] == "2"
-    last = discover_github("robotics", "2")
+    assert asyncio.run(discover_github("robotics", "1"))["next_cursor"] == "2"
+    last = asyncio.run(discover_github("robotics", "2"))
     assert last["next_cursor"] is None
     assert last["complete"] is True
 
@@ -261,7 +262,7 @@ def test_github_incomplete_flag_is_visible_even_under_cap(monkeypatch):
             "incomplete_results": True,
         },
     )
-    page = discover_github("robotics")
+    page = asyncio.run(discover_github("robotics"))
     assert page["next_cursor"] is None
     assert page["complete"] is False
     assert page["limitations"][0]["code"] == "github_incomplete_results"
@@ -274,7 +275,7 @@ def test_invalid_github_page_does_not_request_source(monkeypatch, cursor):
         "lctrend.ingest.discovery.fetch_json", lambda *args: calls.append(args)
     )
     with pytest.raises(ValueError):
-        discover_github("robotics", cursor)
+        asyncio.run(discover_github("robotics", cursor))
     assert calls == []
 
 
@@ -283,7 +284,7 @@ def test_empty_topic_is_not_silently_replaced_with_an_unrelated_query(
     discover,
 ):
     with pytest.raises(ValueError):
-        discover(" ")
+        asyncio.run(discover(" "))
 
 
 def test_readme_links_deduplicate_variants_without_inferred_names():

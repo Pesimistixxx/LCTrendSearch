@@ -2,6 +2,8 @@
 evidence.
 """
 
+import asyncio
+
 from test_llm_pipeline import (
     RecordingReplay,
     document,
@@ -60,8 +62,14 @@ def test_hybrid_hints_corroboration_and_ner_only_technology_candidate():
             ("mentioned", "technology", 0.4),
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(), ner=ner, ner_name="gliner-fixture"
+    result = asyncio.run(
+        process_document(
+            doc,
+            provider,
+            settings=settings(),
+            ner=ner,
+            ner_name="gliner-fixture",
+        )
     )
     hints = provider.payloads[0]["payload"]["ner_hints"]
     assert [(h["text"], h["kind"]) for h in hints] == [
@@ -107,8 +115,14 @@ def test_ner_failure_keeps_llm_result():
             {"stage": "review", "response": reviewed()},
         ]
     )
-    result = process_document(
-        doc, provider, settings=settings(), ner=BrokenNER(), ner_name="broken"
+    result = asyncio.run(
+        process_document(
+            doc,
+            provider,
+            settings=settings(),
+            ner=BrokenNER(),
+            ner_name="broken",
+        )
     )
     assert result.run.metadata["ner"]["status"] == "failed"
     assert result.run.metadata["ner"]["error"] == "RuntimeError"
@@ -125,6 +139,6 @@ def test_llm_only_run_sends_no_hints():
             {"stage": "review", "response": reviewed()},
         ]
     )
-    result = process_document(doc, provider, settings=settings())
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert "ner_hints" not in provider.payloads[0]["payload"]
     assert result.run.metadata["ner"] == {"status": "disabled", "model": None}

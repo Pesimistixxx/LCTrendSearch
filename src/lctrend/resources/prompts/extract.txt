@@ -13,6 +13,8 @@
 - Task — желаемая функция. Problem — явно описанное ограничение, разрыв с требованием, отказ или нерешённый вопрос. Негативное слово или «отрицательный электрод» не доказывают Problem.
 - ApplicationContext — сценарий использования. План применения не равен проведённому испытанию или внедрению.
 - Преимущество представляется утверждением с условиями, а не отдельной сущностью Advantage.
+- Organization, Company, University — участники, которых текст сам связывает с технологией: разработчик, пользователь, заказчик, финансирующая сторона. Company — коммерческая организация; University — университет, научный институт, лаборатория вуза; Organization — госорган, фонд, консорциум, стандартизирующая организация или тип неясен. Аффилиации авторов и заявители уже есть в метаданных документа: не извлекай их, если текст не говорит о роли организации по отношению к технологии.
+- Country — страна, которую текст называет местом разработки, внедрения, производства или юрисдикцией. Для Country обязательно заполни country_code кодом ISO 3166-1 alpha-2 (DE, US, CN, RU); label оставь как в тексте. Для остальных kind country_code не заполняй. Город, регион или «Европа» не являются Country.
 - Для сущностей evidence по возможности содержит короткую непрерывную дословную цитату самого названия или исходного упоминания. label может быть развёрнутым локальным названием, если исходные chunks явно дают определение; не выдумывай расшифровку.
 
 Машинные подсказки ner_hints (если переданы):
@@ -21,9 +23,13 @@
 - evidence по-прежнему — дословная цитата из chunk. Отсутствие подсказки не означает отсутствия сущности.
 
 Утверждения:
-- Используй только предикаты и роли из переданного predicate_contract. Роли поддержанного контракта: subject, problem, task, method, baseline, application, metric, material. Не добавляй reporter как роль; сохраняй явно известную атрибуцию в attribution_kind/qualifiers.
+- Используй только предикаты и роли из переданного predicate_contract. Роли поддержанного контракта: subject, problem, task, method, baseline, application, metric, material, organization, country, parent. Не добавляй reporter как роль; сохраняй явно известную атрибуцию в attribution_kind/qualifiers.
 - targets_problem/targets_task обозначают явно названную цель. solves_task требует утверждения об осуществляемом решении; соседство технологии и задачи или слова for/to/with этого не доказывают.
 - qualitative_advantage — явно заявленное качественное преимущество, не измеренный эффект. reported_comparison/reported_measurement требуют исходных values. changes_metric обозначает изменение показателя; снижение accuracy само по себе не преимущество.
+- developed_by — organization создаёт, разрабатывает или патентует subject. used_by — organization применяет или внедрила subject; намерение применить записывай с modality planned. funded_by — organization финансирует работу над subject; сумму передай в values с дословным raw. Упоминание организации рядом с технологией не доказывает ни одно из этих отношений.
+- developed_in — работа над subject ведётся в стране country. located_in — организация находится в стране; только если текст это прямо сообщает.
+- subtechnology_of — subject является разновидностью, подклассом или специализацией parent («X — разновидность Y», «X относится к классу Y»). «Y на основе X» означает использование (uses_method), а не иерархию. Общие слова в названиях не доказывают иерархию.
+- reports_maturity_stage — текст описывает стадию готовности subject. qualifiers.stage обязателен и равен одному из: concept, laboratory_validation, prototype, pilot, commercial_deployment, mass_adoption. qualifiers.trl — целое 1–9 только если в цитате явно написан уровень (TRL 6, УГТ 4); не оценивай TRL сам. Стадию определяй по описанию («прототип», «пилотный проект», «серийно производится»), а не по тону текста.
 - Сохраняй polarity, modality, атрибуцию, baseline, единицы и существенные qualifiers. observed — описанное наблюдение; reported — утверждение источника; planned/hypothetical — план/возможность. Если неизвестно, используй unknown.
 - Сохраняй отрицания, ограничения, разные температуры и наборы данных. Чужой результат из обзора не приписывай авторам документа. Не согласовывай реальные противоречия и не объединяй испытания при разных условиях.
 - value.raw — дословная запись величины в evidence. Численное value должно присутствовать в raw; не вычисляй проценты, не преобразуй единицы и не придумывай распределение выборки. «20 устройств» не означает «по 20 устройств в каждой группе».
@@ -34,3 +40,15 @@
 - Если не хватает определения, соседнего утверждения, явно указанной таблицы или существенного условия, верни context_requests с reason.
 - read_chunk.argument — известный chunk_id текущего документа. search_chunks.argument — короткая буквальная фраза, не regex, команда или URL. Запрашивать внешние сайты, shell и файлы нельзя.
 - Ты только предлагаешь запросы; координатор проверяет границы и бюджет. После расширения извлекай из всех полученных исходных chunks. Если контекста всё ещё нет, не достраивай утверждение: допустимы пустые entities/claims и запрос уточнения.
+
+Пример формы ответа (значения условные; копируй структуру, а не содержание):
+{"entities": [
+  {"local_id": "e1", "label": "solid-state battery", "kind": "Technology", "evidence": [{"chunk_id": "<chunk_id>", "quote": "solid-state battery", "start": null, "end": null}]},
+  {"local_id": "e2", "label": "Acme Energy GmbH", "kind": "Company", "evidence": [{"chunk_id": "<chunk_id>", "quote": "Acme Energy GmbH", "start": null, "end": null}]},
+  {"local_id": "e3", "label": "Германии", "kind": "Country", "country_code": "DE", "evidence": [{"chunk_id": "<chunk_id>", "quote": "Германии", "start": null, "end": null}]}
+ ],
+ "claims": [
+  {"claim_id": "k1", "predicate": "developed_by", "roles": {"subject": "e1", "organization": "e2"}, "qualifiers": {}, "values": [], "polarity": "affirmed", "modality": "reported", "attribution_kind": "author_reported", "evidence": [{"chunk_id": "<chunk_id>", "quote": "<дословное предложение>", "start": null, "end": null}]},
+  {"claim_id": "k2", "predicate": "reports_maturity_stage", "roles": {"subject": "e1"}, "qualifiers": {"stage": "pilot", "trl": 6}, "values": [], "polarity": "affirmed", "modality": "observed", "attribution_kind": "author_reported", "evidence": [{"chunk_id": "<chunk_id>", "quote": "<предложение, где написано TRL 6 и пилот>", "start": null, "end": null}]}
+ ],
+ "context_requests": []}

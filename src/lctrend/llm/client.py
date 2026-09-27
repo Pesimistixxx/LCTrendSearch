@@ -8,11 +8,16 @@ when a model has no tokens left or is not available to the account.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
 import os
+import weakref
+from collections import deque
 from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
@@ -32,10 +37,22 @@ from ..core.config import load_catalog
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 STAGES = frozenset(("extract", "review"))
+# Calls of the document being processed. One provider serves concurrent
+# documents, so each document task collects its own call audit here.
+CALL_LOG: ContextVar[Optional[list]] = ContextVar("llm_call_log", default=None)
+# A long crawl keeps one provider alive; its own history stays bounded.
+MAX_RETAINED_CALLS = 2000
+
+
+def _record(calls: Any, call: Dict[str, Any]) -> None:
+    calls.append(call)
+    log = CALL_LOG.get()
+    if log is not None:
+        log.append(call)
 
 
 class Provider(Protocol):
-    def generate(
+    async def generate(
         self,
         schema: Type[T],
         system: str,
@@ -532,7 +549,24 @@ class JsonLLM:
         self.balance_status = "pending" if self.balance_enabled else "disabled"
         self._balance_checked = -math.inf
         self.transport = transport
-        self.calls: list[Dict[str, Any]] = []
+        self.calls: deque = deque(maxlen=MAX_RETAINED_CALLS)
+        concurrency = os.getenv("LLM_MAX_CONCURRENCY") or self.config.get(
+            "max_concurrent_requests", 1
+        )
+        try:
+            self.max_concurrency = int(concurrency)
+        except (TypeError, ValueError):
+            self.max_concurrency = 0
+        if self.max_concurrency < 1:
+            raise LLMError(
+                "configuration",
+                "max_concurrent_requests must be a positive integer",
+            )
+        # asyncio primitives belong to one event loop; the CLI, the web job
+        # loop and embedding threads may each use this client.
+        self._loop_state: weakref.WeakKeyDictionary = (
+            weakref.WeakKeyDictionary()
+        )
 
     @staticmethod
     def _endpoint(value: str, name: str) -> str:
@@ -583,8 +617,19 @@ class JsonLLM:
             for stage, ladder in self.ladders.items()
         }
 
-    def _client(self) -> httpx.Client:
-        return httpx.Client(
+    def _loop_local(self) -> Dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        state = self._loop_state.get(loop)
+        if state is None:
+            state = {
+                "token": asyncio.Lock(),
+                "requests": asyncio.Semaphore(self.max_concurrency),
+            }
+            self._loop_state[loop] = state
+        return state
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
             timeout=self.timeout,
             transport=self.transport,
             follow_redirects=False,
@@ -604,16 +649,26 @@ class JsonLLM:
                 }
             )
 
-    def _access_token(self, client: httpx.Client) -> Optional[str]:
-        if self.provider != "gigachat":
-            return self._api_key
-        if (
+    def _token_valid(self) -> bool:
+        return bool(
             self._token
             and monotonic() < self._token_expires - self.token_margin
-        ):
+        )
+
+    async def _access_token(self, client: httpx.AsyncClient) -> Optional[str]:
+        if self.provider != "gigachat":
+            return self._api_key
+        if self._token_valid():
             return self._token
+        # Concurrent documents share one token; only one renews it.
+        async with self._loop_local()["token"]:
+            if self._token_valid():
+                return self._token
+            return await self._renew_token(client)
+
+    async def _renew_token(self, client: httpx.AsyncClient) -> str:
         try:
-            response = client.post(
+            response = await client.post(
                 self.auth_url,
                 data={"scope": self.scope},
                 headers={
@@ -670,14 +725,14 @@ class JsonLLM:
         logger.debug("GigaChat access token renewed")
         return token
 
-    def _headers(self, client: httpx.Client) -> Dict[str, str]:
+    async def _headers(self, client: httpx.AsyncClient) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
-        token = self._access_token(client)
+        token = await self._access_token(client)
         if token:
             headers["Authorization"] = "Bearer " + token
         return headers
 
-    def _refresh_balance(self, client: httpx.Client) -> None:
+    async def _refresh_balance(self, client: httpx.AsyncClient) -> None:
         """Read prepaid token packages; pay-as-you-go accounts answer 403."""
         if (
             not self.balance_enabled
@@ -685,9 +740,11 @@ class JsonLLM:
         ):
             return
         self._balance_checked = monotonic()
-        headers = self._headers(client)
+        headers = await self._headers(client)
         try:
-            response = client.get(self.base_url + "/balance", headers=headers)
+            response = await client.get(
+                self.base_url + "/balance", headers=headers
+            )
         except httpx.RequestError as exc:
             logger.warning("Balance endpoint unreachable: %s", exc)
             self.balance_status = "unreachable"
@@ -728,9 +785,9 @@ class JsonLLM:
         self.balance_status = "ok"
         logger.debug("Token balance: %s", self.balance)
 
-    def _select(self, stage: str, client: httpx.Client) -> str:
+    async def _select(self, stage: str, client: httpx.AsyncClient) -> str:
         if self.balance_enabled:
-            self._refresh_balance(client)
+            await self._refresh_balance(client)
             for model in self.ladders[stage]:
                 if (
                     model in self.balance
@@ -787,7 +844,13 @@ class JsonLLM:
             + tokens["completion_tokens"] * rates[1]
         ) / 1_000_000
 
-    def generate(
+    async def _open(self, stack: AsyncExitStack) -> httpx.AsyncClient:
+        # The semaphore bounds concurrent requests to the provider (GigaChat
+        # personal accounts allow a single stream).
+        await stack.enter_async_context(self._loop_local()["requests"])
+        return await stack.enter_async_context(self._client())
+
+    async def generate(
         self,
         schema: Type[T],
         system: str,
@@ -796,11 +859,12 @@ class JsonLLM:
         stage: str = "extract",
     ) -> T:
         _stage(stage)
-        with self._client() as client:
+        async with AsyncExitStack() as stack:
+            client = await self._open(stack)
             while True:
                 try:
-                    model = self._select(stage, client)
-                    return self._attempt(
+                    model = await self._select(stage, client)
+                    return await self._attempt(
                         client, schema, system, payload, stage, model
                     )
                 except LLMError as exc:
@@ -811,9 +875,9 @@ class JsonLLM:
                         raise
                     self._retire(model, exc.code, stage=stage)
 
-    def _attempt(
+    async def _attempt(
         self,
-        client: httpx.Client,
+        client: httpx.AsyncClient,
         schema: Type[T],
         system: str,
         payload: Dict[str, Any],
@@ -866,7 +930,7 @@ class JsonLLM:
             "estimated_cost_usd": None,
             "status": "started",
         }
-        self.calls.append(call)
+        _record(self.calls, call)
         cache_path = (
             self.cache_dir / (request_hash + ".json")
             if self.cache_enabled and self.cache_dir is not None
@@ -899,18 +963,18 @@ class JsonLLM:
                 # This call did not request tokens. Historical response
                 # usage is separate; do not attribute its cost to this run.
                 return result
-            response = client.post(
+            response = await client.post(
                 self.base_url + "/chat/completions",
-                headers=self._headers(client),
+                headers=await self._headers(client),
                 json=body,
             )
             if response.status_code == 401 and self.provider == "gigachat":
                 # The access token lives 30 minutes; renew it once and resend.
                 logger.debug("GigaChat token rejected, renewing it once")
                 self._token = None
-                response = client.post(
+                response = await client.post(
                     self.base_url + "/chat/completions",
-                    headers=self._headers(client),
+                    headers=await self._headers(client),
                     json=body,
                 )
             call["http_status"] = response.status_code
@@ -1024,6 +1088,129 @@ class JsonLLM:
             call["duration_ms"] = round((perf_counter() - started) * 1000)
             _log_call(call)
 
+    async def embed(
+        self, texts: Sequence[str], model: str
+    ) -> list[list[float]]:
+        """Vectors from the provider's /embeddings endpoint, in input order.
+
+        GigaChat serves embeddings with the same OAuth token as chat; the
+        model ladder does not apply to embedding models.
+        """
+        texts = list(texts)
+        if not texts:
+            return []
+        started = perf_counter()
+        call: Dict[str, Any] = {
+            "provider": "gigachat"
+            if self.provider == "gigachat"
+            else "json_llm",
+            "stage": "embed",
+            "model": model,
+            "inputs": len(texts),
+            "cache_hit": False,
+            "tokens": {},
+            "estimated_cost_usd": None,
+            "status": "started",
+        }
+        _record(self.calls, call)
+        body = {"model": model, "input": texts}
+        try:
+            async with AsyncExitStack() as stack:
+                client = await self._open(stack)
+                response = await client.post(
+                    self.base_url + "/embeddings",
+                    headers=await self._headers(client),
+                    json=body,
+                )
+                if response.status_code == 401 and self.provider == "gigachat":
+                    self._token = None
+                    response = await client.post(
+                        self.base_url + "/embeddings",
+                        headers=await self._headers(client),
+                        json=body,
+                    )
+            call["http_status"] = response.status_code
+            if not response.is_success:
+                retryable = (
+                    response.status_code in (408, 429)
+                    or 500 <= response.status_code <= 599
+                )
+                raise LLMError(
+                    "http_error",
+                    f"Embedding endpoint returned HTTP {response.status_code}",
+                    retryable,
+                    _retry_after(response.headers.get("Retry-After"))
+                    if retryable
+                    else None,
+                )
+            try:
+                data = response.json()
+            except ValueError:
+                data = None
+            items = data.get("data") if isinstance(data, dict) else None
+            if not isinstance(items, list) or len(items) != len(texts):
+                raise LLMError(
+                    "invalid_response",
+                    "Embedding response does not match the request",
+                )
+            vectors: list[Optional[list[float]]] = [None] * len(texts)
+            total = 0
+            for position, item in enumerate(items):
+                index = (
+                    item.get("index", position)
+                    if isinstance(item, dict)
+                    else None
+                )
+                vector = (
+                    item.get("embedding") if isinstance(item, dict) else None
+                )
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or not 0 <= index < len(texts)
+                    or vectors[index] is not None
+                    or not isinstance(vector, list)
+                    or not vector
+                    or any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        for value in vector
+                    )
+                ):
+                    raise LLMError(
+                        "invalid_response",
+                        "Embedding response contains an invalid vector",
+                    )
+                vectors[index] = [float(value) for value in vector]
+                total += _tokens(item.get("usage")).get("prompt_tokens", 0)
+            if total:
+                call["tokens"] = {"prompt_tokens": total}
+            call["status"] = "ok"
+            return vectors  # type: ignore[return-value]
+        except httpx.TimeoutException:
+            call.update(status="error", error_code="timeout")
+            raise LLMError(
+                "timeout",
+                "Embedding request exceeded its timeout",
+                retryable=True,
+            ) from None
+        except httpx.RequestError:
+            call.update(status="error", error_code="transport_error")
+            raise LLMError(
+                "transport_error",
+                "Cannot reach the embedding endpoint",
+                retryable=True,
+            ) from None
+        except LLMError as exc:
+            call.update(
+                status="error", error_code=exc.code, retryable=exc.retryable
+            )
+            raise
+        finally:
+            call["duration_ms"] = round((perf_counter() - started) * 1000)
+            _log_call(call)
+
     @staticmethod
     def _write_cache(
         path: Path, value: Dict[str, Any], call: Dict[str, Any]
@@ -1080,13 +1267,13 @@ class ReplayProvider:
         self.answers = list(answers)
         self.label = label
         self.position = 0
-        self.calls: list[Dict[str, Any]] = []
+        self.calls: deque = deque(maxlen=MAX_RETAINED_CALLS)
 
     @classmethod
     def from_file(cls, path: Any) -> ReplayProvider:
         return cls(path, label=Path(path).name)
 
-    def generate(
+    async def generate(
         self,
         schema: Type[T],
         system: str,
@@ -1117,7 +1304,7 @@ class ReplayProvider:
             ),
             "status": "started",
         }
-        self.calls.append(call)
+        _record(self.calls, call)
         try:
             if self.position >= len(self.answers):
                 raise LLMError(

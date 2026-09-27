@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from frontend.server.app import create_app
+from frontend.server.jobs import default_workers
 
 
 class Manager:
@@ -48,8 +49,13 @@ class Crawls:
     def __init__(self):
         self.crawls = []
 
-    def create(self, topic=""):
-        value = {"crawl_id": "crawl", "topic": topic, "status": "queued"}
+    def create(self, topic="", limit=None):
+        value = {
+            "crawl_id": "crawl",
+            "topic": topic,
+            "limit": limit,
+            "status": "queued",
+        }
         self.crawls.append(value)
         return value
 
@@ -82,9 +88,7 @@ def api(tmp_path):
     manager = Manager()
     frontend = tmp_path / "dist"
     frontend.mkdir()
-    (frontend / "index.html").write_text(
-        "<h1>Сигнал</h1>", encoding="utf-8"
-    )
+    (frontend / "index.html").write_text("<h1>Сигнал</h1>", encoding="utf-8")
     status = {
         "llm": {"configured": False, "has_key": False},
         "neo4j": {"available": True},
@@ -109,7 +113,7 @@ def test_real_routes_create_collect_and_cancel_without_model_calls(api):
     assert response.status_code == 202
     assert response.json()["query"] == "edge computing"
     assert response.json()["mode"] == "hybrid"
-    assert response.json()["workers"] == 1
+    assert response.json()["workers"] == default_workers()
     assert client.get("/api/ingest/jobs").json()["jobs"] == manager.jobs
     assert client.get("/api/ingest/jobs/job").json()["status"] == "queued"
     assert (
@@ -156,6 +160,17 @@ def test_empty_topic_runs_configured_domains_without_extra_scope_fields(api):
         client.post("/api/ingest/crawls", json={"scope": "all"}).status_code
         == 422
     )
+    assert (
+        client.post("/api/ingest/crawls", json={"limit": 50}).json()["limit"]
+        == 50
+    )
+    for limit in [0, 10001]:
+        assert (
+            client.post(
+                "/api/ingest/crawls", json={"limit": limit}
+            ).status_code
+            == 422
+        )
 
 
 def test_settings_cannot_change_between_crawl_pages(api):
@@ -171,7 +186,7 @@ def test_settings_cannot_change_between_crawl_pages(api):
         {"query": " "},
         {"query": "x", "limit": -1},
         {"query": "x", "workers": 20},
-        {"query": "x", "workers": 2},
+        {"query": "x", "workers": 0},
         {"query": "x", "mode": "search"},
     ],
 )
@@ -352,8 +367,12 @@ def test_container_ui_writes_settings_to_persistent_directory(
     saved = tmp_path / "artifacts" / "ingestion" / "settings.env"
     monkeypatch.setenv("LCTREND_SETTINGS_FILE", str(saved))
     for key in (
-        "LLM_PROVIDER", "LLM_MODEL", "LLM_EXTRACT_MODEL",
-        "LLM_REVIEW_MODEL", "LLM_BASE_URL", "LLM_API_KEY",
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+        "LLM_EXTRACT_MODEL",
+        "LLM_REVIEW_MODEL",
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     app = create_app(Manager(), status_reader=lambda: {"ok": True})

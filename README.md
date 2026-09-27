@@ -13,7 +13,7 @@
 | LLM: извлечение и проверка утверждений | GigaChat, лестница `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`; либо любая модель OpenAI-совместимого API | `LLM_PROVIDER`, `LLM_MODEL*`, [llm.json](src/lctrend/resources/llm.json) | Режимы `hybrid` (по умолчанию) и `llm` |
 | NER: подсказки сущностей | GLiNER `urchade/gliner_medium-v2.1` | `GLINER_MODEL`, [runtime.json](src/lctrend/resources/runtime.json) | `hybrid` (подсказки для LLM) и `gliner` (основной извлекатель) |
 | Разбор PDF | Docling (собственные модели разметки страниц и OCR) | extra `[pdf]` | Любой PDF: локальный файл, загрузка через API, полный текст OpenAlex |
-| Эмбеддинги для сопоставления сущностей | `sentence-transformers/all-MiniLM-L6-v2` (косинус) + `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | **Только в режиме `gliner`.** В `hybrid`/`llm` resolver детерминированный: нормализация, леммы (simplemma), явные синонимы |
+| Эмбеддинги для сопоставления сущностей | GigaChat `EmbeddingsGigaR` через API `/embeddings` (косинус; локальная альтернатива — `sentence-transformers/all-MiniLM-L6-v2`) + локальный `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | **Только в режиме `gliner`.** В `hybrid`/`llm` resolver детерминированный: нормализация, леммы (simplemma), явные синонимы |
 
 Эмбеддинг-совпадение никогда не объединяет сущности автоматически: пара получает статус `ambiguous` и остаётся на проверку. Векторного индекса в Neo4j нет — эмбеддинги вычисляются в памяти на время одной обработки.
 
@@ -157,6 +157,26 @@ PostgreSQL зарезервирован под будущую ранжирова
 
 LLM-провайдер использует endpoint `/chat/completions`. Задайте модель или лестницу; для GigaChat уже есть штатная лестница. Отдельные модели стадий задаются через `LLM_EXTRACT_MODEL` и `LLM_REVIEW_MODEL`. Извлекатель и проверяющий используют разные промпты. Отсутствующая настройка не переключает обработку на фиктивные ответы. Зависимость httpx нужна для LLM; для чистого разбора файлов и API без извлечения она не нужна.
 
+## Массовая загрузка
+
+Сетевые операции асинхронные: LLM, Neo4j, OpenAlex, GitHub, PyPI и скачивание PDF. Задания веб-интерфейса выполняются в отдельном event loop. Разбор Docling, GLiNER и сопоставление сущностей работают в потоках и не блокируют остальные документы.
+
+| Настройка | По умолчанию | Что ограничивает |
+|---|---|---|
+| `LCTREND_WORKERS` / `runtime.json` → `ingestion.workers` | 4 | Документов одного задания или пачки обхода одновременно, 1–16 |
+| `crawl-openalex --workers N` | как выше | То же для CLI |
+| `LLM_MAX_CONCURRENCY` / `llm.json` → `max_concurrent_requests` | GigaChat: 1, OpenAI-совместимый: 4 | Одновременных запросов к LLM на процесс |
+| `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 3 и 120 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела |
+| `pipeline.json` → `max_retries`, `retry_delay_seconds`, `max_retry_delay_seconds` | 4, 2 с, 60 с | Повторы LLM при 429/5xx/таймауте с экспоненциальной паузой или по `Retry-After` |
+| `sources.json` → `http` | 5 попыток, пауза 1–60 с | Повторы OpenAlex/GitHub/PyPI/PDF при 408/429/5xx; лимит GitHub ждёт `X-RateLimit-Reset` до 15 минут |
+| `pipeline.json` → `file_limits.pdf_max_pages`, `pdf_timeout_seconds` | 200 страниц, 900 с | Один конвертер Docling на процесс; слишком длинный или зависший PDF не останавливает задание |
+
+Для GigaChat параллельность документов ускоряет в основном скачивание и разбор PDF. Сами запросы к модели выполняются по одному, если не увеличить `LLM_MAX_CONCURRENCY` в пределах тарифа. Полный текст увеличивает число вызовов LLM на статью: примерно 3 вызова на 10 фрагментов, не более 120 на документ. Перед большим обходом оцените бюджет токенов.
+
+Повторная загрузка того же материала бесплатна. Версия документа OpenAlex/PyPI/GitHub не зависит от времени скачивания. Если для версии в графе уже есть успешная обработка, документ помечается `already_processed` и не отправляется в LLM. Результат `partial` публикуется в граф, если у версии ещё нет активного результата. Более поздний полный результат его заменяет. Повторный `partial` поверх опубликованного результата сохраняется только как staged.
+
+Задание отображается в `job.json`. Прогресс записывается не чаще раза в секунду, смена статусов — сразу. Реестр концептов читается из Neo4j один раз на задание и дальше обновляется в памяти.
+
 ## Источники и команды
 
 ```powershell
@@ -274,7 +294,8 @@ LLM_MODEL=your-model-name
 | `LLM_MODEL_LADDER` | Имена моделей через запятую в порядке переключения; пусто — порядок из `llm.json` |
 | `LCTREND_EXTRACTOR` | Режим CLI: `hybrid`, `llm`, `gliner`; пусто — `hybrid`. Веб-обход по теме использует свой режим `hybrid` |
 | `GLINER_MODEL` | Имя модели GLiNER; пусто — `urchade/gliner_medium-v2.1` |
-| `DEDUP_EMBEDDING_MODEL` | Эмбеддинг-модель resolver, только режим `gliner`; пусто — `sentence-transformers/all-MiniLM-L6-v2` |
+| `DEDUP_EMBEDDING_PROVIDER` | Источник эмбеддингов resolver, только режим `gliner`: `gigachat` (по умолчанию, ключи `GIGACHAT_*`) или `transformers` (локальная модель) |
+| `DEDUP_EMBEDDING_MODEL` | Эмбеддинг-модель resolver; пусто — `EmbeddingsGigaR` для GigaChat, `sentence-transformers/all-MiniLM-L6-v2` для `transformers` |
 | `DEDUP_DECISION_MODEL` | Cross-encoder проверки пары; пусто — `cross-encoder/stsb-distilroberta-base` |
 | `DEDUP_COSINE_THRESHOLD` | Минимальный косинус для передачи пары cross-encoder, по умолчанию 0.78 |
 | `DEDUP_DECISION_THRESHOLD` | Минимальная оценка cross-encoder для кандидата `ambiguous`, по умолчанию 0.80 |

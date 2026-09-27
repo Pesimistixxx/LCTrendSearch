@@ -1,14 +1,21 @@
 """Local file snapshots to addressable text, without invented publication
 dates.
+
+Dates, language and parties come only from the file's own embedded metadata
+or from an explicit sidecar (``report.pdf.meta.json``); each value records
+its basis in document.metadata.
 """
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
+import json
 import os
 import re
 import tempfile
+import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -20,8 +27,13 @@ from ..core.config import load_catalog
 from ..core.models import (
     Artifact,
     Chunk,
+    Contributor,
+    Country,
     DocumentEnvelope,
     DocumentType,
+    Domain,
+    ExternalId,
+    Organization,
     SourceRef,
     stable_id,
 )
@@ -431,11 +443,34 @@ def _html(
     )
 
 
+_CONVERTER = None
+# Docling loads its layout/OCR models once per converter and is CPU-bound;
+# one shared converter, one conversion at a time.
+_CONVERTER_LOCK = threading.Lock()
+
+
+def _convert(path: Path):
+    global _CONVERTER
+    from docling.document_converter import DocumentConverter
+
+    limits = load_catalog("pipeline")["file_limits"]
+    with _CONVERTER_LOCK:
+        if not isinstance(_CONVERTER, DocumentConverter):
+            _CONVERTER = DocumentConverter()
+        options = {}
+        if "max_num_pages" in inspect.signature(_CONVERTER.convert).parameters:
+            # A book-sized PDF would hold the single converter for hours.
+            options["max_num_pages"] = int(limits.get("pdf_max_pages", 10**9))
+        return _CONVERTER.convert(path, **options)
+
+
 def _pdf(
     raw: bytes, version_id: str, path: Path
 ) -> Tuple[str, List[Chunk], List[str]]:
     try:
-        from docling.document_converter import DocumentConverter
+        from docling.document_converter import (  # noqa: F401
+            DocumentConverter,
+        )
     except ImportError:
         raise UnsupportedFileFormat(
             "PDF parsing requires the optional Docling PDF dependency"
@@ -449,7 +484,7 @@ def _pdf(
         ) as snapshot:
             snapshot.write(raw)
             snapshot_path = Path(snapshot.name)
-        conversion = DocumentConverter().convert(snapshot_path)
+        conversion = _convert(snapshot_path)
     finally:
         if snapshot_path is not None:
             snapshot_path.unlink(missing_ok=True)
@@ -496,6 +531,218 @@ def _pdf(
     if any(not chunk.locator["provenance"] for chunk in chunks):
         warnings.append("some_pdf_items_have_no_page_provenance")
     return path.stem, chunks, warnings
+
+
+HTML_DATE_FIELDS = (
+    "citation_publication_date",
+    "citation_date",
+    "article:published_time",
+    "dc.date",
+    "dcterms.created",
+    "dc.date.issued",
+    "date",
+    "pubdate",
+)
+
+
+class _HTMLMeta(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: Dict[str, str] = {}
+        self.authors: List[str] = []
+        self.language: Optional[str] = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        values = {key.lower(): value for key, value in attrs if value}
+        if tag == "html" and values.get("lang"):
+            self.language = values["lang"]
+        if tag != "meta":
+            return
+        key = (values.get("name") or values.get("property") or "").lower()
+        content = values.get("content", "").strip()
+        if not key or not content:
+            return
+        if key in ("citation_author", "author", "dc.creator"):
+            self.authors.append(content)
+        self.meta.setdefault(key, content)
+
+
+def _iso_date(value: Optional[str]) -> Optional[str]:
+    """Keep a date only when it is a real calendar date."""
+    if not value:
+        return None
+    value = value.strip()
+    match = re.match(r"(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?", value)
+    if not match:
+        return None
+    year, month, day = match.group(1), match.group(2), match.group(3) or "1"
+    try:
+        return datetime(int(year), int(month), int(day)).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _embedded_facts(adapter: str, raw: bytes) -> Dict[str, Any]:
+    """Facts the file itself states, with their basis. Only HTML
+    publication tags give a publication date; DOCX/PDF creation dates
+    describe the file.
+    """
+    facts: Dict[str, Any] = {}
+    if adapter == "html":
+        parser = _HTMLMeta()
+        try:
+            parser.feed(_text(raw))
+        except FileAdapterError:
+            return facts
+        for field in HTML_DATE_FIELDS:
+            date = _iso_date(parser.meta.get(field))
+            if date:
+                facts["published_at"] = (date, "html_meta:" + field)
+                break
+        language = parser.meta.get("citation_language") or parser.language
+        if language:
+            facts["language"] = (language.split("-")[0].lower(), "html_lang")
+        if parser.authors:
+            facts["authors"] = (parser.authors, "html_meta:author")
+    elif adapter == "docx":
+        try:
+            with ZipFile(io.BytesIO(raw)) as archive:
+                if "docProps/core.xml" not in archive.namelist():
+                    return facts
+                core = _xml(archive.read("docProps/core.xml"))
+        except (BadZipFile, FileAdapterError):
+            return facts
+        values = {
+            node.tag.rsplit("}", 1)[-1]: (node.text or "").strip()
+            for node in core.iter()
+        }
+        date = _iso_date(values.get("created"))
+        if date:
+            facts["file_created_at"] = (date, "docx_core:created")
+        if values.get("language"):
+            facts["language"] = (
+                values["language"].split("-")[0].lower(),
+                "docx_core:language",
+            )
+        if values.get("creator"):
+            facts["authors"] = ([values["creator"]], "docx_core:creator")
+    elif adapter == "pdf":
+        match = re.search(rb"/CreationDate\s*\(D:(\d{4})(\d{2})?(\d{2})?", raw)
+        if match:
+            date = _iso_date(
+                "-".join(part.decode() for part in match.groups(default=b"01"))
+            )
+            if date:
+                facts["file_created_at"] = (date, "pdf_info:CreationDate")
+    return facts
+
+
+def _guess_language(chunks: List[Chunk]) -> Optional[str]:
+    settings = load_catalog("sources")["local_files"]
+    text = " ".join(chunk.text for chunk in chunks[:20])
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return None
+    cyrillic = sum("Ѐ" <= char <= "ӿ" for char in letters)
+    if cyrillic / len(letters) >= settings["cyrillic_share_for_ru"]:
+        return "ru"
+    words = set(re.findall(r"[a-z]+", text.casefold()))
+    if len(words & set(settings["english_markers"])) >= 2:
+        return "en"
+    return None
+
+
+def _sidecar(path: Path) -> Dict[str, Any]:
+    """Operator-supplied metadata for a local file (dataset exports,
+    manual curation). It is data about the file, never file text.
+    """
+    candidate = path.with_name(
+        path.name + load_catalog("sources")["local_files"]["sidecar_suffix"]
+    )
+    if not candidate.is_file():
+        return {}
+    try:
+        value = json.loads(candidate.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        raise FileAdapterError(
+            "Invalid metadata sidecar: " + candidate.name
+        ) from None
+    if not isinstance(value, dict):
+        raise FileAdapterError("Metadata sidecar must be a JSON object")
+    return value
+
+
+def _sidecar_parties(
+    sidecar: Dict[str, Any],
+) -> Tuple[List[Contributor], List[Organization], List[Country], List[Domain]]:
+    organizations: Dict[str, Organization] = {}
+    for item in sidecar.get("organizations") or []:
+        item = {"name": item} if isinstance(item, str) else item
+        if not item.get("name"):
+            continue
+        organization_id = stable_id("organization", "local", item["name"])
+        code = (item.get("country") or "").upper() or None
+        organizations[organization_id] = Organization(
+            organization_id=organization_id,
+            name=item["name"],
+            organization_type=item.get("type") or "other",
+            country_code=code
+            if code and re.fullmatch(r"[A-Z]{2}", code)
+            else None,
+            role=item.get("role") or "associated",
+        )
+    by_name = {item.name: key for key, item in organizations.items()}
+    contributors = []
+    for item in sidecar.get("authors") or []:
+        item = {"name": item} if isinstance(item, str) else item
+        if not item.get("name"):
+            continue
+        contributors.append(
+            Contributor(
+                contributor_id=stable_id("person", "local", item["name"]),
+                name=item["name"],
+                role=item.get("role") or "author",
+                affiliation_ids=[
+                    by_name[name]
+                    for name in item.get("affiliations") or []
+                    if name in by_name
+                ],
+            )
+        )
+    codes = {
+        code.upper()
+        for code in sidecar.get("countries") or []
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z]{2}", code)
+    }
+    codes |= {
+        item.country_code
+        for item in organizations.values()
+        if item.country_code
+    }
+    countries = [
+        Country(
+            country_id=stable_id("country", code),
+            code=code,
+            role="metadata",
+        )
+        for code in sorted(codes)
+    ]
+    domains = {}
+    for item in sidecar.get("domains") or []:
+        item = {"name": item} if isinstance(item, str) else item
+        if item.get("name"):
+            domain = Domain(
+                domain_id=stable_id("domain", item["name"]),
+                name=item["name"],
+                parent_name=item.get("parent"),
+            )
+            domains.setdefault(domain.domain_id, domain)
+    return (
+        contributors,
+        list(organizations.values()),
+        countries,
+        list(domains.values()),
+    )
 
 
 def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
@@ -546,22 +793,71 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         )
     retrieved_at = datetime.now(timezone.utc).isoformat()
     uri = path.as_uri()
+    sidecar = _sidecar(path)
+    facts = _embedded_facts(adapter, raw)
+    basis: Dict[str, str] = {}
+    published_at = _iso_date(sidecar.get("published_at"))
+    if published_at:
+        basis["published_at"] = "sidecar"
+    elif "published_at" in facts:
+        published_at, basis["published_at"] = facts["published_at"]
+    language = sidecar.get("language")
+    if language:
+        basis["language"] = "sidecar"
+    elif "language" in facts:
+        language, basis["language"] = facts["language"]
+    else:
+        language = _guess_language(chunks)
+        if language:
+            basis["language"] = "script_heuristic"
+    contributors, organizations, countries, domains = _sidecar_parties(sidecar)
+    if not contributors and "authors" in facts:
+        names, basis["authors"] = facts["authors"]
+        contributors = [
+            Contributor(
+                contributor_id=stable_id("person", "local", name),
+                name=name,
+            )
+            for name in dict.fromkeys(names)
+        ]
+    source = sidecar.get("source") or {}
+    try:
+        document_type = DocumentType(
+            sidecar.get("document_type") or DocumentType.REPORT.value
+        )
+    except ValueError:
+        raise FileAdapterError(
+            "Unknown document_type in metadata sidecar"
+        ) from None
     return DocumentEnvelope(
         document_id=document_id,
         document_version_id=version_id,
-        document_type=DocumentType.REPORT,
-        title=title,
+        document_type=document_type,
+        title=sidecar.get("title") or title,
+        language=language,
         retrieved_at=retrieved_at,
-        published_at=None,
-        version_published_at=None,
+        published_at=published_at,
+        version_published_at=published_at,
         source=SourceRef(
-            source_id="source:local",
-            name="Local file",
-            source_type="local_file",
-            source_family="local",
+            source_id="source:local"
+            if not source.get("name")
+            else stable_id("source", "local", source["name"]),
+            name=source.get("name") or "Local file",
+            source_type=source.get("type") or "local_file",
+            source_family=source.get("family") or "local",
+            reliability_tier=int(source.get("reliability_tier") or 1),
+            independence_group=source.get("independence_group"),
             record_id=str(path),
-            canonical_url=uri,
+            canonical_url=source.get("url") or uri,
         ),
+        identifiers=[
+            ExternalId(scheme=str(scheme), value=str(value))
+            for scheme, value in (sidecar.get("identifiers") or {}).items()
+        ],
+        contributors=contributors,
+        organizations=organizations,
+        countries=countries,
+        domains=domains,
         artifact=Artifact(
             uri=snapshot_path.as_uri(),
             sha256=sha256,
@@ -575,6 +871,10 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
             "text_encoding": "utf-8-sig"
             if adapter in ("text", "markdown", "html")
             else None,
+            "metadata_basis": basis,
+            # Authoring/production date of the file, not a publication date.
+            "file_created_at": facts.get("file_created_at", (None,))[0],
+            "sidecar": bool(sidecar),
         },
         coverage=coverage,
         quality_status="needs_review" if warnings else "accepted",

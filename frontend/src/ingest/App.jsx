@@ -15,7 +15,10 @@ const labels = {
   paused: 'остановлено', pausing: 'остановка', parsed: 'обработано', discovering: 'обход источников',
   completed: 'завершено', processing: 'обработка материала', openalex: 'OpenAlex', github: 'GitHub', pypi: 'PyPI',
   limited: 'выдача ограничена API', idle: 'не начат', unsupported: 'не подключён', epo: 'EPO',
-  linked: 'по ссылкам из GitHub', complete: 'завершён',
+  linked: 'по ссылкам из GitHub', complete: 'завершён', capped: 'достигнут лимит',
+  metadata_only: 'только карточка', abstract_only: 'только аннотация', full_text: 'полный текст',
+  abstract_and_full_text: 'аннотация и полный текст', parsed_text: 'текст файла',
+  no_pdf_url: 'ссылки на PDF нет', not_attempted: 'не запрашивался',
   hydration: 'получение текста источника', metadata: 'получение связанных материалов',
   accepted: 'принято', rejected: 'отклонено', needs_review: 'нужна проверка',
   solves_task: 'решает задачу', changes_metric: 'изменяет метрику',
@@ -27,7 +30,7 @@ export default function Ingestion() {
   const [service, setService] = useState(null), [crawls, setCrawls] = useState([])
   const [crawlId, setCrawlId] = useState(''), [crawl, setCrawl] = useState(null), [topic, setTopic] = useState('')
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
-  const [refresh, setRefresh] = useState(0)
+  const [refresh, setRefresh] = useState(0), [limit, setLimit] = useState('50')
   useEffect(() => {
     let stopped = false, timer
     async function poll() {
@@ -50,7 +53,7 @@ export default function Ingestion() {
   async function upload(event) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const created = await api.createCrawl(topic.trim())
+      const created = await api.createCrawl(topic.trim(), limit ? Number(limit) : null)
       setCrawlId(created.crawl_id); setCrawl(created); setRefresh(value => value + 1)
     } catch (e) { setError(e.message) }
     finally { setBusy(false) }
@@ -71,9 +74,11 @@ export default function Ingestion() {
     <p className="status">База: {service ? service.neo4j?.available ? 'подключена' : 'недоступна' : 'проверяем'} · LLM: {service?.llm?.configured ? 'настроена' : 'нужна настройка'} · GLiNER: {service?.gliner?.installed ? 'установлен' : 'не установлен'}</p>
     <form onSubmit={upload}>
       <label>Тематика<input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Пусто — все настроенные направления" maxLength={1000} /></label>
+      <label>Лимит на направление и источник<input type="number" min="1" max="10000" value={limit} onChange={event => setLimit(event.target.value)} placeholder="Пусто — вся выдача" /></label>
+      <p className="hint">{topic.trim() ? 'Одно направление — введённая тема.' : `Пустая тема — направления: ${(service?.directions || []).join(', ') || 'из sources.json'}.`} {limit ? `До ${limit} статей OpenAlex и до ${limit} репозиториев GitHub на каждое направление; PyPI-пакеты из README сверх лимита.` : 'Без лимита OpenAlex идёт до конца выдачи — по широкой теме это тысячи статей.'}</p>
       <p className="hint">Отправляем тему в API OpenAlex и GitHub, получаем карточки статей и репозитории, затем извлекаем текст; пакеты PyPI берём из ссылок в README.</p>
       <p className="pipeline">Текст → GLiNER: подсказки → LLM: извлечение и проверка → Neo4j</p>
-      <button type="submit" disabled={busy || !ready || active}>{busy ? 'Подождите…' : 'Собирать'}</button>
+      <button type="submit" disabled={busy || !ready || active || (limit !== '' && !(Number(limit) >= 1 && Number(limit) <= 10000 && Number.isInteger(Number(limit))))}>{busy ? 'Подождите…' : 'Собирать'}</button>
       {!ready && service && <p className="hint">Перед загрузкой нужно подключить базу и настроить модели.{!service.pdf?.installed && ' Для получения PDF требуется модуль Docling.'}</p>}
     </form>
     <Settings service={service} active={active} onSave={status => { setService(status); setRefresh(value => value + 1) }} />
@@ -84,6 +89,9 @@ export default function Ingestion() {
       <p>Обработано {counts.parsed || 0} из {counts.discovered || 0} найденных материалов · частично {counts.partial || 0} · ожидают {counts.pending || 0} · в работе {counts.processing || 0} · ошибки {counts.failed || 0}</p>
       <p className="hint">{crawl.status === 'pausing' ? 'Останавливаем после текущего материала.' : `Сейчас: ${label(crawl.stage)} · ${label(crawl.status)}`} Повторов пропущено: {counts.duplicates || 0}.</p>
       {counts.discovered > 0 && <progress value={(counts.parsed || 0) + (counts.partial || 0) + (counts.failed || 0)} max={counts.discovered} />}
+      <p className="hint">Лимит: {crawl.limit ? `${crawl.limit} на направление и источник` : 'нет, вся выдача'}</p>
+      {crawl.directions?.length > 0 && <table className="directions"><thead><tr><th>Направление</th><th>OpenAlex</th><th>GitHub</th><th>PyPI</th></tr></thead><tbody>{crawl.directions.map(direction => <tr key={direction.name}><td>{direction.name}</td>{['openalex', 'github', 'pypi'].map(source => { const value = direction.sources?.[source] || {}; return <td key={source}>{(value.parsed || 0) + (value.partial || 0)} / {value.discovered || 0}{value.failed ? <small className="error"> · ошибок {value.failed}</small> : null}</td> })}</tr>)}</tbody></table>}
+      {crawl.directions?.length > 0 && <p className="hint">В ячейке: обработано / найдено. Уже обработанные ранее материалы учитываются, но LLM повторно не вызывается.</p>}
       {sources.map(item => <div key={item.source}><p>{label(item.source)}: обработано {item.parsed || 0}, ожидают {item.pending || 0} · {item.complete ? 'обход завершён' : label(item.status)} · всего {item.total ?? 'неизвестно'}</p>{item.limitations?.length > 0 && <p className="hint">{item.limitations.map(message).join(' ')}</p>}</div>)}
       {crawl.error && <p className="error">{message(crawl.error)}</p>}
       <Materials crawlId={crawlId} status="parsed" title="Обработанные материалы" refresh={crawl.updated_at || JSON.stringify(counts)} />
@@ -167,7 +175,9 @@ function Document({ jobId, document }) {
     {!document.result_ready ? <p className="hint">Результат ещё не готов.</p> : !result ? <p className="hint">Загружаем результат…</p> : <>
       <p><a href={api.downloadUrl(jobId, document.doc_id)} download>Скачать результат JSON</a></p>
       <p className="hint">LLM: {label(extraction?.run?.status)} · GLiNER: {label(extraction?.run?.metadata?.ner?.status)}</p>
+      <Received document={result.document} run={extraction?.run} />
       <h3>Сущности</h3>{concepts.length ? <ul>{concepts.map(item => <li key={item.concept_id}>{item.preferred_label} <small>({item.kind})</small></li>)}</ul> : <p className="hint">Не выделены.</p>}
+      {extraction?.economic_evidence?.length > 0 && <><h3>Экономические сведения</h3><ul>{extraction.economic_evidence.map(item => <li key={item.evidence_id}>{names[item.technology_concept_id] || item.technology_concept_id} · {item.category}{item.amount_text ? ` · ${item.amount_text}${item.currency ? ' ' + item.currency : ''}` : ''}<blockquote>{item.quote}</blockquote></li>)}</ul></>}
       <h3>Утверждения</h3>{extraction?.assertions?.length ? extraction.assertions.map(claim => <article key={claim.assertion_id}>
         <p><b>{label(claim.predicate)}</b> · {label(claim.status)}</p>
         <p>{Object.entries(claim.roles || {}).map(([role, id]) => `${role}: ${names[id] || id}`).join('; ')}</p>
@@ -175,4 +185,22 @@ function Document({ jobId, document }) {
       </article>) : <p className="hint">Проверенных утверждений нет.</p>}
     </>}
   </details>
+}
+
+function Received({ document, run }) {
+  const [all, setAll] = useState(false)
+  if (!document) return null
+  const chunks = document.chunks || [], fulltext = document.metadata?.fulltext, coverage = run?.metadata?.coverage || {}
+  const processed = coverage.processed_focus_chunk_ids?.length, unprocessed = coverage.unprocessed_chunk_ids || []
+  const skipped = new Set(unprocessed), characters = chunks.reduce((sum, chunk) => sum + (chunk.text?.length || 0), 0)
+  const shown = all ? chunks : chunks.slice(0, 5)
+  return <div className="received">
+    <h3>Что получено</h3>
+    <p>Покрытие: <b>{label(document.coverage)}</b> · фрагментов {chunks.length} · символов {characters.toLocaleString('ru-RU')}{document.source?.canonical_url && <> · <a href={document.source.canonical_url} target="_blank" rel="noreferrer">источник</a></>}</p>
+    {fulltext && <p className="hint">PDF: {label(fulltext.status)}{fulltext.status === 'parsed' ? ` · ${fulltext.chunks} фрагментов из ${fulltext.pdf_url}` : ''}{fulltext.attempts?.length ? ` · неудачных попыток ${fulltext.attempts.length}: ${fulltext.attempts.map(item => item.error).join('; ')}` : ''}</p>}
+    {document.metadata?.parse_warnings?.length > 0 && <p className="hint">Предупреждения разбора: {document.metadata.parse_warnings.map(message).join('; ')}</p>}
+    {processed !== undefined && <p className={unprocessed.length ? 'error' : 'hint'}>LLM прочитала {processed} из {coverage.total_chunks ?? chunks.length} фрагментов{unprocessed.length ? ` · не обработано ${unprocessed.length}` : ''}{coverage.failed_packet_ids?.length ? ` · ошибочных пакетов ${coverage.failed_packet_ids.length}` : ''}{run?.metadata?.model_calls !== undefined ? ` · вызовов модели ${run.metadata.model_calls}` : ''}</p>}
+    {chunks.length > 0 && <ol className="chunks">{shown.map(chunk => <li key={chunk.chunk_id} className={skipped.has(chunk.chunk_id) ? 'skipped' : ''}><small>{chunk.kind}{chunk.section_path?.length ? ` · ${chunk.section_path.join(' › ')}` : ''}{skipped.has(chunk.chunk_id) ? ' · не прочитан LLM' : ''}</small><p>{chunk.text.length > 400 ? chunk.text.slice(0, 400) + '…' : chunk.text}</p></li>)}</ol>}
+    {chunks.length > 5 && <button className="secondary" onClick={() => setAll(value => !value)}>{all ? 'Свернуть' : `Показать все ${chunks.length} фрагментов`}</button>}
+  </div>
 }

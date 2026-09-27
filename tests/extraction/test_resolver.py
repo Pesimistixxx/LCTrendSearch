@@ -153,3 +153,44 @@ def test_unreviewed_observed_alias_does_not_merge_a_future_mention():
     )
     assert touched[0].concept_id != existing.concept_id
     assert decisions[0].status == "provisional"
+
+
+def test_gigachat_embeddings_batch_and_cache_candidates():
+    from lctrend.extraction.resolver import SemanticDeduplicator
+
+    vectors = {
+        "carbon conversion": [1.0, 0.1],
+        "carbon capture": [1.0, 0.0],
+        "quantum computing": [0.0, 1.0],
+    }
+    requests = []
+
+    class FakeEmbedder:
+        def embed(self, texts, model):
+            requests.append((list(texts), model))
+            return [vectors[text] for text in texts]
+
+    semantic = SemanticDeduplicator(embedder=FakeEmbedder())
+    semantic._decision_score = lambda left, right: 0.9
+    concepts = [
+        Concept(
+            concept_id=f"tech:{index}",
+            kind=ConceptKind.TECHNOLOGY,
+            preferred_label=label,
+            status="accepted",
+        )
+        for index, label in enumerate(["carbon capture", "quantum computing"])
+    ]
+    match, cosine, decision = semantic.best_match(
+        "carbon conversion", concepts
+    )
+    assert semantic.embedding_provider == "gigachat"
+    assert match.concept_id == "tech:0" and cosine > 0.99 and decision == 0.9
+    assert requests == [
+        (
+            ["carbon conversion", "carbon capture", "quantum computing"],
+            "EmbeddingsGigaR",
+        )
+    ]
+    semantic.best_match("Carbon  Capture", concepts)
+    assert len(requests) == 1, "normalized texts are embedded once"

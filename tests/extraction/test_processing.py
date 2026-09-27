@@ -1,5 +1,6 @@
 """CLI/web parity through the real extraction pipeline, without services."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
@@ -128,7 +129,9 @@ def test_web_and_cli_share_extraction_contract(
     # GLiNER-only inference errors propagate to the caller, unlike hybrid.
     if mode == "gliner" and ner_failure:
         with pytest.raises(RuntimeError):
-            process_material(document(), mode=mode, ner_model=BrokenNer())
+            asyncio.run(
+                process_material(document(), mode=mode, ner_model=BrokenNer())
+            )
         return
     model = BrokenNer() if ner_failure else Ner()
     monkeypatch.setattr(cli, "_semantic_deduplicator", lambda: None)
@@ -190,8 +193,10 @@ def test_failed_llm_has_no_verified_ner_fallback():
         def generate(self, *args, **kwargs):
             raise LLMError("auth", "Credentials rejected", retryable=False)
 
-    result = process_material(
-        document(), provider=BrokenProvider(), ner_model=Ner()
+    result = asyncio.run(
+        process_material(
+            document(), provider=BrokenProvider(), ner_model=Ner()
+        )
     )
     assert result.run.status == "failed"
     assert result.assertions == []
@@ -203,18 +208,20 @@ def test_llm_mode_does_not_call_ner():
         def predict_entities(self, *args, **kwargs):
             pytest.fail("LLM-only must not call NER")
 
-    result = process_material(
-        document(),
-        mode="llm",
-        provider=ReplayProvider(responses()),
-        ner_model=ForbiddenNer(),
+    result = asyncio.run(
+        process_material(
+            document(),
+            mode="llm",
+            provider=ReplayProvider(responses()),
+            ner_model=ForbiddenNer(),
+        )
     )
     assert result.run.metadata["ner"]["status"] == "disabled"
 
 
 def test_invalid_mode_fails_before_starting_work():
     with pytest.raises(ValueError, match="mode must"):
-        process_material(document(), mode="search")
+        asyncio.run(process_material(document(), mode="search"))
 
 
 def test_shared_runtime_serializes_ner_forward_calls():

@@ -169,6 +169,13 @@ def validate_local_extraction(
             add(key, "duplicate_entity_id")
         if not entity.local_id.strip() or not entity.label.strip():
             add(key, "empty_entity_identifier_or_label")
+        if entity.country_code is not None:
+            if entity.kind.value != "Country":
+                add(key, "country_code_on_non_country")
+            elif not re.fullmatch(
+                schema["country_code_pattern"], entity.country_code
+            ):
+                add(key, "invalid_country_code")
         entity.evidence = anchor_spans(key, entity.evidence)
 
     for claim in result.claims:
@@ -207,6 +214,35 @@ def validate_local_extraction(
         ):
             add(key, "measurement_values_missing")
         quotes = [span.quote for span in claim.evidence]
+        if rule:
+            for name in rule.get("required_qualifiers", []):
+                if claim.qualifiers.get(name) in (None, ""):
+                    add(key, "missing_required_qualifier:" + name)
+            for name, allowed in rule.get("qualifier_enums", {}).items():
+                if (
+                    claim.qualifiers.get(name) is not None
+                    and claim.qualifiers[name] not in allowed
+                ):
+                    add(key, "invalid_qualifier:" + name)
+            # A maturity level is never inferred: the number must be written
+            # in the quoted source, e.g. "TRL 6".
+            for name, (low, high) in rule.get(
+                "grounded_integer_qualifiers", {}
+            ).items():
+                number = claim.qualifiers.get(name)
+                if number is None:
+                    continue
+                if (
+                    isinstance(number, bool)
+                    or not isinstance(number, int)
+                    or not low <= number <= high
+                ):
+                    add(key, "invalid_qualifier:" + name)
+                elif not any(
+                    re.search(rf"(?<!\d){number}(?!\d)", quote)
+                    for quote in quotes
+                ):
+                    add(key, "qualifier_not_grounded:" + name)
         for value in claim.values:
             raw = value.get("raw")
             grounded = (

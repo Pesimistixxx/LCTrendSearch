@@ -48,6 +48,14 @@ def snapshot_bytes(
             os.link(temporary, path)
         except FileExistsError:
             verify_existing()
+        except OSError:
+            # Some mounts (Docker Desktop bind mounts on Windows) refuse hard
+            # links. The name is a content hash, so an atomic replace of an
+            # identical file is equally safe.
+            if path.exists():
+                verify_existing()
+            else:
+                os.replace(temporary, path)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

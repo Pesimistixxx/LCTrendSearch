@@ -7,11 +7,13 @@ document.metadata.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 import re
 from typing import Any, Callable, Dict, List, Mapping
 
+from ..core.aio import resolve
 from ..core.config import load_catalog
 from ..core.models import DocumentEnvelope
 from .file_adapters import UnsupportedFileFormat, _pdf
@@ -54,6 +56,20 @@ def openalex_pdf_urls(payload: Mapping[str, Any]) -> List[str]:
     ]
 
 
+def section_role(heading: str | None) -> str | None:
+    """Rhetorical role of a paper section (method, results, limitations...).
+
+    The packet stream stays one "fulltext" kind; the role is navigation
+    metadata, so a heading never becomes evidence.
+    """
+    if not heading:
+        return None
+    for role, pattern in load_catalog("pipeline")["section_roles"].items():
+        if re.search(pattern, heading, re.IGNORECASE):
+            return role
+    return None
+
+
 def _body_chunks(raw: bytes, document: DocumentEnvelope, url: str) -> tuple:
     settings = load_catalog("pipeline")["openalex_fulltext"]
     snapshot = snapshot_bytes(raw)
@@ -73,17 +89,25 @@ def _body_chunks(raw: bytes, document: DocumentEnvelope, url: str) -> tuple:
         chunk.kind = "fulltext"
         chunk.section_path = ["fulltext"]
         chunk.locator.update(
-            docling_label=label, section_heading=heading, pdf_url=url
+            docling_label=label,
+            section_heading=heading,
+            section_role=section_role(heading),
+            pdf_url=url,
         )
         kept.append(chunk)
     return snapshot, kept, warnings
 
 
-def attach_openalex_fulltext(
+async def attach_openalex_fulltext(
     document: DocumentEnvelope,
     payload: Mapping[str, Any],
-    fetch: Callable[[str], bytes] = None,
+    fetch: Callable[[str], Any] = None,
 ) -> DocumentEnvelope:
+    """Download and parse the first usable open-access PDF.
+
+    ``fetch`` may be sync or async. Docling runs in a worker thread with a
+    timeout, so a pathological PDF fails this document instead of the job.
+    """
     if fetch is None:
         from .connectors import fetch_pdf as fetch
     urls = openalex_pdf_urls(payload)
@@ -101,8 +125,14 @@ def attach_openalex_fulltext(
     require_pdf_support()
     for url in urls:
         try:
-            raw = fetch(url)
-            snapshot, chunks, warnings = _body_chunks(raw, document, url)
+            raw = await resolve(fetch(url))
+            timeout = load_catalog("pipeline")["file_limits"].get(
+                "pdf_timeout_seconds"
+            )
+            snapshot, chunks, warnings = await asyncio.wait_for(
+                asyncio.to_thread(_body_chunks, raw, document, url),
+                timeout,
+            )
         except Exception as exc:
             logger.warning(
                 "Full text %s failed: %s: %s", url, type(exc).__name__, exc

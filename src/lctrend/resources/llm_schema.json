@@ -1,7 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "measurement_predicates": ["reported_measurement", "reported_comparison"],
   "number_pattern": "(?<![\\w.])[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)(?:[eE][+-]?\\d+)?",
+  "country_code_pattern": "^[A-Z]{2}$",
   "predicates": {
     "targets_problem": {
       "required_roles": ["subject", "problem"], "allowed_roles": ["subject", "problem"],
@@ -42,6 +43,37 @@
     "changes_metric": {
       "required_roles": ["subject", "metric"], "allowed_roles": ["subject", "metric"],
       "role_types": {"subject": ["Technology", "Method", "Material"], "metric": ["Metric"]}
+    },
+    "developed_by": {
+      "required_roles": ["subject", "organization"], "allowed_roles": ["subject", "organization", "country"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"], "country": ["Country"]}
+    },
+    "used_by": {
+      "required_roles": ["subject", "organization"], "allowed_roles": ["subject", "organization", "application", "country"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"], "country": ["Country"]}
+    },
+    "funded_by": {
+      "required_roles": ["subject", "organization"], "allowed_roles": ["subject", "organization"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"]}
+    },
+    "developed_in": {
+      "required_roles": ["subject", "country"], "allowed_roles": ["subject", "country"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "country": ["Country"]}
+    },
+    "located_in": {
+      "required_roles": ["organization", "country"], "allowed_roles": ["organization", "country"],
+      "role_types": {"organization": ["Organization", "Company", "University"], "country": ["Country"]}
+    },
+    "subtechnology_of": {
+      "required_roles": ["subject", "parent"], "allowed_roles": ["subject", "parent"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "parent": ["Technology", "Method", "Material", "Domain"]}
+    },
+    "reports_maturity_stage": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "application"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"]},
+      "required_qualifiers": ["stage"],
+      "qualifier_enums": {"stage": ["concept", "laboratory_validation", "prototype", "pilot", "commercial_deployment", "mass_adoption"]},
+      "grounded_integer_qualifiers": {"trl": [1, 9]}
     }
   }
 }

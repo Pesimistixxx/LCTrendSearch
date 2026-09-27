@@ -2,6 +2,7 @@
 budget.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -53,10 +54,12 @@ def test_overlap_dedup_uses_original_coordinates_and_never_merges_distinct_strea
     second["claims"][0]["evidence"][0]["quote"] = first["claims"][0][
         "evidence"
     ][0]["quote"]
-    result = process_document(
-        doc,
-        ReplayProvider([first, reviewed(), second, reviewed()]),
-        settings=settings(max_model_calls=4),
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider([first, reviewed(), second, reviewed()]),
+            settings=settings(max_model_calls=4),
+        )
     )
     assert len(result.assertions) == expected_assertions
     assert len(result.mentions) == expected_mentions
@@ -98,7 +101,7 @@ def test_feedback_overflow_keeps_initial_anchored_candidate_without_extra_extrac
     first = extracted(doc)
     first["context_requests"] = [request]
     provider = RecordingReplay([first, reviewed()])
-    result = process_document(doc, provider, settings=limited)
+    result = asyncio.run(process_document(doc, provider, settings=limited))
     assert [call["stage"] for call in provider.calls] == ["extract", "review"]
     assert result.run.metadata["model_calls"] == 2
     assert len(result.assertions) == 1

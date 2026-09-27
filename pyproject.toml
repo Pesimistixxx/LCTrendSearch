@@ -11,10 +11,14 @@ dependencies = [
     "neo4j>=5.26,<6",
     "pydantic>=2.9,<3",
     "python-dotenv>=1,<2",
+    # Lemma keys are part of concept identity in every extraction mode.
+    "simplemma>=1.1,<2",
+    # Async source connectors (OpenAlex, GitHub, PyPI, PDF downloads).
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
-ner = ["gliner>=0.2.22,<1", "protobuf>=5,<7", "simplemma>=1.1,<2"]
+ner = ["gliner>=0.2.22,<1", "protobuf>=5,<7"]
 llm = ["httpx>=0.27,<1"]
 pdf = ["docling>=2,<3"]
 gui = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1"]

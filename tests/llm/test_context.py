@@ -54,10 +54,23 @@ def packet(*ids):
 
 def test_settings_come_from_catalog_and_validate_interdependent_limits():
     settings = PipelineSettings.from_catalog()
-    assert settings.primary_chunks == 6
+    assert settings.primary_chunks == 10
     assert settings.max_model_calls == 8
     with pytest.raises(ValueError):
         PipelineSettings(primary_chunks=3, max_context_chunks=2)
+
+
+def test_call_budget_scales_with_planned_packets_up_to_the_document_cap():
+    fixed = PipelineSettings(max_model_calls=8)
+    assert fixed.call_limit(50) == 8
+    scaled = PipelineSettings(
+        max_model_calls=8,
+        model_calls_per_packet=3,
+        max_document_model_calls=60,
+    )
+    assert scaled.call_limit(1) == 8
+    assert scaled.call_limit(10) == 30
+    assert scaled.call_limit(50) == 60
 
 
 def test_payload_keeps_original_chunks_and_only_allowed_metadata():

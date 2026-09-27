@@ -294,6 +294,81 @@ def test_all_pages_follow_cursors_without_a_document_limit(tmp_path):
         instance.close(wait=True)
 
 
+def test_limit_caps_each_direction_and_source_across_aliases(tmp_path):
+    visited = []
+
+    def discover(topic, cursor):
+        visited.append((topic, cursor))
+        index = 1 if cursor == "*" else int(cursor)
+        return page(
+            [item("openalex", f"{topic}-{index}-{n}") for n in range(3)],
+            str(index + 1),
+            complete=False,
+            total=1000,
+        )
+
+    instance = manager(
+        tmp_path, discoverers={"openalex": discover}, batch_size=100
+    )
+    try:
+        final = finish(instance, instance.create(limit=4))
+        assert final["status"] == "completed" and final["limit"] == 4
+        # Domain A has two queries, yet shares one budget of four.
+        assert visited == [
+            ("Alias A", "*"),
+            ("Domain A", "*"),
+            ("Domain B", "*"),
+            ("Domain B", "2"),
+        ]
+        by_name = {
+            direction["name"]: direction["sources"]["openalex"]
+            for direction in final["directions"]
+        }
+        assert by_name["Domain A"]["discovered"] == 4
+        assert by_name["Domain B"]["discovered"] == 4
+        assert by_name["Domain A"]["parsed"] == 4
+        source = next(
+            source
+            for source in final["sources"]
+            if source["source"] == "openalex"
+        )
+        assert source["status"] == "capped" and not source["complete"]
+        assert any(
+            item["code"] == "user_limit" for item in source["limitations"]
+        )
+    finally:
+        instance.close(wait=True)
+
+
+def test_invalid_limit_is_rejected(tmp_path):
+    instance = manager(tmp_path)
+    try:
+        for value in [0, 10001, True, "5"]:
+            with pytest.raises(ValueError):
+                instance.create(limit=value)
+    finally:
+        instance.close(wait=True)
+
+
+def test_default_directions_follow_catalog_selection(tmp_path, monkeypatch):
+    import frontend.server.crawl as crawl
+
+    catalog = {
+        "domains": [
+            {"name": "Kept", "aliases": []},
+            {"name": "Skipped", "aliases": []},
+        ],
+        "crawl_directions": ["Kept"],
+        "platforms": {},
+    }
+    monkeypatch.setattr(crawl, "load_catalog", lambda name: catalog)
+    instance = manager(tmp_path, domains=None)
+    try:
+        assert [domain["name"] for domain in instance._domains] == ["Kept"]
+    finally:
+        instance.close(wait=True)
+
+
 def test_source_failure_does_not_stop_other_sources_or_discovered_materials(
     tmp_path,
 ):

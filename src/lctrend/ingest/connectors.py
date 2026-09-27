@@ -1,39 +1,169 @@
+"""Asynchronous source API clients with bounded retries.
+
+Transient failures (timeouts, 429, 5xx) and GitHub rate limits are retried
+with exponential backoff that honours Retry-After and X-RateLimit-Reset.
+Permanent errors (404, 401, malformed data) are raised immediately.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
+import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
+import httpx
+
+from ..core.aio import resolve
 from ..core.config import load_catalog
 
 logger = logging.getLogger(__name__)
+
+# Tests inject an httpx.MockTransport here; production uses the network.
+TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
+
+
+class SourceHTTPError(RuntimeError):
+    """A source answered with a non-retryable (or exhausted) HTTP error."""
+
+    def __init__(self, status: int, url: str):
+        self.status = status
+        self.code = f"http_{status}"
+        super().__init__(f"HTTP {status} from {_host(url)}")
+
+
+def _host(url: str) -> str:
+    return urllib.parse.urlsplit(url).hostname or "source"
 
 
 def _observed(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {**payload, "_retrieved_at": datetime.now(timezone.utc).isoformat()}
 
 
-def fetch_json(
+def _retry_after(response: httpx.Response) -> Optional[float]:
+    value = response.headers.get("Retry-After")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            try:
+                moment = parsedate_to_datetime(value)
+                if moment.tzinfo is None:
+                    moment = moment.replace(tzinfo=timezone.utc)
+                return max(
+                    0.0,
+                    (moment - datetime.now(timezone.utc)).total_seconds(),
+                )
+            except (TypeError, ValueError, OverflowError):
+                return None
+    # GitHub primary rate limit: 403/429 with remaining=0 and a reset time.
+    if response.headers.get("X-RateLimit-Remaining") == "0":
+        try:
+            reset = float(response.headers["X-RateLimit-Reset"])
+        except (KeyError, ValueError):
+            return None
+        return max(0.0, reset - time.time()) + 1.0
+    return None
+
+
+def _rate_limited(response: httpx.Response) -> bool:
+    return (
+        response.status_code == 403
+        and response.headers.get("X-RateLimit-Remaining") == "0"
+    )
+
+
+async def request(
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    *,
+    max_bytes: Optional[int] = None,
+) -> httpx.Response:
+    """GET with retries; the body is read (and bounded by ``max_bytes``)."""
+    settings = load_catalog("sources")["http"]
+    request_headers = {"User-Agent": settings["user_agent"]}
+    request_headers.update(headers or {})
+    attempts = int(settings.get("max_attempts", 1))
+    base = float(settings.get("backoff_seconds", 1.0))
+    cap = float(settings.get("max_backoff_seconds", 60.0))
+    limit_wait = float(settings.get("max_rate_limit_wait_seconds", cap))
+    retry_statuses = set(settings.get("retry_statuses", []))
+    async with httpx.AsyncClient(
+        timeout=settings["timeout_seconds"],
+        transport=TRANSPORT,
+        follow_redirects=True,
+    ) as client:
+        for attempt in range(1, attempts + 1):
+            delay: Optional[float] = None
+            try:
+                async with client.stream(
+                    "GET", url, headers=request_headers
+                ) as response:
+                    if response.is_success:
+                        body = bytearray()
+                        async for part in response.aiter_bytes():
+                            body.extend(part)
+                            if max_bytes is not None and len(body) > max_bytes:
+                                raise ValueError(
+                                    "Response exceeds the configured size "
+                                    "limit"
+                                )
+                        return httpx.Response(
+                            response.status_code,
+                            headers=response.headers,
+                            content=bytes(body),
+                            request=response.request,
+                        )
+                    status = response.status_code
+                    if status in retry_statuses or _rate_limited(response):
+                        delay = _retry_after(response)
+                        if delay is not None and delay > limit_wait:
+                            logger.warning(
+                                "%s asks to wait %.0fs; giving up",
+                                _host(url),
+                                delay,
+                            )
+                            raise SourceHTTPError(status, url)
+                    else:
+                        raise SourceHTTPError(status, url)
+                    if attempt == attempts:
+                        raise SourceHTTPError(status, url)
+                    reason = f"HTTP {status}"
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt == attempts:
+                    raise
+                reason = type(exc).__name__
+            if delay is None:
+                delay = min(cap, base * 2 ** (attempt - 1))
+                delay += random.uniform(0, delay / 4)
+            logger.warning(
+                "GET %s failed (%s), retry %d/%d in %.1fs",
+                _host(url),
+                reason,
+                attempt,
+                attempts - 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+async def fetch_json(
     url: str, headers: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
-    settings = load_catalog("sources")["http"]
-    request_headers = {
-        "Accept": "application/json",
-        "User-Agent": settings["user_agent"],
-    }
-    request_headers.update(headers or {})
-    request = urllib.request.Request(url, headers=request_headers)
     logger.debug("GET %s", url)
-    with urllib.request.urlopen(
-        request, timeout=settings["timeout_seconds"]
-    ) as response:
-        return json.loads(response.read().decode("utf-8"))
+    response = await request(
+        url, {"Accept": "application/json", **(headers or {})}
+    )
+    return json.loads(response.content.decode("utf-8"))
 
 
-def fetch_openalex(
+async def fetch_openalex(
     work_id: str, mailto: Optional[str] = None
 ) -> Dict[str, Any]:
     identifier = urllib.parse.quote(work_id, safe=":/")
@@ -41,10 +171,10 @@ def fetch_openalex(
     url = f"{api_base}/{identifier}"
     if mailto:
         url += "?" + urllib.parse.urlencode({"mailto": mailto})
-    return _observed(fetch_json(url))
+    return _observed(await resolve(fetch_json(url)))
 
 
-def fetch_openalex_page(
+async def fetch_openalex_page(
     search: str,
     cursor: str = "*",
     per_page: int = 100,
@@ -58,10 +188,12 @@ def fetch_openalex_page(
         params["filter"] = filter
     if mailto:
         params["mailto"] = mailto
-    payload = fetch_json(
-        load_catalog("sources")["platforms"]["openalex"]["api_base"]
-        + "?"
-        + urllib.parse.urlencode(params)
+    payload = await resolve(
+        fetch_json(
+            load_catalog("sources")["platforms"]["openalex"]["api_base"]
+            + "?"
+            + urllib.parse.urlencode(params)
+        )
     )
     observed_at = datetime.now(timezone.utc).isoformat()
     return {
@@ -73,25 +205,18 @@ def fetch_openalex_page(
     }
 
 
-def fetch_pdf(url: str) -> bytes:
+async def fetch_pdf(url: str) -> bytes:
     if not url.startswith(("http://", "https://")):
         raise ValueError("PDF URL must be HTTP(S)")
-    settings = load_catalog("sources")["http"]
     limit = load_catalog("pipeline")["file_limits"]["max_file_bytes"]
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/pdf",
-            "User-Agent": settings["user_agent"],
-        },
-    )
     logger.debug("GET PDF %s", url)
-    with urllib.request.urlopen(
-        request, timeout=settings["timeout_seconds"]
-    ) as response:
-        raw = response.read(limit + 1)
-    if len(raw) > limit:
-        raise ValueError("PDF exceeds the configured size limit")
+    try:
+        response = await request(
+            url, {"Accept": "application/pdf"}, max_bytes=limit
+        )
+    except ValueError:
+        raise ValueError("PDF exceeds the configured size limit") from None
+    raw = response.content
     if not raw.startswith(b"%PDF-"):
         # Publishers often answer a PDF link with an HTML landing or
         # captcha page.
@@ -100,21 +225,24 @@ def fetch_pdf(url: str) -> bytes:
     return raw
 
 
-def fetch_pypi(package: str) -> Dict[str, Any]:
+async def fetch_pypi(package: str) -> Dict[str, Any]:
     api_base = load_catalog("sources")["platforms"]["pypi"]["api_base"]
     name = urllib.parse.quote(package, safe="")
-    return _observed(fetch_json(f"{api_base}/{name}/json"))
+    return _observed(await resolve(fetch_json(f"{api_base}/{name}/json")))
 
 
-def fetch_pypi_projects() -> List[str]:
+async def fetch_pypi_projects() -> List[str]:
     settings = load_catalog("sources")["platforms"]["pypi"]
-    payload = fetch_json(
-        settings["simple_index"], {"Accept": settings["simple_media_type"]}
+    payload = await resolve(
+        fetch_json(
+            settings["simple_index"],
+            {"Accept": settings["simple_media_type"]},
+        )
     )
     return [str(project["name"]) for project in payload["projects"]]
 
 
-def fetch_github(
+async def fetch_github(
     repository: str, token: Optional[str] = None
 ) -> Dict[str, Any]:
     repository = repository.strip("/")
@@ -123,34 +251,40 @@ def fetch_github(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     base = f"{settings['api_base']}/{repository}"
-    result: Dict[str, Any] = {"repository": fetch_json(base, headers)}
+    result: Dict[str, Any] = {
+        "repository": await resolve(fetch_json(base, headers))
+    }
     # Resolve a commit first: a moving default branch cannot identify
     # README content.
     branch = urllib.parse.quote(
         result["repository"].get("default_branch") or "HEAD", safe=""
     )
-    result["commit"] = fetch_json(f"{base}/commits/{branch}", headers)
+    result["commit"] = await resolve(
+        fetch_json(f"{base}/commits/{branch}", headers)
+    )
     sha = result["commit"].get("sha")
     if not sha:
         raise ValueError(
             "GitHub commit metadata has no SHA; README cannot be pinned"
         )
-    try:
-        result["readme"] = fetch_json(
-            f"{base}/readme?" + urllib.parse.urlencode({"ref": sha}), headers
+    readme_url = f"{base}/readme?" + urllib.parse.urlencode({"ref": sha})
+    releases_url = f"{base}/releases?" + urllib.parse.urlencode(
+        {"per_page": settings["releases_per_page"]}
+    )
+    readme, releases = await asyncio.gather(
+        resolve(fetch_json(readme_url, headers)),
+        resolve(fetch_json(releases_url, headers)),
+        return_exceptions=True,
+    )
+    if isinstance(readme, BaseException):
+        logger.warning(
+            "GitHub %s: README unavailable (%s)", repository, readme
         )
-    except Exception as exc:
-        logger.warning("GitHub %s: README unavailable (%s)", repository, exc)
-        result["readme"] = None
-    try:
-        result["releases"] = fetch_json(
-            f"{base}/releases?"
-            + urllib.parse.urlencode(
-                {"per_page": settings["releases_per_page"]}
-            ),
-            headers,
+        readme = None
+    if isinstance(releases, BaseException):
+        logger.warning(
+            "GitHub %s: releases unavailable (%s)", repository, releases
         )
-    except Exception as exc:
-        logger.warning("GitHub %s: releases unavailable (%s)", repository, exc)
-        result["releases"] = []
+        releases = []
+    result["readme"], result["releases"] = readme, releases
     return _observed(result)

@@ -28,6 +28,10 @@ class PipelineSettings(BaseModel):
     max_source_chars: int = Field(default=24000, ge=1)
     max_payload_chars: int = Field(default=30000, ge=1)
     max_model_calls: int = Field(default=8, ge=1)
+    # Long full texts plan many packets; a fixed per-document budget would
+    # leave them permanently partial. 0 disables scaling.
+    model_calls_per_packet: int = Field(default=0, ge=0)
+    max_document_model_calls: int = Field(default=0, ge=0)
     max_context_rounds: int = Field(default=2, ge=0)
     max_requests_per_round: int = Field(default=4, ge=1)
     search_limit: int = Field(default=3, ge=1)
@@ -49,6 +53,15 @@ class PipelineSettings(BaseModel):
                 "retry_delay_seconds must not exceed max_retry_delay_seconds"
             )
         return self
+
+    def call_limit(self, packets: int) -> int:
+        """Model call budget for a document planned into ``packets``."""
+        if not self.model_calls_per_packet:
+            return self.max_model_calls
+        scaled = packets * self.model_calls_per_packet
+        if self.max_document_model_calls:
+            scaled = min(scaled, self.max_document_model_calls)
+        return max(self.max_model_calls, scaled)
 
     @classmethod
     def from_catalog(cls) -> "PipelineSettings":

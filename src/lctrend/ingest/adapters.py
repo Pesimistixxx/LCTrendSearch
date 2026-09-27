@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..core.config import load_catalog
 from ..core.models import (
@@ -58,39 +58,103 @@ def _project_group(urls: Iterable[Any]) -> Optional[str]:
     return None
 
 
-def _domain_from_values(values: Iterable[Any]) -> Optional[Domain]:
+def _catalog_domain(rule: Mapping[str, Any]) -> Domain:
+    return Domain(
+        domain_id=stable_id("domain", rule["name"]),
+        name=rule["name"],
+        parent_name=rule["parent_name"],
+    )
+
+
+def _domains_from_values(values: Iterable[Any]) -> List[Domain]:
+    """Every catalog domain the text names; several domains are what makes
+    a cross-domain signal visible.
+    """
     text = " ".join(str(value).casefold() for value in values)
+    found: Dict[str, Domain] = {}
     for rule in load_catalog("sources")["domains"]:
         if any(
             re.search(rf"\b{re.escape(alias)}\b", text)
             for alias in rule["aliases"]
         ):
-            return Domain(
-                domain_id=stable_id("domain", rule["name"]),
-                name=rule["name"],
-                parent_name=rule["parent_name"],
-            )
-    return None
+            domain = _catalog_domain(rule)
+            found.setdefault(domain.domain_id, domain)
+    return list(found.values())
 
 
-def _domain_from_topics(
+def _domains_from_topics(
     topics: Iterable[Mapping[str, Any]],
-) -> Optional[Domain]:
-    """Choose one canonical broad domain from source-ranked OpenAlex topics."""
+) -> List[Domain]:
+    """Catalog domains for source-ranked OpenAlex topics.
+
+    A topic outside the catalog keeps its OpenAlex subfield (under its field)
+    instead of being dropped.
+    """
+    settings = load_catalog("sources")
+    fallback = settings["platforms"]["openalex"]["fallback_domain"]
+    catalog = {rule["name"].casefold(): rule for rule in settings["domains"]}
+    found: Dict[str, Domain] = {}
     for topic in topics:
         values = [topic.get("display_name", "")]
         values.extend(
             (topic.get(key) or {}).get("display_name", "")
-            for key in load_catalog("sources")["openalex_topic_fields"]
+            for key in settings["openalex_topic_fields"]
         )
-        domain = _domain_from_values(values)
-        if domain:
-            return domain
-    return None
+        matched = _domains_from_values(values)
+        subfield = topic.get(fallback["name_field"]) or {}
+        name = subfield.get("display_name")
+        if not matched and name:
+            if name.casefold() in catalog:
+                matched = [_catalog_domain(catalog[name.casefold()])]
+            else:
+                matched = [
+                    Domain(
+                        domain_id=stable_id("domain", name),
+                        name=name,
+                        parent_name=(
+                            topic.get(fallback["parent_field"]) or {}
+                        ).get("display_name"),
+                        external_ids=[
+                            ExternalId(
+                                scheme="openalex", value=str(subfield["id"])
+                            )
+                        ]
+                        if subfield.get("id")
+                        else [],
+                    )
+                ]
+        for domain in matched:
+            found.setdefault(domain.domain_id, domain)
+    return list(found.values())
+
+
+def _organization_type(name: str, default: str = "other") -> str:
+    """Type an organization the source left untyped by its name."""
+    lowered = name.casefold()
+    for kind, pattern in load_catalog("sources")[
+        "organization_type_patterns"
+    ].items():
+        if re.search(pattern, lowered):
+            return kind
+    return default
 
 
 def _bytes_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _observation_hash(payload: Mapping[str, Any]) -> str:
+    """Hash of the source record without its fetch time.
+
+    Fetch time alone is not a version: re-fetching an unchanged record must
+    map to the already processed version instead of a new one.
+    """
+    observation = {
+        key: value for key, value in payload.items() if key != "_retrieved_at"
+    }
+    return _bytes_hash(
+        json.dumps(observation, sort_keys=True, default=str).encode("utf-8")
+    )
 
 
 def _artifact(uri: str, raw: bytes, media_type: str) -> Artifact:
@@ -222,7 +286,7 @@ def parse_openalex(
     doi = str(payload.get("doi") or "").removeprefix("https://doi.org/")
     identity = doi or openalex_id
     document_id = stable_id("document", "openalex", identity)
-    version_id = stable_id("version", document_id, _bytes_hash(raw))
+    version_id = stable_id("version", document_id, _observation_hash(payload))
     abstract = _abstract_from_inverted_index(
         payload.get("abstract_inverted_index")
     )
@@ -288,7 +352,46 @@ def parse_openalex(
                 )
             )
 
-    domain = _domain_from_topics(payload.get("topics") or [])
+    grants = []
+    funders = [
+        {
+            "id": grant.get("funder"),
+            "display_name": grant.get("funder_display_name"),
+        }
+        for grant in payload.get("grants") or []
+    ]
+    funders.extend(payload.get("funders") or [])
+    for funder in funders:
+        name = funder.get("display_name")
+        if not name:
+            continue
+        external_id = str(funder.get("id") or name)
+        organization_id = stable_id("organization", "openalex", external_id)
+        organizations.setdefault(
+            organization_id,
+            Organization(
+                organization_id=organization_id,
+                name=name,
+                organization_type="funder",
+                country_code=(funder.get("country_code") or "").upper()
+                or None,
+                role="funder",
+                external_ids=[
+                    ExternalId(scheme="openalex", value=external_id)
+                ],
+            ),
+        )
+    for grant in payload.get("grants") or []:
+        if grant.get("award_id"):
+            grants.append(
+                {
+                    "funder": grant.get("funder_display_name"),
+                    "award_id": grant["award_id"],
+                }
+            )
+
+    domains = _domains_from_topics(payload.get("topics") or [])
+    location = payload.get("primary_location") or {}
 
     identifiers = [ExternalId(scheme="openalex", value=openalex_id)]
     if doi:
@@ -328,13 +431,24 @@ def parse_openalex(
         contributors=contributors,
         organizations=list(organizations.values()),
         countries=list(countries.values()),
-        domains=[domain] if domain else [],
+        domains=domains,
         chunks=chunks,
         metadata={
             "type": payload.get("type"),
             "topics": payload.get("topics") or [],
+            "venue": (location.get("source") or {}).get("display_name"),
+            "venue_type": (location.get("source") or {}).get("type"),
+            "open_access": (payload.get("open_access") or {}).get("oa_status"),
+            "is_retracted": bool(payload.get("is_retracted")),
+            "grants": grants,
+            "counts_by_year": payload.get("counts_by_year") or [],
         },
         metrics={
+            **(
+                {"fwci": float(payload["fwci"])}
+                if isinstance(payload.get("fwci"), (int, float))
+                else {}
+            ),
             "citation_count": float(payload.get("cited_by_count") or 0),
             "reference_count": float(
                 payload.get("referenced_works_count") or 0
@@ -367,13 +481,9 @@ def parse_github(
     # Mutable counters need their own snapshot so later collection cannot
     # overwrite the metrics attached to a previous version. Fetch time alone
     # is not a version.
-    observation = {
-        key: value for key, value in payload.items() if key != "_retrieved_at"
-    }
-    snapshot_hash = _bytes_hash(
-        json.dumps(observation, sort_keys=True).encode("utf-8")
+    version_id = stable_id(
+        "version", document_id, commit_sha, _observation_hash(payload)
     )
-    version_id = stable_id("version", document_id, commit_sha, snapshot_hash)
     canonical_url = (
         repo.get("html_url")
         or f"{load_catalog('sources')['platforms']['github']['public_base']}"
@@ -440,6 +550,7 @@ def parse_github(
                         "organization", "github", owner_key
                     ),
                     name=owner["login"],
+                    organization_type=_organization_type(owner["login"]),
                     role="owner",
                     external_ids=[
                         ExternalId(scheme="github", value=str(owner_key))
@@ -475,6 +586,13 @@ def parse_github(
         identifiers=[ExternalId(scheme="github", value=repo_id)],
         contributors=contributors,
         organizations=organizations,
+        domains=_domains_from_values(
+            [
+                repo.get("name") or "",
+                repo.get("description") or "",
+                *(repo.get("topics") or []),
+            ]
+        ),
         chunks=chunks,
         metadata={
             "full_name": repo.get("full_name"),
@@ -505,7 +623,9 @@ def parse_pypi(
     name = info["name"]
     version = info.get("version") or "unknown"
     document_id = stable_id("document", "pypi", name.lower())
-    version_id = stable_id("version", document_id, version, _bytes_hash(raw))
+    version_id = stable_id(
+        "version", document_id, version, _observation_hash(payload)
+    )
     canonical_url = (
         info.get("package_url")
         or f"{load_catalog('sources')['platforms']['pypi']['public_base']}"
@@ -516,7 +636,7 @@ def parse_pypi(
         for item in payload.get("urls") or []
         if item.get("upload_time_iso_8601")
     )
-    domain = _domain_from_values(
+    domains = _domains_from_values(
         [name, info.get("summary") or "", *(info.get("classifiers") or [])]
     )
     country_code = str(
@@ -580,7 +700,7 @@ def parse_pypi(
         identifiers=[ExternalId(scheme="pypi", value=name)],
         contributors=contributors,
         countries=countries,
-        domains=[domain] if domain else [],
+        domains=domains,
         chunks=chunks,
         metadata={
             "version": version,
@@ -611,16 +731,70 @@ def _first_text(root: ET.Element, name: str) -> Optional[str]:
     return None
 
 
-def parse_epo(xml: str, uri: str = "local://epo.xml") -> DocumentEnvelope:
+def _name_country(value: str) -> Tuple[str, Optional[str]]:
+    """EPO epodoc names carry residence: "SIEMENS AG [DE]"."""
+    match = re.fullmatch(r"(.*?)[\s,]*\[([A-Z]{2})\]\s*", value)
+    if match:
+        return match.group(1).strip(), match.group(2)
+    return value.strip(), None
+
+
+def _party_names(
+    root: ET.Element, tag: str
+) -> List[Tuple[str, Optional[str]]]:
+    settings = load_catalog("sources")["platforms"]["epo"]
+    elements = list(_elements(root, tag))
+    preferred = [
+        element
+        for element in elements
+        if element.get("data-format") == settings["preferred_name_format"]
+    ]
+    names: Dict[str, Tuple[str, Optional[str]]] = {}
+    for element in preferred or elements:
+        name = next(
+            (
+                " ".join("".join(candidate.itertext()).split())
+                for candidate in element.iter()
+                if _local_name(candidate) in settings["name_tags"]
+                and "".join(candidate.itertext()).strip()
+            ),
+            None,
+        )
+        if name:
+            name, country = _name_country(name)
+            key = re.sub(r"[\W_]+", " ", name.casefold()).strip()
+            if key not in names or (country and not names[key][1]):
+                names[key] = (name, country)
+    return list(names.values())
+
+
+def _publication_date(root: ET.Element) -> Optional[str]:
+    """Publication, not priority or application, date."""
+    reference = next(_elements(root, "publication-reference"), None)
+    date = (
+        _first_text(reference, "date") if reference is not None else None
+    ) or _first_text(root, "date")
+    if date and re.fullmatch(r"\d{8}", date):
+        date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+    return date
+
+
+def parse_epo(
+    xml: str,
+    uri: str = "local://epo.xml",
+    retrieved_at: Optional[str] = None,
+) -> DocumentEnvelope:
     raw = xml.encode("utf-8")
     root = ET.fromstring(xml)
-    country = _first_text(root, "country") or ""
-    doc_number = _first_text(root, "doc-number") or _first_text(
+    settings = load_catalog("sources")["platforms"]["epo"]
+    reference = next(_elements(root, "publication-reference"), root)
+    country = _first_text(reference, "country") or ""
+    doc_number = _first_text(reference, "doc-number") or _first_text(
         root, "publication-reference"
     )
     if not doc_number:
         raise ValueError("EPO XML has no publication number")
-    kind = _first_text(root, "kind") or ""
+    kind = _first_text(reference, "kind") or ""
     publication_id = "".join(
         part for part in (country, doc_number, kind) if part
     )
@@ -628,10 +802,12 @@ def parse_epo(xml: str, uri: str = "local://epo.xml") -> DocumentEnvelope:
     version_id = stable_id("version", document_id, _bytes_hash(raw))
     title = _first_text(root, "invention-title") or publication_id
     abstract_parts = []
+    language = None
     for abstract in _elements(root, "abstract"):
         text = " ".join("".join(abstract.itertext()).split())
         if text and text not in abstract_parts:
             abstract_parts.append(text)
+            language = language or abstract.get("lang")
     abstract = "\n".join(abstract_parts)
     chunks = (
         [
@@ -646,54 +822,93 @@ def parse_epo(xml: str, uri: str = "local://epo.xml") -> DocumentEnvelope:
         if abstract
         else []
     )
-
-    contributors = []
-    organizations = []
-    for role, tag in load_catalog("sources")["platforms"]["epo"][
-        "people_tags"
-    ].items():
-        for element in _elements(root, tag):
-            name = next(
-                (
-                    " ".join("".join(candidate.itertext()).split())
-                    for candidate in element.iter()
-                    if _local_name(candidate)
-                    in load_catalog("sources")["platforms"]["epo"]["name_tags"]
-                    and "".join(candidate.itertext()).strip()
-                ),
-                None,
+    # Full-text OPS responses add claims and description; biblio has none.
+    for section, item_tag in settings["text_sections"].items():
+        container = next(_elements(root, section), None)
+        if container is None:
+            continue
+        items = [
+            " ".join("".join(item.itertext()).split())
+            for item in _elements(container, item_tag)
+        ]
+        text = "\n\n".join(item for item in items if item)
+        if not text:
+            continue
+        section_chunks = _markdown_chunks(
+            version_id, section, text, len(chunks)
+        )
+        for chunk in section_chunks:
+            chunk.locator.update(
+                xpath=f"//*[local-name()='{section}']",
+                text_basis="epo_xml_item_text_joined",
             )
-            if name:
-                if role == "applicant":
-                    organizations.append(
-                        Organization(
-                            organization_id=stable_id(
-                                "organization", "epo", name
-                            ),
-                            name=name,
-                            role=role,
-                        )
-                    )
-                else:
-                    contributors.append(
-                        Contributor(
-                            contributor_id=stable_id("person", "epo", name),
-                            name=name,
-                            role=role,
-                        )
-                    )
+        chunks.extend(section_chunks)
 
-    date = _first_text(root, "date")
-    if date and re.fullmatch(r"\d{8}", date):
-        date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+    inventors = _party_names(root, settings["people_tags"]["inventor"])
+    inventor_keys = {
+        re.sub(r"[\W_]+", " ", name.casefold()).strip()
+        for name, _ in inventors
+    }
+    contributors = [
+        Contributor(
+            contributor_id=stable_id("person", "epo", name),
+            name=name,
+            role="inventor",
+        )
+        for name, _ in inventors
+    ]
+    organizations = []
+    countries: Dict[str, Country] = {}
+    if country:
+        countries[country.upper()] = Country(
+            country_id=stable_id("country", country.upper()),
+            code=country.upper(),
+            role="jurisdiction",
+        )
+    for name, residence in _party_names(
+        root, settings["people_tags"]["applicant"]
+    ):
+        key = re.sub(r"[\W_]+", " ", name.casefold()).strip()
+        if key in inventor_keys:
+            # An inventor filing in their own name is a person, not a company.
+            contributors.append(
+                Contributor(
+                    contributor_id=stable_id("person", "epo", name),
+                    name=name,
+                    role="applicant",
+                )
+            )
+            continue
+        organizations.append(
+            Organization(
+                organization_id=stable_id("organization", "epo", name),
+                name=name,
+                organization_type=_organization_type(name),
+                country_code=residence,
+                role="applicant",
+            )
+        )
+        if residence:
+            countries.setdefault(
+                residence,
+                Country(
+                    country_id=stable_id("country", residence),
+                    code=residence,
+                    role="applicant_residence",
+                ),
+            )
+
+    date = _publication_date(root)
 
     return DocumentEnvelope(
         document_id=document_id,
         document_version_id=version_id,
         document_type=DocumentType.PATENT,
         title=title,
+        language=language,
         published_at=date,
         version_published_at=date,
+        retrieved_at=retrieved_at,
         source=_source("epo", publication_id, uri),
         artifact=_artifact(uri, raw, "application/xml"),
         identifiers=[
@@ -701,18 +916,22 @@ def parse_epo(xml: str, uri: str = "local://epo.xml") -> DocumentEnvelope:
         ],
         contributors=contributors,
         organizations=organizations,
-        countries=(
-            [
-                Country(
-                    country_id=stable_id("country", country.upper()),
-                    code=country.upper(),
-                    role="jurisdiction",
-                )
-            ]
-            if country
-            else []
-        ),
+        countries=list(countries.values()),
+        domains=_domains_from_values([title, abstract]),
         chunks=chunks,
-        metadata={"country": country or None, "kind": kind or None},
-        coverage="abstract_only" if chunks else "metadata_only",
+        metadata={
+            "country": country or None,
+            "kind": kind or None,
+            "classifications": [
+                " ".join("".join(item.itertext()).split())
+                for item in _elements(root, "classification-ipcr")
+            ],
+        },
+        coverage=(
+            "full_text"
+            if len(chunks) > (1 if abstract else 0)
+            else "abstract_only"
+            if chunks
+            else "metadata_only"
+        ),
     )

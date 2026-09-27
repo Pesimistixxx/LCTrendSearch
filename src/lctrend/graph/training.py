@@ -44,7 +44,61 @@ FEATURE_FIELDS = [
     "patent_data_available",
     "repository_data_available",
     "economic_data_available",
+    "developer_count",
+    "user_count",
+    "funder_count",
+    "text_country_count",
+    "parent_technology_count",
+    "max_maturity_rank",
+    "max_trl",
+    "economic_evidence_count",
 ]
+
+SIGNAL_COUNTS = {
+    "DEVELOPED_BY": "developer_count",
+    "USED_BY": "user_count",
+    "FUNDED_BY": "funder_count",
+    "DEVELOPED_IN": "text_country_count",
+    "SUBTECHNOLOGY_OF": "parent_technology_count",
+}
+
+
+def _signal_features(
+    rows: Iterable[Dict[str, object]], cutoff: date
+) -> Dict[str, Dict[str, object]]:
+    """Aggregate dated text signals known at the snapshot date."""
+    targets: Dict[str, Dict[str, set]] = {}
+    features: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        observed = row.get("observed_at")
+        if not observed or _date(str(observed)) > cutoff:
+            continue
+        technology_id = str(row["technology_id"])
+        item = features.setdefault(
+            technology_id,
+            {
+                **{name: 0 for name in SIGNAL_COUNTS.values()},
+                "max_maturity_rank": None,
+                "max_trl": None,
+                "economic_evidence_count": 0,
+            },
+        )
+        signal = row["signal"]
+        if signal in SIGNAL_COUNTS:
+            targets.setdefault(technology_id, {}).setdefault(
+                signal, set()
+            ).add(row["target_id"])
+            item[SIGNAL_COUNTS[signal]] = len(targets[technology_id][signal])
+        elif signal == "MATURITY":
+            for key, value in (
+                ("max_maturity_rank", row.get("value")),
+                ("max_trl", row.get("target_id")),
+            ):
+                if value is not None:
+                    item[key] = max(int(value), item[key] or 0)
+        elif signal == "ECONOMIC":
+            item["economic_evidence_count"] += 1
+    return features
 
 
 def _date(value: str) -> date:
@@ -176,8 +230,16 @@ def build_feature_rows(
     documents: Iterable[Dict[str, object]],
     tasks: Iterable[Dict[str, object]],
     snapshot: str,
+    signals: Iterable[Dict[str, object]] = (),
 ) -> List[Dict[str, object]]:
     cutoff = _date(snapshot)
+    signal_features = _signal_features(signals, cutoff)
+    empty_signals = {
+        **{name: 0 for name in SIGNAL_COUNTS.values()},
+        "max_maturity_rank": None,
+        "max_trl": None,
+        "economic_evidence_count": 0,
+    }
     docs = {
         item["document_id"]: {**item, "date": _date(str(item["created_at"]))}
         for item in documents
@@ -237,6 +299,7 @@ def build_feature_rows(
             for item in values
             if item.get("source_family")
         }
+        text_signals = signal_features.get(technology_id, empty_signals)
         rows.append(
             {
                 "technology_id": technology_id,
@@ -279,7 +342,10 @@ def build_feature_rows(
                 "new_relation_count": len(recent_relations - prior_relations),
                 "patent_data_available": "patent" in families,
                 "repository_data_available": "code" in families,
-                "economic_data_available": False,
+                "economic_data_available": bool(
+                    text_signals["economic_evidence_count"]
+                ),
+                **text_signals,
             }
         )
     return rows

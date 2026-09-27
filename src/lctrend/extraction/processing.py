@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from threading import RLock
@@ -13,7 +14,11 @@ from ..llm.pipeline import process_document
 from .assertions import extract_assertions
 from .economics import extract_economic_evidence
 from .ner import extract_mentions
-from .resolver import SemanticDeduplicator, resolve_mentions
+from .resolver import (
+    ConceptRegistry,
+    SemanticDeduplicator,
+    resolve_mentions,
+)
 
 
 class NerRuntime:
@@ -38,11 +43,16 @@ class NerRuntime:
             return self.model.predict_entities(*args, **kwargs)
 
 
-def _extract(
+async def _extract(
     document, model_name: str, registry, semantic: SemanticDeduplicator, model
 ) -> ExtractionResult:
-    mentions = extract_mentions(document, model)
-    concepts, resolutions = resolve_mentions(mentions, registry, semantic)
+    mentions = await asyncio.to_thread(extract_mentions, document, model)
+    if isinstance(registry, ConceptRegistry):
+        concepts, resolutions = await registry.resolve(mentions, semantic)
+    else:
+        concepts, resolutions = await asyncio.to_thread(
+            resolve_mentions, mentions, registry, semantic
+        )
     economic_evidence = extract_economic_evidence(
         document.chunks, mentions, concepts, resolutions
     )
@@ -84,16 +94,45 @@ def _semantic_deduplicator() -> SemanticDeduplicator:
                 "DEDUP_DECISION_THRESHOLD", settings["decision_threshold"]
             )
         ),
-        embedding_model=os.getenv(
-            "DEDUP_EMBEDDING_MODEL", settings["embedding_model"]
-        ),
+        embedding_provider=os.getenv("DEDUP_EMBEDDING_PROVIDER") or None,
+        embedding_model=os.getenv("DEDUP_EMBEDDING_MODEL") or None,
         decision_model=os.getenv(
             "DEDUP_DECISION_MODEL", settings["decision_model"]
         ),
     )
 
 
-def process_material(
+_SHARED_SEMANTIC: dict = {}
+SEMANTIC_ENV = (
+    "DEDUP_EMBEDDING_PROVIDER",
+    "DEDUP_EMBEDDING_MODEL",
+    "DEDUP_COSINE_THRESHOLD",
+    "DEDUP_DECISION_THRESHOLD",
+    "DEDUP_DECISION_MODEL",
+)
+
+
+def _llm_semantic() -> SemanticDeduplicator | None:
+    """The semantic layer for llm/hybrid runs, shared by the process so its
+    label-vector cache spans documents. DEDUP_IN_LLM=0/1 overrides
+    resolver.json semantic.use_in_llm.
+    """
+    flag = os.getenv("DEDUP_IN_LLM")
+    enabled = (
+        flag.strip().lower() in {"1", "true", "yes"}
+        if flag
+        else bool(load_catalog("resolver")["semantic"].get("use_in_llm"))
+    )
+    if not enabled:
+        return None
+    key = tuple(os.getenv(name) for name in SEMANTIC_ENV)
+    if key not in _SHARED_SEMANTIC:
+        _SHARED_SEMANTIC.clear()
+        _SHARED_SEMANTIC[key] = _semantic_deduplicator()
+    return _SHARED_SEMANTIC[key]
+
+
+async def process_material(
     document,
     mode="hybrid",
     provider=None,
@@ -125,16 +164,17 @@ def process_material(
             from ..llm.client import JsonLLM
 
             provider = JsonLLM.from_environment()
-        return process_document(
+        return await process_document(
             document,
             provider,
             registry,
+            semantic=semantic if semantic is not None else _llm_semantic(),
             ner=model if mode == "hybrid" else None,
             ner_name=name if mode == "hybrid" and model is not None else None,
             event=event,
         )
     model = model if model is not None else NerRuntime(model_name=name)
-    return _extract(
+    return await _extract(
         document,
         name or getattr(model, "model_name", None),
         registry,
