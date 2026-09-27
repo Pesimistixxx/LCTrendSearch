@@ -797,6 +797,135 @@ class GraphStore:
         async with self._driver.session(database=self._database) as session:
             return [_data(record) for record in await _records(session, query)]
 
+    async def read_taxonomy_input(
+        self, kinds: List[str]
+    ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
+        """Embedded concepts with their document dates, and reviewed
+        (child, parent) SUBTECHNOLOGY_OF pairs.
+        """
+        concepts = """
+            MATCH (c:__LABEL__)
+            WHERE c.embedding IS NOT NULL AND c.concept_id IS NOT NULL
+            OPTIONAL MATCH (c)<-[:MENTIONS]-(:Chunk)<-[:HAS_CHUNK]-
+                  (:DocumentVersion)<-[:HAS_VERSION]-(d:Document)
+            RETURN c.concept_id AS concept_id, c.preferred_label AS label,
+                   c.kind AS kind, c.embedding AS embedding,
+                   c.first_seen_at AS first_seen_at,
+                   collect(DISTINCT d.created_at) AS document_dates
+        """
+        parents = """
+            MATCH (child)-[:SUBTECHNOLOGY_OF]->(parent)
+            RETURN DISTINCT child.concept_id AS child,
+                   parent.concept_id AS parent
+        """
+        async with self._driver.session(database=self._database) as session:
+            rows = []
+            for kind in kinds:
+                # One label scan per kind instead of a scan of all nodes.
+                query = concepts.replace("__LABEL__", cypher_identifier(kind))
+                rows.extend(
+                    _data(record) for record in await _records(session, query)
+                )
+            pairs = [
+                (item["child"], item["parent"])
+                for item in map(_data, await _records(session, parents))
+            ]
+        return rows, pairs
+
+    async def write_taxonomy(self, taxonomy: Any) -> None:
+        """Replace the taxonomy of one version: TaxonomyNode tree plus
+        concept placements.
+        """
+        nodes = [
+            {
+                "node_id": node.node_id,
+                "parent_id": node.parent_id,
+                "path": list(node.path),
+                "level": node.level,
+                "label": node.label,
+                "size": len(node.subtree_ids),
+                "documents_last_year": node.documents_last_year,
+                "documents_previous_year": node.documents_previous_year,
+                "new_share": node.new_share,
+            }
+            for node in taxonomy.nodes.values()
+        ]
+        placements: Dict[str, List[Dict[str, Any]]] = {}
+        for concept_id, node_id in taxonomy.placement.items():
+            kind = cypher_identifier(taxonomy.concepts[concept_id].kind)
+            placements.setdefault(kind, []).append(
+                {
+                    "concept_id": concept_id,
+                    "node_id": node_id,
+                    "general": concept_id in taxonomy.general_terms,
+                }
+            )
+
+        async def write(tx: Any) -> None:
+            await _run(
+                tx,
+                """
+                MATCH (n:TaxonomyNode {taxonomy_version: $version})
+                DETACH DELETE n
+                """,
+                version=taxonomy.version,
+            )
+            for batch in _batches(nodes):
+                await _run(
+                    tx,
+                    """
+                    UNWIND $rows AS row
+                    MERGE (n:TaxonomyNode {node_id: row.node_id})
+                    SET n.taxonomy_version = $version,
+                        n.snapshot_date = $snapshot,
+                        n.path = row.path, n.level = row.level,
+                        n.label = row.label, n.name = row.label,
+                        n.size = row.size,
+                        n.documents_last_year = row.documents_last_year,
+                        n.documents_previous_year =
+                            row.documents_previous_year,
+                        n.new_share = row.new_share
+                    """,
+                    rows=batch,
+                    version=taxonomy.version,
+                    snapshot=taxonomy.snapshot.isoformat(),
+                )
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                WITH row WHERE row.parent_id IS NOT NULL
+                MATCH (child:TaxonomyNode {node_id: row.node_id})
+                MATCH (parent:TaxonomyNode {node_id: row.parent_id})
+                MERGE (child)-[:CHILD_OF]->(parent)
+                """,
+                rows=nodes,
+            )
+            for label, rows in placements.items():
+                for batch in _batches(rows):
+                    await _run(
+                        tx,
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (c:{label} {{concept_id: row.concept_id}})
+                        MATCH (n:TaxonomyNode {{node_id: row.node_id}})
+                        MERGE (c)-[r:IN_TAXONOMY]->(n)
+                        SET r.taxonomy_version = $version,
+                            r.general_term = row.general
+                        """,
+                        rows=batch,
+                        version=taxonomy.version,
+                    )
+
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(write)
+        logger.info(
+            "Taxonomy %s written: %d nodes, %d concepts",
+            taxonomy.version,
+            len(nodes),
+            len(taxonomy.placement),
+        )
+
     @staticmethod
     def _reviewed(assertion: Any) -> bool:
         """Only a reviewed, affirmative, reported or observed source claim

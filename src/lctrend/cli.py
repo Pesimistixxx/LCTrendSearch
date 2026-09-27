@@ -42,6 +42,11 @@ from .ingest.connectors import (
 )
 from .ingest.fulltext import attach_openalex_fulltext, require_pdf_support
 from .ingest.snapshots import persist_snapshot as _snapshot
+from .taxonomy import (
+    TaxonomyConcept,
+    build_taxonomy,
+    taxonomy_features,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -703,6 +708,22 @@ def main() -> None:
     features_command.add_argument(
         "--output", type=Path, default=Path(settings["features_output"])
     )
+    features_command.add_argument(
+        "--no-taxonomy",
+        action="store_true",
+        help="Skip taxonomy novelty features",
+    )
+    taxonomy_command = subparsers.add_parser(
+        "build-taxonomy",
+        help="Build the technology taxonomy of a snapshot into Neo4j",
+    )
+    taxonomy_command.add_argument("--snapshot", required=True)
+    taxonomy_command.add_argument(
+        "--output",
+        type=Path,
+        help="Also write the tree as JSON (default artifacts/taxonomy/"
+        "<snapshot>.json)",
+    )
 
     subparsers.add_parser("init-graph", help="Create Neo4j constraints")
     args = parser.parse_args()
@@ -732,6 +753,47 @@ async def _ensure_schema(store):
 
 async def _training_data(store):
     return await resolve(store.read_training_data())
+
+
+async def _taxonomy_data(store):
+    kinds = load_catalog("taxonomy")["kinds"]
+    return await resolve(store.read_taxonomy_input(kinds))
+
+
+def _taxonomy(snapshot: str, data) -> Any:
+    rows, parents = data
+    return build_taxonomy(
+        [TaxonomyConcept.from_row(row) for row in rows], snapshot, parents
+    )
+
+
+def _taxonomy_tree(taxonomy) -> Dict[str, Any]:
+    def node(node_id: str) -> Dict[str, Any]:
+        item = taxonomy.nodes[node_id]
+        return {
+            "node_id": item.node_id,
+            "label": item.label,
+            "level": item.level,
+            "size": len(item.subtree_ids),
+            "new_share": round(item.new_share, 4),
+            "documents_last_year": item.documents_last_year,
+            "documents_previous_year": item.documents_previous_year,
+            "concepts": [
+                {
+                    "concept_id": cid,
+                    "label": taxonomy.concepts[cid].label,
+                    "general_term": cid in taxonomy.general_terms,
+                }
+                for cid in item.concept_ids
+            ],
+            "children": [node(child) for child in item.children],
+        }
+
+    return {
+        "taxonomy_version": taxonomy.version,
+        "snapshot": taxonomy.snapshot.isoformat(),
+        "root": node(taxonomy.root().node_id),
+    }
 
 
 async def _feature_data(store):
@@ -790,12 +852,46 @@ def _run(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.command == "build-taxonomy":
+        taxonomy = _taxonomy(
+            args.snapshot, asyncio.run(_graph(_taxonomy_data))
+        )
+
+        async def write(store):
+            await resolve(store.ensure_schema())
+            await resolve(store.write_taxonomy(taxonomy))
+
+        asyncio.run(_graph(write))
+        output = args.output or Path(
+            "artifacts", "taxonomy", f"{taxonomy.snapshot.isoformat()}.json"
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(_taxonomy_tree(taxonomy), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(
+            "taxonomy=%s nodes=%d concepts=%d output=%s",
+            taxonomy.version,
+            len(taxonomy.nodes),
+            len(taxonomy.placement),
+            output,
+        )
+        return
+
     if args.command == "export-features":
         mentions, documents, tasks, signals = asyncio.run(
             _graph(_feature_data)
         )
+        taxonomy = (
+            None
+            if args.no_taxonomy
+            else taxonomy_features(
+                _taxonomy(args.snapshot, asyncio.run(_graph(_taxonomy_data)))
+            )
+        )
         rows = build_feature_rows(
-            mentions, documents, tasks, args.snapshot, signals
+            mentions, documents, tasks, args.snapshot, signals, taxonomy
         )
         logger.info(
             "rows=%d output=%s",

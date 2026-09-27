@@ -32,3 +32,5 @@ CREATE INDEX funded_by_version IF NOT EXISTS FOR ()-[r:FUNDED_BY]-() ON (r.docum
 CREATE INDEX developed_in_version IF NOT EXISTS FOR ()-[r:DEVELOPED_IN]-() ON (r.document_version_id);
 CREATE INDEX located_in_version IF NOT EXISTS FOR ()-[r:LOCATED_IN]-() ON (r.document_version_id);
 CREATE INDEX subtechnology_of_version IF NOT EXISTS FOR ()-[r:SUBTECHNOLOGY_OF]-() ON (r.document_version_id);
+CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.node_id IS UNIQUE;
+CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);

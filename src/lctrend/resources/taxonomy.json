@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "note": "TaxoGen-style topic taxonomy over stored concept label embeddings: recursive spherical k-means; a term not concentrated in one child stays at the parent as a general term.",
+  "kinds": ["Technology", "Method", "Material"],
+  "branching": 4,
+  "max_depth": 4,
+  "min_cluster_size": 3,
+  "kmeans_iterations": 30,
+  "seed": 13,
+  "general_term_margin": 0.05,
+  "explicit_parent_weight": 0.5,
+  "label_terms": 3,
+  "known_age_days": 365,
+  "new_branch_share": 0.5
+}

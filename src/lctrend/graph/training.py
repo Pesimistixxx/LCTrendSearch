@@ -4,7 +4,7 @@ import csv
 import json
 from datetime import date
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 FIELDNAMES = [
     "technology_id",
@@ -21,6 +21,17 @@ FIELDNAMES = [
     "task_count",
     "future_document_count",
     "label_realized_3y",
+]
+# From lctrend.taxonomy.taxonomy_features, built at the same snapshot.
+TAXONOMY_FIELDS = [
+    "taxonomy_level",
+    "taxonomy_node_size",
+    "taxonomy_sibling_count",
+    "taxonomy_general_term",
+    "semantic_novelty",
+    "branch_growth",
+    "branch_new_share",
+    "new_branch_in_known_area",
 ]
 FEATURE_FIELDS = [
     "technology_id",
@@ -52,6 +63,7 @@ FEATURE_FIELDS = [
     "max_maturity_rank",
     "max_trl",
     "economic_evidence_count",
+    *TAXONOMY_FIELDS,
 ]
 
 SIGNAL_COUNTS = {
@@ -231,6 +243,7 @@ def build_feature_rows(
     tasks: Iterable[Dict[str, object]],
     snapshot: str,
     signals: Iterable[Dict[str, object]] = (),
+    taxonomy: Optional[Dict[str, Dict[str, object]]] = None,
 ) -> List[Dict[str, object]]:
     cutoff = _date(snapshot)
     signal_features = _signal_features(signals, cutoff)
@@ -346,6 +359,12 @@ def build_feature_rows(
                     text_signals["economic_evidence_count"]
                 ),
                 **text_signals,
+                **{
+                    name: (taxonomy or {})
+                    .get(technology_id, {})
+                    .get(name)
+                    for name in TAXONOMY_FIELDS
+                },
             }
         )
     return rows
