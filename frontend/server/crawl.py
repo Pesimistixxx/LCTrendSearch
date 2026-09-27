@@ -110,7 +110,7 @@ class CrawlManager:
                 status TEXT NOT NULL DEFAULT 'pending', job_id
                 TEXT, doc_id TEXT,
                 error_json TEXT, updated_at TEXT NOT NULL, claimed_by TEXT,
-                stage TEXT, llm_status TEXT, gliner_status TEXT
+                stage TEXT, llm_status TEXT
             );
             CREATE TABLE IF NOT EXISTS links (
                 crawl_id TEXT NOT NULL REFERENCES crawls(crawl_id),
@@ -127,7 +127,7 @@ class CrawlManager:
         existing_columns = {
             row[1] for row in self._db.execute("PRAGMA table_info(materials)")
         }
-        for column in ["claimed_by", "stage", "llm_status", "gliner_status"]:
+        for column in ["claimed_by", "stage", "llm_status"]:
             if column not in existing_columns:
                 self._db.execute(
                     f"ALTER TABLE materials ADD COLUMN {column} TEXT"
@@ -569,7 +569,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             ).fetchone()[0]
             rows = self._db.execute(
                 "SELECT material_id,title,source,canonical_id,status,job_id,"
-                "doc_id,url,error_json,stage,llm_status,gliner_status "
+                "doc_id,url,error_json,stage,llm_status "
                 f"FROM materials m WHERE {where} "
                 "ORDER BY updated_at DESC,material_id LIMIT ? OFFSET ?",
                 [*params, limit, offset],
@@ -1132,14 +1132,13 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     status,
                     doc.get("stage"),
                     doc.get("llm_status"),
-                    doc.get("gliner_status"),
                     error_json,
                     claim,
                 )
                 current = self._db.execute(
                     (
                         "SELECT "
-                        "status,stage,llm_status,gliner_status,error_json,claimed_by"
+                        "status,stage,llm_status,error_json,claimed_by"
                         " FROM materials WHERE material_id=?"
                     ),
                     (record["material_id"],),
@@ -1148,7 +1147,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     self._db.execute(
                         (
                             "UPDATE materials SET "
-                            "status=?,stage=?,llm_status=?,gliner_status=?,error_json=?,claimed_by=?,updated_at=?"
+                            "status=?,stage=?,llm_status=?,error_json=?,claimed_by=?,updated_at=?"
                             " WHERE material_id=?"
                         ),
                         (*values, _now(), record["material_id"]),

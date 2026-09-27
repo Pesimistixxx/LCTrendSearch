@@ -16,10 +16,7 @@ from uuid import uuid4
 from .core.aio import resolve
 from .core.config import load_catalog, load_environment
 from .core.logging_config import setup_logging
-from .extraction.processing import (
-    _semantic_deduplicator,
-    process_material,
-)
+from .extraction.processing import process_material
 from .extraction.resolver import ConceptRegistry
 from .graph.store import GraphStore
 from .graph.subgraphs import sample_subgraph, write_subgraph_rows
@@ -53,7 +50,7 @@ from .taxonomy import (
 
 logger = logging.getLogger(__name__)
 
-EXTRACTORS = ["hybrid", "llm", "gliner"]
+EXTRACTORS = ["llm"]
 PARSERS = {
     "openalex": parse_openalex,
     "github": parse_github,
@@ -88,30 +85,6 @@ def _store() -> GraphStore:
     )
 
 
-def _load_ner_model(model_name: str):
-    try:
-        from gliner import GLiNER
-    except ImportError as exc:
-        raise RuntimeError(
-            'Install NER support first: pip install -e ".[ner]"'
-        ) from exc
-
-    return GLiNER.from_pretrained(model_name)
-
-
-def _auxiliary_ner(extract: bool, extractor: str, model_name: str):
-    """Hybrid mode keeps working as LLM-only when GLiNER cannot be loaded."""
-    if not extract or extractor != "hybrid":
-        return None
-    try:
-        return _load_ner_model(model_name)
-    except Exception as exc:
-        logger.warning(
-            "Auxiliary NER disabled (%s: %s)", type(exc).__name__, exc
-        )
-        return None
-
-
 @asynccontextmanager
 async def _opened(store):
     """Open a graph store; offline test doubles may be synchronous."""
@@ -126,10 +99,7 @@ async def _opened(store):
 async def _write_ingested_async(
     document,
     extract: bool,
-    model_name: str,
     store,
-    model=None,
-    semantic=None,
     extractor: str = "llm",
     provider=None,
     extraction_output: Optional[Path] = None,
@@ -142,16 +112,9 @@ async def _write_ingested_async(
             document,
             mode=extractor,
             provider=provider,
-            ner_model=(model or _load_ner_model(model_name))
-            if extractor == "gliner"
-            else model,
-            model_name=model_name,
             registry=registry
             if registry is not None
             else await resolve(store.read_concepts()),
-            semantic=(semantic or _semantic_deduplicator())
-            if extractor == "gliner"
-            else None,
             context_reader=getattr(store, "read_related_chunks", None),
         )
     async with publication or _NoLock():
@@ -194,12 +157,10 @@ def _write_ingested(*args, **kwargs) -> None:
 def _ingest(
     document,
     extract: bool,
-    model_name: str,
     extractor: str = "llm",
     extraction_output: Optional[Path] = None,
 ) -> None:
     provider = _provider(extract, extractor)
-    model = _auxiliary_ner(extract, extractor, model_name)
 
     async def run():
         async with _opened(_store()) as store:
@@ -207,9 +168,7 @@ def _ingest(
             await _write_ingested_async(
                 document,
                 extract,
-                model_name,
                 store,
-                model,
                 extractor=extractor,
                 provider=provider,
                 extraction_output=extraction_output,
@@ -219,7 +178,7 @@ def _ingest(
 
 
 def _provider(extract: bool, extractor: str):
-    if extract and extractor in ("llm", "hybrid"):
+    if extract and extractor == "llm":
         from .llm.client import JsonLLM
 
         return JsonLLM.from_environment()
@@ -290,7 +249,6 @@ def _crawl_openalex(
     per_page: int,
     checkpoint: Path,
     extract: bool,
-    model_name: str,
     extractor: str = "llm",
     fulltext: bool = True,
     filter: Optional[str] = None,
@@ -333,14 +291,6 @@ def _crawl_openalex(
     provider = _provider(extract, extractor)
     if fulltext:
         require_pdf_support()
-    model = (
-        _load_ner_model(model_name)
-        if extract and extractor == "gliner"
-        else _auxiliary_ner(extract, extractor, model_name)
-    )
-    semantic = (
-        _semantic_deduplicator() if extract and extractor == "gliner" else None
-    )
 
     async def one(payload, store, registry, slots, publication) -> bool:
         async with slots:
@@ -371,10 +321,7 @@ def _crawl_openalex(
                 await _write_ingested_async(
                     document,
                     extract,
-                    model_name,
                     store,
-                    model,
-                    semantic,
                     extractor,
                     provider,
                     registry=registry,
@@ -513,7 +460,6 @@ def _crawl_pypi(
     limit: int,
     checkpoint: Path,
     extract: bool,
-    model_name: str,
     sample_phase: float = 0.0,
     requested_packages: Optional[List[str]] = None,
     extractor: str = "llm",
@@ -552,14 +498,6 @@ def _crawl_pypi(
     )
     started = perf_counter()
     provider = _provider(extract, extractor)
-    model = (
-        _load_ner_model(model_name)
-        if extract and extractor == "gliner"
-        else _auxiliary_ner(extract, extractor, model_name)
-    )
-    semantic = (
-        _semantic_deduplicator() if extract and extractor == "gliner" else None
-    )
 
     async def crawl():
         nonlocal processed, successful, failures
@@ -585,10 +523,7 @@ def _crawl_pypi(
                     await _write_ingested_async(
                         document,
                         extract,
-                        model_name,
                         store,
-                        model,
-                        semantic,
                         extractor,
                         provider,
                         registry=registry,
@@ -646,11 +581,7 @@ def main() -> None:
     from .core.catalog_validation import validate_catalogs
     validate_catalogs()
     settings = load_catalog("runtime")
-    ner_model = os.getenv("GLINER_MODEL", "").strip() or settings["ner_model"]
-    default_extractor = (
-        os.getenv("LCTREND_EXTRACTOR", "").strip()
-        or settings["default_extractor"]
-    )
+    default_extractor = "llm"
     parser = argparse.ArgumentParser(prog="lctrend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -694,7 +625,6 @@ def main() -> None:
             "do not download the open-access PDF"
         ),
     )
-    fetch_command.add_argument("--ner-model", default=ner_model)
 
     ingest_command = subparsers.add_parser(
         "ingest", help="Parse a saved record into Neo4j"
@@ -718,7 +648,6 @@ def main() -> None:
         "--extractor", choices=EXTRACTORS, default=default_extractor
     )
     ingest_command.add_argument("--extraction-output", type=Path)
-    ingest_command.add_argument("--ner-model", default=ner_model)
 
     crawl_command = subparsers.add_parser(
         "crawl-openalex", help="Crawl OpenAlex search results into Neo4j"
@@ -758,7 +687,6 @@ def main() -> None:
     crawl_command.add_argument(
         "--extractor", choices=EXTRACTORS, default=default_extractor
     )
-    crawl_command.add_argument("--ner-model", default=ner_model)
     crawl_command.add_argument(
         "--workers",
         type=int,
@@ -794,7 +722,6 @@ def main() -> None:
     pypi_crawl_command.add_argument(
         "--extractor", choices=EXTRACTORS, default=default_extractor
     )
-    pypi_crawl_command.add_argument("--ner-model", default=ner_model)
 
     dataset_settings = load_catalog("dataset")
     training_command = subparsers.add_parser(
@@ -941,7 +868,6 @@ def _run(args: argparse.Namespace) -> None:
             args.per_page,
             args.checkpoint,
             args.extract,
-            args.ner_model,
             args.extractor,
             fulltext=args.fulltext,
             filter=args.filter,
@@ -954,7 +880,6 @@ def _run(args: argparse.Namespace) -> None:
             len(args.packages) if args.packages else args.limit,
             args.checkpoint,
             args.extract,
-            args.ner_model,
             args.sample_phase,
             args.packages,
             args.extractor,
@@ -1068,7 +993,6 @@ def _run(args: argparse.Namespace) -> None:
             _ingest(
                 document,
                 args.extract,
-                args.ner_model,
                 args.extractor,
                 args.extraction_output,
             )
@@ -1086,7 +1010,6 @@ def _run(args: argparse.Namespace) -> None:
         _ingest(
             document,
             args.extract,
-            args.ner_model,
             args.extractor,
             args.extraction_output,
         )

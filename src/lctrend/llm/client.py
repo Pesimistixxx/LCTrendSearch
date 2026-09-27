@@ -885,6 +885,10 @@ class JsonLLM:
         model: str,
     ) -> T:
         schema_json = schema.model_json_schema()
+        if self.provider == "gigachat" and self.config.get("json_schema_strict") is True:
+            # GigaChat treats a schema without root-level required fields as
+            # an unconstrained JSON object, even when strict mode is enabled.
+            schema_json.setdefault("required", list(schema_json.get("properties", {})))
         system_message = (
             system + "\n\nReturn exactly one JSON object. No Markdown. "
             "The JSON object must match this schema:\n" + _json(schema_json)
@@ -1033,11 +1037,15 @@ class JsonLLM:
                     "invalid_response", "LLM response has no choice"
                 )
             choice = choices[0]
+            call["finish_reason"] = choice.get("finish_reason")
             message = choice.get("message")
             if not isinstance(message, dict):
                 raise LLMError(
                     "invalid_response", "LLM response has no message"
                 )
+            content = message.get("content")
+            if isinstance(content, str):
+                call["response_chars"] = len(content)
             # GigaChat reports its content filter as finish_reason=blacklist.
             if message.get("refusal") or choice.get("finish_reason") in (
                 "content_filter",
@@ -1049,7 +1057,6 @@ class JsonLLM:
                     "incomplete_response",
                     "LLM did not finish a complete JSON response",
                 )
-            content = message.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise LLMError(
                     "invalid_response", "LLM response contains no text"

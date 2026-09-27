@@ -112,7 +112,7 @@ def test_real_routes_create_collect_and_cancel_without_model_calls(api):
     )
     assert response.status_code == 202
     assert response.json()["query"] == "edge computing"
-    assert response.json()["mode"] == "hybrid"
+    assert response.json()["mode"] == "llm"
     assert response.json()["workers"] == default_workers()
     assert client.get("/api/ingest/jobs").json()["jobs"] == manager.jobs
     assert client.get("/api/ingest/jobs/job").json()["status"] == "queued"
@@ -225,7 +225,7 @@ def test_upload_preserves_bytes_prevents_path_escape_and_allows_duplicates(
     client, manager, root = api
     response = client.post(
         "/api/ingest/uploads",
-        data={"mode": "hybrid", "direction": "Батареи"},
+        data={"mode": "llm", "direction": "Батареи"},
         files=[
             (
                 "files",

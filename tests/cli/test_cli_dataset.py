@@ -189,7 +189,7 @@ def test_empty_limited_crawl_records_search_without_claiming_absence(
         "results": [], "meta": {"next_cursor": None},
     })
     cli._crawl_openalex(
-        "fixture", 2, 2, tmp_path / "checkpoint.json", False, "unused",
+        "fixture", 2, 2, tmp_path / "checkpoint.json", False,
         fulltext=False,
         filter="from_publication_date:2018-01-01,to_publication_date:2024-01-01",
     )
@@ -212,7 +212,7 @@ def test_failed_source_page_finalizes_crawl_audit(
     monkeypatch.setattr(cli, "fetch_openalex_page", fail)
     with pytest.raises(RuntimeError, match="offline source failed"):
         cli._crawl_openalex("fixture", 2, 2, tmp_path / "checkpoint.json",
-                            False, "unused", fulltext=False)
+                            False, fulltext=False)
     assert temporal_store.audits[-1]["status"] == "failed"
     assert temporal_store.audits[-1]["finished_at"]
 
@@ -231,7 +231,7 @@ def test_pypi_crawl_persists_success_and_failure_counts(
     monkeypatch.setattr(cli, "fetch_pypi", fetch)
     monkeypatch.setattr(cli, "_snapshot", lambda document, raw: document)
     monkeypatch.setattr(cli, "_write_ingested_async", write)
-    cli._crawl_pypi(2, tmp_path / "pypi.json", False, "unused",
+    cli._crawl_pypi(2, tmp_path / "pypi.json", False,
                     requested_packages=["good", "bad"])
     run = temporal_store.audits[-1]
     assert run["source_family"] == "package_registry"

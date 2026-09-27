@@ -14,7 +14,6 @@ from lctrend.core.models import (
     SourceRef,
     validate_extraction,
 )
-from lctrend.extraction.ner import DEFAULT_LABELS, extract_mentions
 
 
 def document():
@@ -85,86 +84,3 @@ def test_extraction_requires_literal_anchors():
         ],
     )
     validate_extraction(doc, result)
-
-
-def test_gliner_adapter_anchors_model_output():
-    class FakeModel:
-        def predict_entities(self, text, labels, threshold):
-            return [
-                {
-                    "text": "Сенсор S",
-                    "start": 0,
-                    "end": 8,
-                    "label": "technology",
-                    "score": 0.9,
-                }
-            ]
-
-    mentions = extract_mentions(document(), FakeModel())
-    assert mentions[0].surface_text == "Сенсор S"
-    assert mentions[0].type_candidates == [ConceptKind.TECHNOLOGY]
-
-
-def test_chunk_ner_does_not_extract_document_metadata_domains():
-    assert "domain" not in DEFAULT_LABELS
-
-
-def test_synthetic_composite_is_disabled_by_default():
-    doc = document()
-    doc.chunks[0].text = "Vision transformers are applied to computer vision."
-
-    class FakeModel:
-        def predict_entities(self, text, labels, threshold):
-            start = text.index("computer vision")
-            return [
-                {
-                    "start": start,
-                    "end": start + len("computer vision"),
-                    "label": "technology",
-                    "score": 0.9,
-                }
-            ]
-
-    mentions = extract_mentions(doc, FakeModel())
-    assert [item.surface_text for item in mentions] == ["computer vision"]
-    assert mentions[0].canonical_text is None
-
-
-def test_legacy_composite_rules_can_be_explicitly_enabled(
-    monkeypatch, tmp_path
-):
-    import json
-
-    from lctrend.core.config import load_catalog
-
-    settings = load_catalog("extraction")
-    settings["ner"]["composite_technologies_enabled"] = True
-    (tmp_path / "extraction.json").write_text(
-        json.dumps(settings), encoding="utf-8"
-    )
-    monkeypatch.setenv("LCTREND_CONFIG_DIR", str(tmp_path))
-    text = "Vision transformers are applied to computer vision."
-    doc = document()
-    doc.chunks[0].text = text
-
-    class FakeModel:
-        def predict_entities(self, text, labels, threshold):
-            start = text.index("computer vision")
-            return [
-                {
-                    "start": start,
-                    "end": start + len("computer vision"),
-                    "label": "technology",
-                    "score": 0.9,
-                }
-            ]
-
-    mentions = extract_mentions(doc, FakeModel())
-    assert [item.canonical_text for item in mentions] == [
-        "Transformer-based computer vision"
-    ]
-    assert (
-        mentions[0].surface_text
-        == "Vision transformers are applied to computer vision"
-    )
-    assert mentions[0].confidence is None

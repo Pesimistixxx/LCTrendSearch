@@ -31,7 +31,7 @@ PostgreSQL; Neo4j подключается по внешнему адресу `N
 `src/lctrend/resources/sources.json`, а не всего OpenAlex.
 Подключение LLM можно настроить в форме
 на странице. При первом запуске
-GLiNER и обработчик PDF могут загружать модели.
+Обработчик PDF может загружать модели.
 
 ### Небольшой реальный прогон в Neo4j
 
@@ -59,6 +59,9 @@ RETURN d.title, v.document_version_id, chunks, run.status,
 
 Карта на экране «Демо поиска» использует отдельные демонстрационные данные.
 Реальная загрузка и проверка результатов выполняются на экране «Сбор материалов».
+Задание API с `mode=none` записывает документ и его фрагменты, но не создаёт
+`ProcessingRun` и утверждения; для проверки извлечённых связей нужен режим
+`llm` и доступный провайдер/модель.
 
 ## Что означает каждое поле и кнопка
 
@@ -88,7 +91,7 @@ RETURN d.title, v.document_version_id, chunks, run.status,
 
 ### Быстрая загрузка OpenAlex через HTTP API
 
-Для сохранения аннотаций без PDF и извлечения создайте отдельное задание. Neo4j должна быть настроена; LLM, GLiNER и Docling для этого режима не нужны:
+Для сохранения аннотаций без PDF и извлечения создайте отдельное задание. Neo4j должна быть настроена; LLM и Docling для этого режима не нужны:
 
 ```powershell
 $body = @{query="edge computing"; limit=10; mode="none"; fulltext=$false; filter="has_abstract:true,type:article"} | ConvertTo-Json
@@ -96,7 +99,7 @@ $job = Invoke-RestMethod -Method Post -Uri http://localhost:5188/api/ingest/jobs
 Invoke-RestMethod "http://localhost:5188/api/ingest/jobs/$($job.job_id)"
 ```
 
-`mode=none` отключает извлечение, `fulltext=false` — загрузку PDF. Проверьте статус и список документов задания: ответ 202 означает только постановку в очередь. Такие задания доступны через `/api/ingest/jobs`; тематическая форма «Собирать» по-прежнему использует PDF и режим `hybrid`.
+`mode=none` отключает извлечение, `fulltext=false` — загрузку PDF. Проверьте статус и список документов задания: ответ 202 означает только постановку в очередь. Такие задания доступны через `/api/ingest/jobs`; тематическая форма «Собирать» использует PDF и режим `llm`.
 
 ## Как передать одну статью, а не тему
 
@@ -105,7 +108,7 @@ Invoke-RestMethod "http://localhost:5188/api/ingest/jobs/$($job.job_id)"
 HTTP API поддерживает загрузку локального файла. При запущенном сервере из PowerShell, из корня `LCTrendSearch`:
 
 ```powershell
-curl.exe -F "files=@research/Литература/2311.01235v2.pdf" -F "mode=hybrid" http://localhost:5188/api/ingest/uploads
+curl.exe -F "files=@research/Литература/2311.01235v2.pdf" -F "mode=llm" http://localhost:5188/api/ingest/uploads
 ```
 
 Путь после `@` должен указывать на существующий файл. При другом `FRONTEND_PORT` замените порт в URL. API принимает от 1 до 100 файлов, до 50 МиБ каждый по штатной конфигурации. Поля multipart-формы:
@@ -113,7 +116,7 @@ curl.exe -F "files=@research/Литература/2311.01235v2.pdf" -F "mode=hyb
 | Поле | Значение |
 |---|---|
 | `files` | Локальный файл; для нескольких документов повторяйте поле |
-| `mode` | `hybrid` / `llm` / `gliner` / `none`, по умолчанию `hybrid`; `none` сохраняет документ без извлечения |
+| `mode` | `llm` / `none`, по умолчанию `llm`; `none` сохраняет документ без извлечения |
 | `workers` | Сколько документов задания обрабатывать одновременно, 1–16; по умолчанию `LCTREND_WORKERS` или `runtime.json` → `ingestion.workers` (4) |
 | `direction` | Необязательная тематическая пометка до 1000 символов, а не запрос поиска |
 
@@ -151,20 +154,16 @@ flowchart LR
     S --> Q[Проверка общего реестра: уже обработано?]
     Q -->|Новый материал| T[Очередь: текст и фрагменты]
     Q -->|Повтор| K[Ссылка на прежний результат]
-    T --> G[GLiNER: подсказки о сущностях]
-    G --> L[LLM: извлечение и проверка утверждений]
+    T --> L[LLM: извлечение и проверка утверждений]
     L --> N[Neo4j: результат и аудит]
     N --> P[Отметить обработанным в реестре]
 ```
 
 Документы обрабатываются параллельно в пределах `LCTREND_WORKERS`. CLI (`python -m lctrend`) и веб вызывают
 один `process_material` из `src/lctrend/extraction/processing.py`.
-Режимы API: `hybrid` (по умолчанию), `llm`, `gliner`, `none`.
-В `hybrid` используется штатный `llm.pipeline.process_document`:
-GLiNER даёт `ner_hints`, LLM извлекает и проверяет утверждения.
-Сводка GLiNER — `extraction.run.metadata.ner`; отдельного результата
-`parallel_gliner` нет. Если GLiNER недоступен, обработка продолжается
-через LLM, как в CLI. Частичный или ошибочный запуск не заменяет прежний
+Режимы API: `llm` (по умолчанию), `none`.
+В `llm` используется штатный `llm.pipeline.process_document`:
+LLM извлекает и проверяет утверждения. Частичный или ошибочный запуск не заменяет прежний
 успешно опубликованный граф.
 
 HTTP-результат содержит `document` (`DocumentEnvelope`) и `extraction`
@@ -210,7 +209,7 @@ DOI/идентификатор OpenAlex, адрес репозитория и н
 Vite из `frontend` (Docker-фронтенд на 5188 нужно остановить):
 
 ```powershell
-.venv\Scripts\python.exe -m pip install -e ".[gui,llm,ner,pdf]"
+.venv\Scripts\python.exe -m pip install -e ".[gui,llm,pdf]"
 .venv\Scripts\python.exe -m frontend.server --port 5188
 # В другом терминале:
 cd frontend

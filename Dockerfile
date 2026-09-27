@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install ".[gui,llm,ner,pdf]"
+RUN pip install ".[gui,llm,pdf]"
 COPY frontend/server ./frontend/server
 
 EXPOSE 8000

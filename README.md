@@ -12,7 +12,7 @@
 
 ### Самая быстрая проверка без Docker и базы
 
-Нужен Python 3.9+; для полного набора PDF/NER и веб-интерфейса используйте Python 3.12, как в Docker. PowerShell:
+Нужен Python 3.9+; для работы с PDF и веб-интерфейсом используйте Python 3.12, как в Docker. PowerShell:
 
 ```powershell
 python -m venv .venv
@@ -31,7 +31,7 @@ $paper | Select-Object title, coverage
 $paper.chunks | Select-Object -First 2 kind, text
 ```
 
-`coverage=abstract_only` означает доступную аннотацию, `metadata_only` — только карточку. Этот шаг не требует Neo4j, LLM или GLiNER. Повторный разбор сохранённого исходного ответа API выполняется командой `parse openalex work.json`; `paper-envelope.json` уже содержит внутреннюю схему и не подходит на место `work.json`.
+`coverage=abstract_only` означает доступную аннотацию, `metadata_only` — только карточку. Этот шаг не требует Neo4j или LLM. Повторный разбор сохранённого исходного ответа API выполняется командой `parse openalex work.json`; `paper-envelope.json` уже содержит внутреннюю схему и не подходит на место `work.json`.
 
 ### Docker и веб-интерфейс
 
@@ -43,11 +43,11 @@ docker compose exec backend python -m lctrend init-graph
 docker compose exec backend python -m lctrend fetch openalex W2741809807 --no-fulltext --output /app/artifacts/paper-envelope.json
 ```
 
-Откройте [сбор материалов](http://localhost:5188/#view=ingest). `FRONTEND_PORT` меняет порт. Ключ OpenAlex также можно сохранить через «Настройки источников»; API показывает только факт наличия ключа. Compose передаёт `.env` только API-сервису; ключ не нужен в `VITE_*`. Первая сборка устанавливает зависимости PDF/NER и может занять больше времени; для получения одной аннотации быстрее локальная команда выше. После изменения `.env` примените `docker compose up -d --force-recreate backend`.
+Откройте [сбор материалов](http://localhost:5188/#view=ingest). `FRONTEND_PORT` меняет порт. Ключ OpenAlex также можно сохранить через «Настройки источников»; API показывает только факт наличия ключа. Compose передаёт `.env` только API-сервису; ключ не нужен в `VITE_*`. Первая сборка устанавливает зависимости PDF и может занять больше времени; для получения одной аннотации быстрее локальная команда выше. После изменения `.env` примените `docker compose up -d --force-recreate backend`.
 
 ### Быстрая загрузка темы в Neo4j
 
-Настройте `NEO4J_*` в `.env`. Ограниченный обход ниже сохраняет карточки, аннотации, авторов и организации без вызовов LLM/NER и скачивания PDF:
+Настройте `NEO4J_*` в `.env`. Ограниченный обход ниже сохраняет карточки, аннотации, авторов и организации без вызовов LLM и скачивания PDF:
 
 ```powershell
 .venv\Scripts\python.exe -m lctrend init-graph
@@ -62,12 +62,11 @@ Checkpoint сохраняет `query`, `filter`, `processed`, `failures` и по
 
 | Роль | Модель | Где задаётся | Когда работает |
 |---|---|---|---|
-| LLM: извлечение и проверка утверждений | GigaChat, лестница `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`; либо любая модель OpenAI-совместимого API | `LLM_PROVIDER`, `LLM_MODEL*`, [llm.json](src/lctrend/resources/llm.json) | Режимы `hybrid` (по умолчанию) и `llm` |
-| NER: подсказки сущностей | GLiNER `urchade/gliner_medium-v2.1` | `GLINER_MODEL`, [runtime.json](src/lctrend/resources/runtime.json) | `hybrid` (подсказки для LLM) и `gliner` (основной извлекатель) |
+| LLM: извлечение и проверка утверждений | GigaChat, лестница `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`; либо любая модель OpenAI-совместимого API | `LLM_PROVIDER`, `LLM_MODEL*`, [llm.json](src/lctrend/resources/llm.json) | Режим `llm` (по умолчанию) |
 | Разбор PDF | Docling (собственные модели разметки страниц и OCR) | extra `[pdf]` | Любой PDF: локальный файл, загрузка через API, полный текст OpenAlex |
-| Эмбеддинги для сопоставления сущностей | GigaChat `EmbeddingsGigaR` через API `/embeddings` (косинус; локальная альтернатива — `sentence-transformers/all-MiniLM-L6-v2`) + локальный `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | Работают в `gliner`, `hybrid` и `llm`. В двух LLM-режимах смысловое сходство сохраняется как кандидат `POSSIBLY_SAME_AS` для проверки |
+| Эмбеддинги для сопоставления сущностей | GigaChat `EmbeddingsGigaR` через API `/embeddings` (косинус; локальная альтернатива — `sentence-transformers/all-MiniLM-L6-v2`) + локальный `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | В режиме `llm` смысловое сходство сохраняется как кандидат `POSSIBLY_SAME_AS` для проверки |
 
-Эмбеддинг-совпадение никогда не объединяет сущности автоматически: пара получает статус `ambiguous` и остаётся на проверку. Векторного индекса в Neo4j нет — эмбеддинги вычисляются в памяти на время одной обработки.
+Эмбеддинг-совпадение никогда не объединяет сущности автоматически: кандидат `POSSIBLY_SAME_AS` получает статус проверки `pending`. Векторы названий концептов могут сохраняться в Neo4j для построения таксономии.
 
 ## Как передать конкретную статью
 
@@ -167,7 +166,7 @@ docker compose up -d --build --remove-orphans --wait
 
 Открыть [Сбор материалов](http://localhost:5188/#view=ingest).
 Compose запускает три сервиса: `frontend` (React + Nginx), `backend`
-(FastAPI, LLM, GLiNER, Docling) и `postgres`. Локальной Neo4j в Compose
+(FastAPI, LLM, Docling) и `postgres`. Локальной Neo4j в Compose
 нет: API использует внешнюю базу из `.env`. `--remove-orphans` удаляет
 контейнер Neo4j от старой конфигурации; его том с данными сохраняется.
 Порт интерфейса задаётся `FRONTEND_PORT` (по умолчанию 5188), PostgreSQL —
@@ -181,8 +180,8 @@ JSON заданий, результаты и исходные материалы
 из интерфейса сохраняются в `artifacts/ingestion/settings.env` и действуют
 после пересоздания контейнеров. Они имеют приоритет над соответствующими настройками
 из `.env`; чтобы снова использовать `.env`, удалите файл сохранённых
-настроек и пересоздайте API. Первое обращение к GLiNER/Docling может
-потребовать загрузки моделей. Первая сборка образа устанавливает их
+настроек и пересоздайте API. Первое обращение к Docling может
+потребовать загрузки моделей. Первая сборка образа устанавливает его
 зависимости, включая CPU-версию PyTorch.
 
 Проверка и остановка:
@@ -210,7 +209,7 @@ LLM-провайдер использует endpoint `/chat/completions`. Зад
 
 ## Массовая загрузка
 
-Сетевые операции асинхронные: LLM, Neo4j, OpenAlex, GitHub, PyPI и скачивание PDF. Задания веб-интерфейса выполняются в отдельном event loop. Разбор Docling, GLiNER и сопоставление сущностей работают в потоках и не блокируют остальные документы.
+Сетевые операции асинхронные: LLM, Neo4j, OpenAlex, GitHub, PyPI и скачивание PDF. Задания веб-интерфейса выполняются в отдельном event loop. Разбор Docling и сопоставление сущностей работают в потоках и не блокируют остальные документы.
 
 | Настройка | По умолчанию | Что ограничивает |
 |---|---|---|
@@ -234,10 +233,10 @@ LLM-провайдер использует endpoint `/chat/completions`. Зад
 python -m lctrend parse openalex .\work.json --output work-envelope.json
 python -m lctrend parse file .\report.docx --output report-envelope.json
 python -m lctrend ingest epo .\patent.xml
-python -m lctrend fetch github urchade/GLiNER --ingest
-python -m lctrend fetch pypi gliner --ingest --no-extract
+python -m lctrend fetch github pytorch/pytorch --ingest
+python -m lctrend fetch pypi pydantic --ingest --no-extract
 python -m lctrend crawl-openalex "edge computing" --limit 10
-python -m lctrend crawl-pypi --packages gliner pydantic
+python -m lctrend crawl-pypi --packages numpy pydantic
 ```
 
 `parse` формирует DocumentEnvelope. `fetch --ingest`, `ingest` и сборщики публикуют в Neo4j; по умолчанию используют LLM-пакеты. `--no-extract` сохраняет только документ и chunks. `--extraction-output` у одиночной загрузки дополнительно сохраняет проверяемый JSON результата, включая историю стадий и покрытие.
@@ -265,9 +264,8 @@ python -m lctrend crawl-pypi --packages gliner pydantic
 |---|---|---|
 | `--output PATH` | `parse`, `fetch`, CSV-команды | Файл документа/CSV. Без него `parse`/`fetch` печатают JSON. Каталог выходного файла для них должен уже существовать |
 | `--ingest` | `fetch` | После получения документа выполнить извлечение и запись в граф |
-| `--no-extract` | `ingest`, `fetch --ingest`, сборщики | Записать документ и chunks без LLM/NER; скачивание PDF остаётся включённым |
-| `--extractor hybrid\|llm\|gliner` | Команды с извлечением | Режим обработки; по умолчанию `hybrid`, подробнее ниже |
-| `--ner-model NAME` | Команды с извлечением | Модель GLiNER; перекрывает `GLINER_MODEL`, по умолчанию `urchade/gliner_medium-v2.1` |
+| `--no-extract` | `ingest`, `fetch --ingest`, сборщики | Записать документ и chunks без LLM; скачивание PDF остаётся включённым |
+| `--extractor llm` | Команды с извлечением | Режим обработки; по умолчанию `llm`, подробнее ниже |
 | `--extraction-output PATH` | `ingest`, `fetch --ingest` | Сохранить ExtractionResult отдельным JSON; при `--no-extract` файл не создаётся. `--output` сохраняет другой объект — DocumentEnvelope |
 | `--no-fulltext` | `fetch openalex`, `crawl-openalex` | Не загружать PDF, использовать доступную карточку/аннотацию |
 | `--limit N` | Сборщики | Предел статей OpenAlex (500) / успешных загрузок пакетов PyPI (5000). С `--packages` равен числу заданных имён |
@@ -304,11 +302,9 @@ python -m lctrend build-training-set --start-year 2015 --horizon-years 3 --end-d
 
 JSONL-подграфы содержат типизированные узлы и связи, ограниченные датой среза и лимитами `dataset.json → subgraph`; маска использует 1 для пропуска и 0 для наблюдаемого значения. Рядом сохраняется manifest со схемой признаков узлов и рёбер. `graph.subgraphs.to_pyg(sample, feature_schema=manifest)` преобразует образец в `torch_geometric.data.HeteroData` с одинаковым порядком колонок, когда установлены необязательные `torch` и `torch-geometric`. Экспорт CSV/JSONL не требует этих библиотек. Обучение Graph Transformer и итоговое ранжирование пока не реализованы.
 
-### Извлечение: hybrid по умолчанию
+### Извлечение: LLM по умолчанию
 
-`--extractor hybrid` (по умолчанию, также `LCTREND_EXTRACTOR`) — LLM-пакеты плюс GLiNER как дополнительный фактор. GLiNER находит spans технологий, методов и задач; они попадают в payload экстрактора как `ner_hints` (навигация, не доказательство). После LLM совпавшие по типу spans подтверждают сущности (`confidence` упоминания = score GLiNER), а сильные технологии, которые LLM пропустила (score ≥ 0.7), добавляются как `mention_role=ner_candidate` без утверждений. Сводка — в `run.metadata.ner`, пороги — в разделе `hybrid` файла extraction.json. Если GLiNER не установлен (`pip install -e ".[ner]"`) или упал, документ обрабатывается как `llm` с предупреждением.
-
-`--extractor llm` — только LLM. `--extractor gliner` — прежний путь без LLM; локальные regex-утверждения в нём остаются needs_review/unverified.
+`--extractor llm` (по умолчанию) обрабатывает связанные пакеты текста: LLM извлекает сущности и утверждения, затем отдельный вызов проверяет их поддержку исходными фрагментами. При недоступности LLM документ получает ошибку обработки; для сохранения исходного текста без извлечения используйте `--no-extract`.
 
 ### GigaChat и лестница моделей
 
@@ -364,11 +360,9 @@ LLM_MODEL=your-model-name
 | `LLM_EXTRACT_MODEL` | Стартовая модель извлечения; приоритет выше `LLM_MODEL` |
 | `LLM_REVIEW_MODEL` | Стартовая модель проверки поддержки утверждений текстом; приоритет выше `LLM_MODEL` |
 | `LLM_MODEL_LADDER` | Имена моделей через запятую в порядке переключения; пусто — порядок из `llm.json` |
-| `LCTREND_EXTRACTOR` | Режим CLI: `hybrid`, `llm`, `gliner`; пусто — `hybrid`. Веб-обход по теме использует свой режим `hybrid` |
-| `GLINER_MODEL` | Имя модели GLiNER; пусто — `urchade/gliner_medium-v2.1` |
 | `DEDUP_EMBEDDING_PROVIDER` | Источник эмбеддингов resolver: `gigachat` (по умолчанию, ключи `GIGACHAT_*`) или `transformers` (локальная модель) |
 | `DEDUP_EMBEDDING_MODEL` | Эмбеддинг-модель resolver; пусто — `EmbeddingsGigaR` для GigaChat, `sentence-transformers/all-MiniLM-L6-v2` для `transformers` |
-| `DEDUP_IN_LLM` | Необязательный `0`/`1`, переопределяет `resolver.json → semantic.use_in_llm` для режимов llm/hybrid |
+| `DEDUP_IN_LLM` | Необязательный `0`/`1`, переопределяет `resolver.json → semantic.use_in_llm` для режима `llm` |
 | `DEDUP_DECISION_MODEL` | Cross-encoder проверки пары; пусто — `cross-encoder/stsb-distilroberta-base` |
 | `DEDUP_COSINE_THRESHOLD` | Минимальный косинус для передачи пары cross-encoder, по умолчанию 0.78 |
 | `DEDUP_DECISION_THRESHOLD` | Минимальная оценка cross-encoder для кандидата `ambiguous`, по умолчанию 0.80 |
@@ -393,7 +387,7 @@ python -m pip install -e ".[llm,pdf,dev]"
 python -m lctrend init-graph
 ```
 
-Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[ner]` — GLiNER, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest. Можно объединить: `python -m pip install -e ".[gui,llm,ner,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
+Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest. Можно объединить: `python -m pip install -e ".[gui,llm,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
 
 ## Что происходит на каждом этапе
 
@@ -402,7 +396,6 @@ python -m lctrend init-graph
 | Получение | Читает локальный файл или API; сетевой OpenAlex пытается получить PDF | `source`, `artifact`, `metadata.fulltext`, сохранённые байты |
 | Разбор | Формирует DocumentEnvelope и адресуемые chunks | Текст, `locator`, покрытие и предупреждения |
 | Связанные пакеты | Собирает соседние фрагменты в ограниченный контекст LLM | Какие chunks включены, бюджеты `pipeline.json` |
-| GLiNER в hybrid | Предлагает упоминания в `ner_hints` | `run.metadata.ner`; подсказка не является доказательством утверждения |
 | LLM-извлечение | Извлекает сущности и атомарные утверждения с ролями и цитатами | Evidence, сущности, assertions, журнал вызовов |
 | Проверка | Код проверяет цитаты/координаты/типы, отдельный reviewer — поддержку текстом | Validation/review и причины отклонения |
 | Сборка и идентификация | Объединяет пакеты, сопоставляет сущности с реестром | Неоднозначности, provisional-сущности |

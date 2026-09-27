@@ -1,8 +1,8 @@
-"""Open-access PDF full text for OpenAlex works, next to the abstract.
+"""Open-access PDF text and PubMed abstract fallback for OpenAlex works.
 
-Only PDF links published by OpenAlex are tried. A failed or missing PDF
-leaves the abstract-only document intact and records why in
-document.metadata.
+Only PDF links published by OpenAlex are tried. If no text remains, a numeric
+PMID supplied by OpenAlex may provide an abstract after its DOI is verified.
+Missing source text and failed downloads are recorded in document.metadata.
 """
 
 from __future__ import annotations
@@ -11,11 +11,12 @@ import asyncio
 import importlib.util
 import logging
 import re
+import xml.etree.ElementTree as ET
 from typing import Any, Callable, Dict, List, Mapping
 
 from ..core.aio import resolve
 from ..core.config import load_catalog
-from ..core.models import DocumentEnvelope
+from ..core.models import Chunk, DocumentEnvelope, stable_id
 from .file_adapters import UnsupportedFileFormat, _pdf
 from .snapshots import snapshot_bytes
 
@@ -98,15 +99,144 @@ def _body_chunks(raw: bytes, document: DocumentEnvelope, url: str) -> tuple:
     return snapshot, kept, warnings
 
 
+def _numeric_pmid(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"(?:https://pubmed\.ncbi\.nlm\.nih\.gov/)?([1-9][0-9]{0,11})/?",
+        value.strip(),
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
+def _pubmed_abstract(
+    raw: bytes, pmid: str, doi: str
+) -> tuple[str | None, str]:
+    # The response is size-bounded by the connector. Reject internal entity
+    # declarations before parsing XML supplied by a remote source.
+    if b"<!ENTITY" in raw.upper():
+        return None, "invalid_xml"
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None, "invalid_xml"
+    if root.tag != "PubmedArticleSet" or not root.findall("./PubmedArticle"):
+        return None, "invalid_response"
+    for article in root.findall(".//PubmedArticle"):
+        if (article.findtext("./MedlineCitation/PMID") or "").strip() != pmid:
+            continue
+        article_dois = {
+            (item.text or "").strip().casefold()
+            for item in article.findall(".//ArticleId[@IdType='doi']")
+            + article.findall(".//ELocationID[@EIdType='doi']")
+        }
+        if doi.casefold() not in article_dois:
+            return None, "doi_mismatch"
+        parts = []
+        for item in article.findall(
+            "./MedlineCitation/Article/Abstract/AbstractText"
+        ):
+            content = " ".join("".join(item.itertext()).split())
+            if content:
+                label = (item.get("Label") or "").strip()
+                parts.append(f"{label}: {content}" if label else content)
+        if not parts:
+            return None, "no_abstract"
+        return "\n\n".join(parts), "parsed"
+    return None, "pmid_mismatch"
+
+
+async def _attach_pubmed_abstract_if_empty(
+    document: DocumentEnvelope,
+    payload: Mapping[str, Any],
+    fetch_pubmed: Callable[[str], Any] | None,
+) -> DocumentEnvelope:
+    if document.chunks:
+        return document
+    doi = next(
+        (item.value for item in document.identifiers if item.scheme == "doi"),
+        None,
+    )
+    ids = payload.get("ids")
+    pmid = _numeric_pmid(ids.get("pmid")) if isinstance(ids, Mapping) else None
+    status: Dict[str, Any] = {
+        "status": "missing_doi" if not doi else "missing_pmid"
+    }
+    document.metadata["pubmed_abstract"] = status
+    if not doi or not pmid:
+        return document
+    status.update(pmid=pmid, doi=doi)
+    if fetch_pubmed is None:
+        from .connectors import fetch_pubmed_xml as fetch_pubmed
+    try:
+        raw = await resolve(fetch_pubmed(pmid))
+    except Exception as exc:
+        logger.warning(
+            "PubMed PMID %s fetch failed: %s", pmid, type(exc).__name__
+        )
+        status.update(status="fetch_failed", error=type(exc).__name__)
+        return document
+    abstract, reason = _pubmed_abstract(raw, pmid, doi)
+    if abstract is None:
+        status["status"] = reason
+        return document
+    try:
+        snapshot = snapshot_bytes(raw)
+    except Exception as exc:
+        logger.warning(
+            "PubMed PMID %s snapshot failed: %s", pmid, type(exc).__name__
+        )
+        status.update(status="snapshot_failed", error=type(exc).__name__)
+        return document
+    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+    document.chunks.append(
+        Chunk(
+            chunk_id=stable_id(
+                "chunk", document.document_version_id, "abstract", 0, abstract
+            ),
+            kind="abstract",
+            text=abstract,
+            order=0,
+            section_path=["abstract"],
+            locator={
+                "source": "pubmed",
+                "pmid": pmid,
+                "doi": doi,
+                "url": pubmed_url,
+                "xpath": "PubmedArticle/MedlineCitation/Article/Abstract",
+                "snapshot_uri": snapshot.as_uri(),
+                "snapshot_sha256": snapshot.name,
+            },
+        )
+    )
+    document.coverage = "abstract_only"
+    status.update(
+        status="parsed",
+        url=pubmed_url,
+        snapshot_uri=snapshot.as_uri(),
+        sha256=snapshot.name,
+        byte_length=len(raw),
+    )
+    logger.debug(
+        "%s: PubMed abstract attached from PMID %s",
+        document.document_version_id,
+        pmid,
+    )
+    return document
+
+
 async def attach_openalex_fulltext(
     document: DocumentEnvelope,
     payload: Mapping[str, Any],
     fetch: Callable[[str], Any] = None,
+    fetch_pubmed: Callable[[str], Any] | None = None,
 ) -> DocumentEnvelope:
-    """Download and parse the first usable open-access PDF.
+    """Attach an open-access PDF, then fall back to a verified PubMed abstract.
 
-    ``fetch`` may be sync or async. Docling runs in a worker thread with a
-    timeout, so a pathological PDF fails this document instead of the job.
+    ``fetch`` and ``fetch_pubmed`` may be sync or async. Docling runs in a
+    worker thread with a timeout, so a pathological PDF fails this document
+    instead of the job.
     """
     if fetch is None:
         from .connectors import fetch_pdf as fetch
@@ -121,7 +251,9 @@ async def attach_openalex_fulltext(
         logger.debug(
             "%s: no open-access PDF link", document.document_version_id
         )
-        return document
+        return await _attach_pubmed_abstract_if_empty(
+            document, payload, fetch_pubmed
+        )
     require_pdf_support()
     for url in urls:
         try:
@@ -168,4 +300,6 @@ async def attach_openalex_fulltext(
         document.document_version_id,
         len(urls),
     )
-    return document
+    return await _attach_pubmed_abstract_if_empty(
+        document, payload, fetch_pubmed
+    )

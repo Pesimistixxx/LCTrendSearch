@@ -160,7 +160,6 @@ def test_progress_updates_after_each_document_before_child_batch_finishes(
                 status="running",
                 stage="review",
                 llm_status="running",
-                gliner_status="succeeded",
             )
         until(
             lambda: (

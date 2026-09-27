@@ -36,7 +36,6 @@ from ..extraction.economics import (
     economic_evidence_from_assertions,
     extract_economic_evidence,
 )
-from ..extraction.ner import extract_mentions
 from ..extraction.resolver import ConceptRegistry, resolve_mentions
 from .client import CALL_LOG, LLMError, Provider
 from .context import (
@@ -126,103 +125,6 @@ def _source_key(chunks: dict, span: Any) -> list:
                 last["source_start"] + value["end"] - last["chunk_start"],
             ]
     return ["chunk", value["chunk_id"], value["start"], value["end"]]
-
-
-def _machine_mentions(
-    document: DocumentEnvelope, ner: Any, metadata: dict, trace: list
-) -> list[Mention]:
-    """GLiNER spans are auxiliary; their failure never fails the document."""
-    try:
-        found = extract_mentions(document, ner)
-    except Exception as exc:
-        logger.warning(
-            "%s: NER failed (%s: %s), continuing without it",
-            document.document_version_id,
-            type(exc).__name__,
-            exc,
-        )
-        metadata["ner"].update(status="failed", error=type(exc).__name__)
-        return []
-    metadata["ner"].update(status="ok", mentions=len(found))
-    trace.append({"stage": "ner", "mentions": len(found)})
-    return found
-
-
-def _hints(found: list[Mention], settings: dict) -> list[dict]:
-    kinds = set(settings["hint_kinds"])
-    hints = [
-        {
-            "chunk_id": m.chunk_id,
-            "text": m.surface_text,
-            "kind": m.type_candidates[0].value,
-            "start": m.start,
-            "end": m.end,
-            "score": round(m.confidence, 3),
-        }
-        for m in found
-        if m.type_candidates[0].value in kinds
-        and m.confidence is not None
-        and m.confidence >= settings["hint_min_score"]
-    ]
-    hints.sort(key=lambda h: (-h["score"], h["chunk_id"], h["start"]))
-    return hints
-
-
-def _packet_hints(
-    hints: list[dict], chunk_ids: Iterable[str], limit: int
-) -> list[dict]:
-    visible = set(chunk_ids)
-    return [hint for hint in hints if hint["chunk_id"] in visible][:limit]
-
-
-def _overlaps(a: Mention, b: Mention) -> bool:
-    return a.chunk_id == b.chunk_id and a.start < b.end and b.start < a.end
-
-
-def _combine(
-    llm: dict[str, Mention],
-    found: list[Mention],
-    settings: dict,
-    metadata: dict,
-) -> None:
-    """Corroborate LLM spans with NER.
-
-    Strong NER-only technologies are kept as candidates.
-    """
-    stats = {
-        "corroborated": 0,
-        "kind_conflicts": 0,
-        "llm_only": 0,
-        "ner_candidates_added": 0,
-    }
-    for mention in llm.values():
-        same = [
-            m
-            for m in found
-            if _overlaps(mention, m)
-            and m.type_candidates == mention.type_candidates
-        ]
-        if same:
-            stats["corroborated"] += 1
-            mention.confidence = max(m.confidence or 0.0 for m in same)
-        elif any(_overlaps(mention, m) for m in found):
-            stats["kind_conflicts"] += 1
-        else:
-            stats["llm_only"] += 1
-    kinds = {ConceptKind(kind) for kind in settings["candidate_kinds"]}
-    for candidate in found:
-        if (
-            candidate.type_candidates[0] in kinds
-            and (candidate.confidence or 0.0)
-            >= settings["candidate_min_score"]
-            and not any(_overlaps(candidate, m) for m in llm.values())
-            and candidate.mention_id not in llm
-        ):
-            llm[candidate.mention_id] = candidate.model_copy(
-                update={"mention_role": "ner_candidate"}
-            )
-            stats["ner_candidates_added"] += 1
-    metadata["ner"].update(stats)
 
 
 async def _concept_embeddings(
@@ -400,8 +302,6 @@ async def process_document(
     registry: Iterable[Concept] | ConceptRegistry = (),
     settings: PipelineSettings | None = None,
     semantic=None,
-    ner: Any = None,
-    ner_name: str | None = None,
     event=None,
     context_reader=None,
 ) -> ExtractionResult:
@@ -417,8 +317,6 @@ async def process_document(
             registry,
             settings,
             semantic,
-            ner,
-            ner_name,
             event,
             log,
             context_reader,
@@ -433,21 +331,12 @@ async def _process_document(
     registry: Iterable[Concept] | ConceptRegistry,
     settings: PipelineSettings | None,
     semantic,
-    ner: Any,
-    ner_name: str | None,
     event,
     call_log: list,
     context_reader=None,
 ) -> ExtractionResult:
-    """Return an auditable extraction.
-
-    Partial coverage never masquerades as success. With ``ner`` (a
-    GLiNER-like model) the run is hybrid: machine spans are shown to the
-    extractor as hints, corroborate its entities and add unreviewed
-    technology candidates. The LLM stays the source of assertions.
-    """
+    """Return an auditable extraction with explicit partial coverage."""
     settings = settings or PipelineSettings.from_catalog()
-    hybrid = load_catalog("extraction")["hybrid"]
     prompts = {stage: _prompt(stage) for stage in ("extract", "review")}
     trace: list[dict] = []
     metadata: dict = {
@@ -461,10 +350,6 @@ async def _process_document(
         "input_coverage": document.coverage,
         "input_quality_status": document.quality_status,
         "parse_warnings": document.metadata.get("parse_warnings", []),
-        "ner": {
-            "status": "disabled" if ner is None else "pending",
-            "model": ner_name,
-        },
     }
     started = datetime.now(timezone.utc).isoformat()
     run = ProcessingRun(
@@ -482,8 +367,6 @@ async def _process_document(
             json_value(load_catalog("llm_schema")),
             json_value(load_catalog("resolver")),
             json_value(load_catalog("llm")),
-            ner_name,
-            json_value(hybrid) if ner is not None else None,
         ),
         model_revision=json_value(getattr(provider, "models", {})),
         metadata=metadata,
@@ -495,14 +378,6 @@ async def _process_document(
     budget = _Budget(provider, settings, trace, event)
     # Providers that do not use CALL_LOG (test doubles) keep a plain list.
     call_offset = len(getattr(provider, "calls", []))
-    found = (
-        await asyncio.to_thread(
-            _machine_mentions, document, ner, metadata, trace
-        )
-        if ner is not None
-        else []
-    )
-    hints = _hints(found, hybrid) if ner is not None else None
     _emit(event, stage="plan", status="running")
     plan = plan_packets(document, settings)
     budget.limit = settings.call_limit(len(plan.packets))
@@ -559,19 +434,10 @@ async def _process_document(
         packet = original
         related_context = []
         try:
-            packet_hints = (
-                None
-                if hints is None
-                else _packet_hints(
-                    hints,
-                    packet.focus_chunk_ids + packet.support_chunk_ids,
-                    hybrid["max_hints_per_packet"],
-                )
-            )
             extraction = await budget.call(
                 Extraction,
                 prompts["extract"],
-                build_payload(document, packet, settings, hints=packet_hints),
+                build_payload(document, packet, settings),
                 "extract",
                 reserve=1,
             )
@@ -654,14 +520,6 @@ async def _process_document(
                             "complete replacement extraction.",
                             json.dumps(outcomes, ensure_ascii=False),
                         ],
-                        hints=None
-                        if hints is None
-                        else _packet_hints(
-                            hints,
-                            expanded.focus_chunk_ids
-                            + expanded.support_chunk_ids,
-                            hybrid["max_hints_per_packet"],
-                        ),
                         related_context=expanded_related,
                     )
                 except ContextBudgetError:
@@ -914,8 +772,6 @@ async def _process_document(
                     decision.reason if decision else "Review unavailable",
                 )
             )
-    if ner is not None and metadata["ner"]["status"] == "ok":
-        _combine(mentions, found, hybrid, metadata)
     _emit(event, stage="resolution", status="running", mentions=len(mentions))
     if isinstance(registry, ConceptRegistry):
         # Shared job registry: resolution is serialized so concurrent

@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = {"queued", "running", "cancelling"}
 TERMINAL_DOCUMENT_STATUSES = {"succeeded", "partial", "failed", "cancelled"}
-MODES = {"hybrid", "llm", "gliner", "none"}
+MODES = {"llm", "none"}
 MAX_WORKERS = 16
 # Progress events arrive many times per document; a 5000-document job file
 # is megabytes. Progress is flushed at most this often, status changes at once.
@@ -89,10 +89,6 @@ def _error(exc: Exception, stage: str) -> dict[str, str]:
         ),
         "provider": (
             "Не удалось подготовить LLM. Проверьте настройки провайдера."
-        ),
-        "model_loading": (
-            "Не удалось загрузить GLiNER. "
-            "Проверьте зависимости и доступность модели."
         ),
         "pdf_support": "Для обработки PDF требуется установленный Docling.",
         "discovery": (
@@ -160,12 +156,6 @@ def _provider_factory():
     return JsonLLM.from_environment()
 
 
-def _ner_runtime_factory():
-    from lctrend.extraction.processing import NerRuntime
-
-    return NerRuntime(model_name=os.getenv("GLINER_MODEL"))
-
-
 class JobManager:
     """Run ingestion in background with explicit per-document progress.
 
@@ -181,7 +171,6 @@ class JobManager:
         source_fetcher: Callable | None = None,
         document_processor: Callable | None = None,
         store_factory: Callable | None = None,
-        ner_runtime_factory: Callable | None = None,
         provider_factory: Callable | None = None,
         fulltext_attacher: Callable | None = None,
         file_parser: Callable | None = None,
@@ -208,14 +197,12 @@ class JobManager:
         self._source_fetcher = source_fetcher
         self._document_processor = document_processor
         self._store_factory = store_factory or _store_factory
-        self._ner_runtime_factory = ner_runtime_factory or _ner_runtime_factory
         self._provider_factory = provider_factory or _provider_factory
         self._fulltext_attacher = fulltext_attacher
         self._file_parser = file_parser
         self._snapshot_writer = snapshot_writer
         self._pdf_support_checker = pdf_support_checker
         self._payload_hydrator = payload_hydrator
-        self._shared_ner_runtime = None
         self._saved_at: dict[str, float] = {}
         self._dirty: set[str] = set()
         self._started: set[str] = set()
@@ -230,8 +217,8 @@ class JobManager:
         for path in self.directory.glob("*/job.json"):
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
-                if job.get("mode") == "both":
-                    job["mode"] = "hybrid"
+                if job.get("mode") not in MODES:
+                    job["mode"] = "llm"
                 job_id = job["job_id"]
                 if job_id != path.parent.name or not re.fullmatch(
                     r"[a-f0-9]{32}", job_id
@@ -386,7 +373,7 @@ class JobManager:
         ):
             raise ValueError("workers must be 1..{MAX_WORKERS}")
         if mode not in MODES:
-            raise ValueError("mode must be hybrid, llm, gliner or none")
+            raise ValueError("mode must be llm or none")
 
     @staticmethod
     def _document_record(doc_id: str, title: str, source_id: str) -> dict:
@@ -399,7 +386,6 @@ class JobManager:
             "coverage": None,
             "source_coverage": None,
             "llm_status": "queued",
-            "gliner_status": "queued",
             "assertions_count": 0,
             "entities_count": 0,
             "mentions_count": 0,
@@ -446,10 +432,8 @@ class JobManager:
                 "documents": documents,
             }
             for document in documents:
-                if mode not in {"llm", "hybrid"}:
+                if mode != "llm":
                     document["llm_status"] = "disabled"
-                if mode not in {"gliner", "hybrid"}:
-                    document["gliner_status"] = "disabled"
             _write_json(self.directory / job_id / "task.json", task)
             self._save(job)
             self._jobs[job_id] = job
@@ -478,7 +462,7 @@ class JobManager:
         query: str,
         limit: int,
         workers: int = 1,
-        mode: str = "hybrid",
+        mode: str = "llm",
         fulltext: bool = True,
         filter: str | None = None,
     ) -> dict:
@@ -516,7 +500,7 @@ class JobManager:
     def create_files(
         self,
         paths: Iterable[Path | str],
-        mode: str = "hybrid",
+        mode: str = "llm",
         workers: int = 1,
         direction: str = "",
     ) -> dict:
@@ -549,7 +533,7 @@ class JobManager:
         source: str,
         payloads: Iterable[dict],
         direction: str = "",
-        mode: str = "hybrid",
+        mode: str = "llm",
         fulltext: bool = True,
         workers: int = 1,
         on_created: Callable | None = None,
@@ -719,8 +703,6 @@ class JobManager:
                 )
                 if document["llm_status"] == "queued":
                     document["llm_status"] = "cancelled"
-                if document["gliner_status"] == "queued":
-                    document["gliner_status"] = "cancelled"
         job.update(
             status=status, stage=status, finished_at=finished, error=error
         )
@@ -764,7 +746,7 @@ class JobManager:
             if key in event
         }
         branch, status = event.get("branch"), event.get("status")
-        if branch in {"llm", "gliner"}:
+        if branch == "llm":
             if status == "running":
                 allowed[f"{branch}_status"] = "running"
             elif event.get("stage") == "done" and status in {
@@ -773,7 +755,7 @@ class JobManager:
                 "failed",
             }:
                 allowed[f"{branch}_status"] = status
-        for key in ["llm_status", "gliner_status"]:
+        for key in ["llm_status"]:
             if event.get(key) in {"running", "succeeded", "partial", "failed"}:
                 allowed[key] = event[key]
         if allowed:
@@ -840,30 +822,9 @@ class JobManager:
             # and one record of exhausted models for all its documents.
             provider = (
                 await aio.call(self._provider_factory)
-                if requires_models and job["mode"] in {"hybrid", "llm"}
+                if requires_models and job["mode"] == "llm"
                 else None
             )
-            runtime = None
-            if requires_models and job["mode"] in {"hybrid", "gliner"}:
-                stage = "model_loading"
-                self._stage(job_id, stage)
-                try:
-                    with self._lock:
-                        if self._shared_ner_runtime is None:
-                            self._shared_ner_runtime = (
-                                self._ner_runtime_factory()
-                            )
-                        runtime = self._shared_ner_runtime
-                    prepare = getattr(runtime, "prepare", None)
-                    if prepare is not None:
-                        await aio.call(prepare)
-                except Exception as exc:
-                    if job["mode"] == "gliner":
-                        raise
-                    logger.warning(
-                        "Auxiliary NER disabled (%s)", type(exc).__name__
-                    )
-                    runtime = None
             registry = None
             if requires_models and job["mode"] != "none":
                 from lctrend.extraction.resolver import ConceptRegistry
@@ -875,7 +836,6 @@ class JobManager:
                 )
             context = {
                 "store": store,
-                "runtime": runtime,
                 "provider": provider,
                 "registry": registry,
                 "publication": asyncio.Lock(),
@@ -1024,10 +984,8 @@ class JobManager:
                             ),
                             source_id,
                         )
-                        if job["mode"] not in {"llm", "hybrid"}:
+                        if job["mode"] != "llm":
                             record["llm_status"] = "disabled"
-                        if job["mode"] not in {"gliner", "hybrid"}:
-                            record["gliner_status"] = "disabled"
                         job["documents"].append(record)
                         batch.append((doc_id, payload))
                     self._save(job)
@@ -1089,7 +1047,7 @@ class JobManager:
                     )
                     branch_updates = {
                         key: "cancelled"
-                        for key in ["llm_status", "gliner_status"]
+                        for key in ["llm_status"]
                         if record[key] == "queued"
                     }
                     self._update_document(
@@ -1221,7 +1179,6 @@ class JobManager:
                 document,
                 mode=job["mode"],
                 provider=context["provider"],
-                ner_runtime=context["runtime"],
                 registry=registry if registry is not None else [],
                 event=lambda event: self._progress(job_id, doc_id, event),
                 **context_options,
@@ -1252,7 +1209,7 @@ class JobManager:
                 )
                 branch_updates = {
                     key: "not_started" if record[key] == "queued" else "failed"
-                    for key in ["llm_status", "gliner_status"]
+                    for key in ["llm_status"]
                     if record[key] in {"queued", "running"}
                 }
             self._update_document(
@@ -1302,7 +1259,6 @@ class JobManager:
             status="succeeded",
             stage="already_processed",
             llm_status="skipped",
-            gliner_status="skipped",
             result_ready=True,
             finished_at=_now(),
         )
@@ -1312,18 +1268,17 @@ class JobManager:
         job = self._jobs[job_id]
         store = context["store"]
         try:
-            llm_status = (
-                result.run.status
-                if job["mode"] in {"hybrid", "llm"}
-                else "disabled"
+            no_text = (
+                job["mode"] == "llm"
+                and not document.chunks
+                and result.run.metadata.get("model_calls") == 0
             )
-            gliner_status = (
-                result.run.metadata.get("ner", {}).get("status", "disabled")
-                if job["mode"] == "hybrid"
-                else result.run.status
-                if job["mode"] == "gliner"
-                else "disabled"
-            )
+            if job["mode"] != "llm":
+                llm_status = "disabled"
+            elif no_text:
+                llm_status = "no_text"
+            else:
+                llm_status = result.run.status
             body = {
                 "document": document.model_dump(mode="json"),
                 "extraction": result.model_dump(mode="json"),
@@ -1343,7 +1298,6 @@ class JobManager:
                 entities_count=len(result.concepts),
                 mentions_count=len(result.mentions),
                 llm_status=llm_status,
-                gliner_status=gliner_status,
                 coverage=result.run.metadata.get(
                     "coverage", {"source": document.coverage}
                 ),
@@ -1361,17 +1315,24 @@ class JobManager:
                 if result.run.status in {"succeeded", "partial", "failed"}
                 else "failed"
             )
-            error = (
-                None
-                if status != "failed"
-                else {
+            if status != "failed":
+                error = None
+            elif no_text:
+                error = {
+                    "code": "no_text",
+                    "message": (
+                        "У материала нет доступного текста для извлечения. "
+                        "LLM не вызывалась."
+                    ),
+                }
+            else:
+                error = {
                     "code": "extraction_failed",
                     "message": (
                         "Извлечение не завершилось. "
                         "Диагностика сохранена в результате."
                     ),
                 }
-            )
             self._update_document(
                 job_id,
                 doc_id,

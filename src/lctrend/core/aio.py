@@ -1,7 +1,7 @@
 """Small asyncio helpers shared by the pipeline, CLI and web server.
 
 Network work (LLM, Neo4j, source APIs) is asynchronous. CPU-bound work
-(Docling, GLiNER, entity resolution) and injected synchronous callables run
+(Docling and entity resolution) and injected synchronous callables run
 in worker threads so they never block the event loop.
 """
 

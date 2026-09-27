@@ -19,7 +19,7 @@
   ],
   "semantic": {
     "use_in_llm": true,
-    "use_in_llm_note": "In llm/hybrid modes a semantic match never merges: the mention gets its own provisional concept and the match is kept as a review candidate (POSSIBLY_SAME_AS), so the claim is not lost.",
+    "use_in_llm_note": "In llm mode a semantic match never merges: the mention gets its own provisional concept and the match is kept as a review candidate (POSSIBLY_SAME_AS), so the claim is not lost.",
     "embedded_kinds": ["Technology", "Method", "Task", "Problem", "ApplicationContext", "Material"],
     "cosine_threshold": 0.78,
     "decision_threshold": 0.80,

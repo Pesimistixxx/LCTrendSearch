@@ -182,7 +182,6 @@ def build_payload(
     packet: ContextPacket,
     settings: PipelineSettings,
     feedback: Optional[List[str]] = None,
-    hints: Optional[List[Dict[str, Any]]] = None,
     related_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     chunks = _selected(
@@ -245,12 +244,6 @@ def build_payload(
             "purpose": SUPPLEMENTAL_PURPOSE,
             "chunks": related_context,
         }
-    if hints is not None:
-        # Machine NER spans are optional navigation: the first thing dropped.
-        visible = [hint for hint in hints if hint["chunk_id"] in selected_ids]
-        payload["ner_hints"] = visible
-        while visible and _payload_size(payload) > settings.max_payload_chars:
-            visible.pop()
     # The index is navigation, not source evidence. Its bounded reduction is
     # visible; original source chunks, qualifiers and user-supplied metadata
     # are never sliced.

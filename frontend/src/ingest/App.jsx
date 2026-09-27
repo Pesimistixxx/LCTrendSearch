@@ -7,7 +7,7 @@ const labels = {
   failed: 'ошибка', cancelled: 'отменено', cancelling: 'остановка', interrupted: 'прервано',
   disabled: 'отключено', pending: 'ожидание', done: 'завершено', parsing: 'разбор текста',
   fetching: 'получение статьи', downloading: 'загрузка файла', fulltext: 'получение PDF',
-  model_loading: 'загрузка GLiNER', neo4j: 'подключение к базе',
+  model_loading: 'загрузка модели', neo4j: 'подключение к базе',
   extract: 'извлечение LLM', review: 'проверка LLM', validation: 'проверка цитат',
   plan: 'подготовка пакетов', context: 'дополнительный контекст', assemble: 'сборка результата',
   resolution: 'сопоставление сущностей', publication: 'запись в Neo4j', snapshot: 'сохранение источника',
@@ -16,7 +16,7 @@ const labels = {
   completed: 'завершено', processing: 'обработка материала', openalex: 'OpenAlex', github: 'GitHub', pypi: 'PyPI',
   limited: 'выдача ограничена API', idle: 'не начат', unsupported: 'не подключён', epo: 'EPO',
   linked: 'по ссылкам из GitHub', complete: 'завершён', capped: 'достигнут лимит',
-  metadata_only: 'только карточка', abstract_only: 'только аннотация', full_text: 'полный текст',
+  metadata_only: 'только карточка', no_text: 'нет текста', abstract_only: 'только аннотация', full_text: 'полный текст',
   abstract_and_full_text: 'аннотация и полный текст', parsed_text: 'текст файла',
   no_pdf_url: 'ссылки на PDF нет', not_attempted: 'не запрашивался',
   hydration: 'получение текста источника', metadata: 'получение связанных материалов',
@@ -25,6 +25,7 @@ const labels = {
 }
 const label = value => labels[value] || (value?.includes(':') ? value.split(':').map(part => labels[part] || part).join(' · ') : value) || 'ожидание'
 const message = error => typeof error === 'string' ? error : error?.message || error?.code || ''
+const noTextReason = 'У материала нет доступного текста для извлечения. LLM не вызывалась.'
 
 export default function Ingestion() {
   const [service, setService] = useState(null), [crawls, setCrawls] = useState([])
@@ -71,14 +72,14 @@ export default function Ingestion() {
   return <section className="ingest">
     <p className="eyebrow">Источники и проверка загрузки</p>
     <h1>Сбор материалов</h1>
-    <p className="status">База: {service ? service.neo4j?.available ? 'подключена' : 'недоступна' : 'проверяем'} · LLM: {service?.llm?.configured ? 'настроена' : 'нужна настройка'} · GLiNER: {service?.gliner?.installed ? 'установлен' : 'не установлен'}</p>
+    <p className="status">База: {service ? service.neo4j?.available ? 'подключена' : 'недоступна' : 'проверяем'} · LLM: {service?.llm?.configured ? 'настроена' : 'нужна настройка'}</p>
     <p className="status">OpenAlex: {service?.sources?.openalex?.configured ? 'ключ настроен' : 'без ключа — ограниченный доступ'}</p>
     <form onSubmit={upload}>
       <label>Тематика<input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Пусто — все настроенные направления" maxLength={1000} /></label>
       <label>Лимит на направление и источник<input type="number" min="1" max="10000" value={limit} onChange={event => setLimit(event.target.value)} placeholder="Пусто — вся выдача" /></label>
       <p className="hint">{topic.trim() ? 'Одно направление — введённая тема.' : `Пустая тема — направления: ${(service?.directions || []).join(', ') || 'из sources.json'}.`} {limit ? `До ${limit} статей OpenAlex и до ${limit} репозиториев GitHub на каждое направление; PyPI-пакеты из README сверх лимита.` : 'Без лимита OpenAlex идёт до конца выдачи — по широкой теме это тысячи статей.'}</p>
       <p className="hint">Отправляем тему в API OpenAlex и GitHub, получаем карточки статей и репозитории, затем извлекаем текст; пакеты PyPI берём из ссылок в README.</p>
-      <p className="pipeline">Текст → GLiNER: подсказки → LLM: извлечение и проверка → Neo4j</p>
+      <p className="pipeline">Текст → LLM: извлечение и проверка → Neo4j</p>
       <button type="submit" disabled={busy || !ready || active || (limit !== '' && !(Number(limit) >= 1 && Number(limit) <= 10000 && Number.isInteger(Number(limit))))}>{busy ? 'Подождите…' : 'Собирать'}</button>
       {!ready && service && <p className="hint">Перед загрузкой нужно подключить базу и настроить модели.{!service.pdf?.installed && ' Для получения PDF требуется модуль Docling.'}</p>}
     </form>
@@ -165,9 +166,19 @@ function Materials({ crawlId, status, title, refresh, action }) {
     const statuses = status === 'parsed' ? ['parsed', 'partial'] : status === 'pending' ? ['pending', 'processing'] : [status]
     const size = 100 / statuses.length
     setLoading(true)
-    Promise.all(statuses.flatMap(value => Array.from({ length: pages }, (_, page) => api.materials(crawlId, value, page * size, size)))).then(results => {
+    Promise.all(statuses.flatMap(value => Array.from({ length: pages }, (_, page) => api.materials(crawlId, value, page * size, size)))).then(async results => {
+      const items = [...new Map(results.flatMap(item => item.materials || []).map(item => [item.material_id, item])).values()]
+      const legacyJobs = [...new Set(items.filter(item => item.job_id && item.llm_status === 'failed').map(item => item.job_id))]
+      const jobResults = await Promise.allSettled(legacyJobs.map(api.job))
+      const diagnostics = new Map()
+      jobResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') (result.value.documents || []).forEach(doc => diagnostics.set(`${legacyJobs[index]}/${doc.doc_id}`, doc))
+      })
       if (!stale) {
-        setMaterials([...new Map(results.flatMap(item => item.materials || []).map(item => [item.material_id, item])).values()]); setError('')
+        setMaterials(items.map(item => {
+          const doc = diagnostics.get(`${item.job_id}/${item.doc_id}`)
+          return doc ? { ...item, coverage: doc.coverage, source_coverage: doc.source_coverage, model_calls: doc.model_calls } : item
+        })); setError('')
         setMore(results.some((item, index) => index % pages === pages - 1 && (Number.isFinite(item.total) ? item.total > pages * size : item.materials?.length === size)))
       }
     }).catch(e => { if (!stale) setError(e.message) }).finally(() => { if (!stale) setLoading(false) })
@@ -191,15 +202,23 @@ function Document({ jobId, document }) {
   }, [opened, jobId, document.doc_id, document.result_ready])
   const extraction = result?.extraction, concepts = extraction?.concepts || []
   const names = Object.fromEntries(concepts.map(item => [item.concept_id, item.preferred_label]))
+  const noText = document.llm_status === 'no_text' || (
+    document.llm_status === 'failed' && document.model_calls === 0 &&
+    document.coverage?.total_chunks === 0
+  ) || (
+    result?.document?.chunks?.length === 0 && extraction?.run?.metadata?.model_calls === 0 &&
+    extraction?.run?.status === 'failed'
+  )
+  const noTextCause = noText && (!document.error || ['no_text', 'extraction_failed'].includes(document.error.code))
   return <details className="document" open={opened}><summary onClick={event => { event.preventDefault(); setOpened(value => !value) }}>
-    <strong>{document.title || document.canonical_id || document.doc_id}</strong><span>{document.stage ? `${label(document.stage)} · ` : ''}{label(document.source)} · {label(document.status)}</span>
-    {(document.llm_status || document.gliner_status) && <small>LLM: {label(document.llm_status)} · GLiNER: {label(document.gliner_status)}</small>}
+    <strong>{document.title || document.canonical_id || document.doc_id}</strong><span>{document.stage ? `${label(document.stage)} · ` : ''}{label(document.source)} · {label(noTextCause ? 'no_text' : document.status)}</span>
+    {document.llm_status && <small>LLM: {label(noText ? 'no_text' : document.llm_status)}</small>}
   </summary>
-    {document.error && <p className="error">{message(document.error)}</p>}
+    {(noTextCause || document.error) && <p className={noTextCause ? 'hint' : 'error'}>{noTextCause ? noTextReason : message(document.error)}</p>}
     {error && <p className="error">{error}</p>}
     {!document.result_ready ? <p className="hint">Результат ещё не готов.</p> : !result ? !error && <p className="hint">Загружаем результат…</p> : <>
       <p><a href={api.downloadUrl(jobId, document.doc_id)} download>Скачать результат JSON</a></p>
-      <p className="hint">LLM: {label(extraction?.run?.status)} · GLiNER: {label(extraction?.run?.metadata?.ner?.status)}</p>
+      <p className="hint">LLM: {label(noText ? 'no_text' : extraction?.run?.status)}</p>
       <Received document={result.document} run={extraction?.run} />
       <h3>Сущности</h3>{concepts.length ? <ul>{concepts.map(item => <li key={item.concept_id}>{item.preferred_label} <small>({item.kind})</small></li>)}</ul> : <p className="hint">Не выделены.</p>}
       {extraction?.economic_evidence?.length > 0 && <><h3>Экономические сведения</h3><ul>{extraction.economic_evidence.map(item => <li key={item.evidence_id}>{names[item.technology_concept_id] || item.technology_concept_id} · {item.category}{item.amount_text ? ` · ${item.amount_text}${item.currency ? ' ' + item.currency : ''}` : ''}<blockquote>{item.quote}</blockquote></li>)}</ul></>}

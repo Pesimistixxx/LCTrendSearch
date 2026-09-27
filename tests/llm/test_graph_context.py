@@ -13,7 +13,6 @@ from test_llm_pipeline import (
 
 from lctrend.llm.context import (
     ContextPacket,
-    build_payload,
     expand_context,
     review_payload,
 )
@@ -225,27 +224,4 @@ def test_optional_graph_rows_cannot_prevent_required_source_review():
         item.get("context", {}).get("omitted_related_chunk_ids") == ["foreign"]
         for item in result.run.trace
         if item["stage"] == "review_context"
-    )
-
-
-def test_optional_hints_are_trimmed_after_graph_context_is_added():
-    doc = document()
-    packet = ContextPacket(packet_id="p", focus_chunk_ids=["c1"])
-    graph = [related("x" * 3000)]
-    base = build_payload(
-        doc, packet, settings(max_map_entries=0), related_context=graph
-    )
-    limited = settings(
-        max_map_entries=0,
-        max_payload_chars=len(json.dumps(base, ensure_ascii=False)) + 50,
-    )
-    hints = [{"chunk_id": "c1", "label": "x" * 1000}]
-    payload = build_payload(
-        doc, packet, limited, hints=hints, related_context=graph
-    )
-    assert payload["related_context"]["chunks"] == graph
-    assert payload["ner_hints"] == []
-    assert (
-        len(json.dumps(payload, ensure_ascii=False))
-        <= limited.max_payload_chars
     )

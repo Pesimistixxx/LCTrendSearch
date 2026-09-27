@@ -202,41 +202,6 @@ def _sources(catalog: Mapping) -> None:
 
 def _extraction(catalog: Mapping) -> None:
     _regex(catalog["sentence_pattern"], "extraction.sentence_pattern")
-    ner = _mapping(catalog["ner"], "extraction.ner")
-    _number(ner["threshold"], "extraction.ner.threshold", 0, 1)
-    _bool(
-        ner["composite_technologies_enabled"],
-        "extraction.ner.composite_technologies_enabled",
-    )
-    _strings(
-        ner["generic_technologies"], "extraction.ner.generic_technologies"
-    )
-    for label, kind in _mapping(
-        ner["labels"], "extraction.ner.labels"
-    ).items():
-        _text(label, "extraction.ner.labels")
-        if kind not in KINDS:
-            _fail("extraction.ner.labels." + label, "unknown ConceptKind")
-    for rule in ner["composite_technology_rules"]:
-        for key in ("method", "application"):
-            _regex(
-                rule[key], "extraction.ner.composite_technology_rules." + key
-            )
-        _text(
-            rule["canonical"],
-            "extraction.ner.composite_technology_rules.canonical",
-        )
-    hybrid = _mapping(catalog["hybrid"], "extraction.hybrid")
-    for key in ("hint_kinds", "candidate_kinds"):
-        _strings(hybrid[key], "extraction.hybrid." + key, KINDS)
-    for key in ("hint_min_score", "candidate_min_score"):
-        _number(hybrid[key], "extraction.hybrid." + key, 0, 1)
-    _number(
-        hybrid["max_hints_per_packet"],
-        "extraction.hybrid.max_hints_per_packet",
-        1,
-        integer=True,
-    )
     _patterns(catalog["polarity"], "extraction.polarity")
     assertions = _mapping(catalog["assertions"], "extraction.assertions")
     _strings(
@@ -465,8 +430,7 @@ def _models(catalogs: Mapping) -> None:
         catalogs["resolver"],
         catalogs["llm"],
     )
-    _text(runtime["ner_model"], "runtime.ner_model")
-    if runtime["default_extractor"] not in {"none", "gliner", "llm", "hybrid"}:
+    if runtime["default_extractor"] not in {"none", "llm"}:
         _fail("runtime.default_extractor", "unknown extractor")
     for group in resolver["explicit_aliases"]:
         if group["kind"] not in KINDS:

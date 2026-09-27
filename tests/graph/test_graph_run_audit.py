@@ -135,14 +135,14 @@ def test_nested_llm_run_audit_is_serialized_to_json_preserving_native_fields():
 def test_legacy_run_baseline_fields_and_empty_audit_are_preserved():
     run = ProcessingRun(
         run_id="run:legacy",
-        parser="gliner",
+        parser="llm",
         model_revision="original-ner-model",
         config_hash="legacy-config",
         started_at="2026-01-01T00:00:00Z",
     )
     _, _, query, parameters = project(run)
     assert parameters["pipeline_version"] == "0.1.0"
-    assert parameters["parser"] == "gliner"
+    assert parameters["parser"] == "llm"
     assert parameters["model_revision"] == "original-ner-model"
     assert parameters["prompt_hash"] is None
     assert parameters["config_hash"] == "legacy-config"

@@ -4,19 +4,14 @@ import pytest
 
 from lctrend.core.config import load_catalog
 from lctrend.core.models import (
-    Artifact,
     Chunk,
     ConceptKind,
-    DocumentEnvelope,
-    DocumentType,
-    SourceRef,
 )
 from lctrend.extraction.economics import (
     _currency,
     amount_value,
     extract_economic_evidence,
 )
-from lctrend.extraction.ner import extract_mentions
 from lctrend.extraction.resolver import resolve_mentions
 from lctrend.ingest.adapters import _domains_from_values
 from lctrend.ingest.fulltext import section_role
@@ -94,40 +89,3 @@ def test_russian_domains_do_not_expand_search_queries_implicitly():
 )
 def test_section_roles_support_russian_navigation(heading, role):
     assert section_role(heading) == role
-
-
-def test_generic_gliner_entity_is_retained_as_candidate():
-    text = "Искусственный интеллект и SensorX."
-
-    class Model:
-        def predict_entities(self, text, labels, threshold):
-            return [
-                {
-                    "start": text.index(name),
-                    "end": text.index(name) + len(name),
-                    "label": "technology",
-                    "score": 0.9,
-                }
-                for name in ("Искусственный интеллект", "SensorX")
-            ]
-
-    document = DocumentEnvelope(
-        document_id="d",
-        document_version_id="v",
-        title="Example",
-        document_type=DocumentType.REPORT,
-        source=SourceRef(
-            source_id="s", name="Test", source_type="local_file", record_id="1"
-        ),
-        artifact=Artifact(
-            uri="memory://1", sha256="0" * 64, media_type="text/plain"
-        ),
-        chunks=[Chunk(chunk_id="c", kind="paragraph", order=0, text=text)],
-    )
-    mentions = extract_mentions(document, Model())
-    assert [mention.surface_text for mention in mentions] == [
-        "Искусственный интеллект",
-        "SensorX",
-    ]
-    assert mentions[0].type_candidates == [ConceptKind.CANDIDATE]
-    assert mentions[1].type_candidates == [ConceptKind.TECHNOLOGY]

@@ -41,7 +41,7 @@ class CollectRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=5000)
     workers: Optional[int] = Field(default=None, ge=1, le=MAX_WORKERS)
-    mode: Literal["hybrid", "llm", "gliner", "none"] = "hybrid"
+    mode: Literal["llm", "none"] = "llm"
     fulltext: bool = True
     filter: Optional[str] = Field(default=None, max_length=2000)
 
@@ -182,14 +182,10 @@ def _status() -> dict:
     return {
         "neo4j": neo,
         "llm": llm,
-        "gliner": {
-            "installed": _installed("gliner"),
-            "model": load_catalog("runtime")["ner_model"],
-        },
         "pdf": {"installed": _installed("docling")},
         "sources": _source_status(),
         "defaults": {
-            "mode": "hybrid",
+            "mode": "llm",
             "workers": default_workers(),
             "max_workers": MAX_WORKERS,
             "limit": 10,
@@ -464,12 +460,12 @@ def create_app(
     @app.post("/api/ingest/uploads", status_code=202)
     async def upload(
         files: list[UploadFile] = File(...),
-        mode: str = Form("hybrid"),
+        mode: str = Form("llm"),
         workers: Optional[int] = Form(None),
         direction: str = Form(""),
     ):
         if (
-            mode not in ("hybrid", "llm", "gliner", "none")
+            mode not in ("llm", "none")
             or not 1 <= (workers or default_workers()) <= MAX_WORKERS
             or not 1 <= len(files) <= 100
             or len(direction) > 1000

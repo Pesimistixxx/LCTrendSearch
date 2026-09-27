@@ -21,7 +21,12 @@ def test_bundled_resources_are_consistent():
         ("sources", ("http", "max_attempts"), 0, "sources.http.max_attempts"),
         ("sources", ("markdown", "overlap_chars"), 1000, "overlap_chars"),
         ("extraction", ("economics", "money_pattern"), "[", "money_pattern"),
-        ("extraction", ("ner", "labels", "technology"), "Typo", "labels"),
+        (
+            "extraction",
+            ("assertions", "subject_kinds"),
+            ["Typo"],
+            "subject_kinds",
+        ),
         ("pipeline", ("settings", "primary_chunks"), 99, "pipeline.settings"),
         ("pipeline", ("graph_context", "max_chars"), True, "max_chars"),
         (

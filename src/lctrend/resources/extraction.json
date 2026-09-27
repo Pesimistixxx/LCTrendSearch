@@ -1,23 +1,6 @@
 {
   "schema_version": 1,
   "sentence_pattern": "(?i)(?:[^\\n.!?]|\\.(?=\\d)|(?<=тыс)\\.|(?<=млн)\\.|(?<=млрд)\\.)+(?:[.!?]+|$)",
-  "ner": {
-    "threshold": 0.5,
-    "composite_technologies_enabled": false,
-    "composite_rule_note": "Legacy synthetic concept proposals based on sentence co-occurrence; disabled because they are not evidence of a technology's identity or use.",
-    "labels": {"technology": "Technology", "method": "Method", "task": "Task", "technical problem": "Problem", "application": "ApplicationContext", "metric": "Metric", "material": "Material"},
-    "generic_technologies": ["ai", "artificial intelligence", "computer vision", "cv", "machine learning", "natural language processing", "nlp", "ии", "искусственный интеллект", "компьютерное зрение", "машинное обучение", "обработка естественного языка"],
-    "composite_technology_rules": [{"method": "(?:vision )?transformers?|transformer[- ]based(?: models?)?", "application": "computer vision|image (?:analysis|classification|segmentation)", "canonical": "Transformer-based computer vision"}, {"method": "transformers?|transformer[- ]based(?: models?)?", "application": "natural language processing|text classification|named entity recognition", "canonical": "Transformer-based natural language processing"}],
-    "generic_technology_note": "GLiNER-only generic technology spans remain ConceptCandidate mentions; reviewed LLM entities can still establish their type from the source."
-  },
-  "hybrid": {
-    "note": "GLiNER is an auxiliary signal for the LLM path: hints are navigation, never evidence; uncovered technology spans become unreviewed candidates.",
-    "hint_kinds": ["Technology", "Method", "Task", "Problem", "Material"],
-    "hint_min_score": 0.5,
-    "max_hints_per_packet": 40,
-    "candidate_kinds": ["Technology"],
-    "candidate_min_score": 0.7
-  },
   "polarity": {
     "negated": "\\b(?:not|no|never|cannot|can't|doesn't|didn't|don't|не|нет|невозможно|нельзя|без)\\b",
     "hypothetical": "\\b(?:can|may|might|could|would|potentially|if|может|могут|могло|могли|способен|способна|способны|возможно|если|потенциально)\\b",

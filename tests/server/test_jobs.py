@@ -89,14 +89,6 @@ class Store:
         self.closed = True
 
 
-class Runtime:
-    def __init__(self):
-        self.prepared = 0
-
-    def prepare(self):
-        self.prepared += 1
-
-
 def files(tmp_path, count=2):
     paths = [tmp_path / f"study-{index}.txt" for index in range(count)]
     for path in paths:
@@ -105,19 +97,18 @@ def files(tmp_path, count=2):
 
 
 def manager(tmp_path, **overrides):
-    store, runtime = Store(), Runtime()
+    store = Store()
     defaults = dict(
         store_factory=lambda: store,
         file_parser=document,
         provider_factory=object,
-        ner_runtime_factory=lambda: runtime,
         document_processor=lambda doc, **kwargs: extraction(doc),
         snapshot_writer=lambda doc, raw: doc,
         pdf_support_checker=lambda: None,
     )
     defaults.update(overrides)
     instance = JobManager(tmp_path / "jobs", **defaults)
-    instance.fixture_store, instance.fixture_runtime = store, runtime
+    instance.fixture_store = store
     return instance
 
 
@@ -130,9 +121,8 @@ def test_files_have_truthful_progress_and_persistent_results(tmp_path):
     started, release = Event(), Event()
     providers = []
 
-    def process(doc, event, provider, ner_runtime, **kwargs):
+    def process(doc, event, provider, **kwargs):
         providers.append(provider)
-        assert ner_runtime.prepared == 1
         event(
             {
                 "branch": "llm",
@@ -147,7 +137,6 @@ def test_files_have_truthful_progress_and_persistent_results(tmp_path):
             doc,
             "partial",
             coverage={"total_chunks": 1, "unprocessed_chunk_ids": ["c1"]},
-            ner={"status": "failed"},
         )
 
     instance = manager(tmp_path, document_processor=process)
@@ -172,7 +161,6 @@ def test_files_have_truthful_progress_and_persistent_results(tmp_path):
         assert final["status"] == "completed"
         assert final["counts"]["partial"] == 2
         assert final["documents"][0]["llm_status"] == "partial"
-        assert final["documents"][0]["gliner_status"] == "failed"
         # One provider per job: one token, one rate limit, one ladder.
         assert providers[0] is providers[1]
         assert instance.fixture_store.events[:2] == ["verify", "schema"]
@@ -192,6 +180,33 @@ def test_files_have_truthful_progress_and_persistent_results(tmp_path):
         assert instance.fixture_store.closed
     finally:
         release.set()
+        instance.close(wait=True)
+
+
+def test_document_without_text_reports_why_llm_was_not_called(tmp_path):
+    def parse(path):
+        return document(path).model_copy(
+            update={"chunks": [], "coverage": "metadata_only"}
+        )
+
+    instance = manager(
+        tmp_path,
+        file_parser=parse,
+        document_processor=lambda doc, **kwargs: extraction(
+            doc, "failed", model_calls=0, coverage={"total_chunks": 0}
+        ),
+    )
+    try:
+        final = finish(instance, instance.create_files(files(tmp_path, 1)))
+        record = final["documents"][0]
+        assert record["status"] == "failed"
+        assert record["llm_status"] == "no_text"
+        assert record["error"]["code"] == "no_text"
+        assert "LLM не вызывалась" in record["error"]["message"]
+        saved = instance.get_result(final["job_id"], record["doc_id"])
+        assert saved["extraction"]["run"]["status"] == "failed"
+        assert saved["document"]["chunks"] == []
+    finally:
         instance.close(wait=True)
 
 
@@ -333,7 +348,6 @@ def test_neo4j_preflight_failure_happens_before_any_model_configuration(
         tmp_path,
         store_factory=Offline,
         provider_factory=forbidden,
-        ner_runtime_factory=forbidden,
     )
     try:
         final = finish(instance, instance.create_files(files(tmp_path)))
@@ -342,29 +356,6 @@ def test_neo4j_preflight_failure_happens_before_any_model_configuration(
         assert "Neo4j" in final["error"]["message"]
         assert "password" not in json.dumps(final)
         assert final["counts"]["cancelled"] == 2
-    finally:
-        instance.close(wait=True)
-
-
-def test_gliner_preparation_failure_prevents_document_work(tmp_path):
-    calls = []
-
-    class MissingRuntime(Runtime):
-        def prepare(self):
-            raise ImportError("missing gliner")
-
-    instance = manager(
-        tmp_path,
-        ner_runtime_factory=MissingRuntime,
-        document_processor=lambda *args, **kwargs: calls.append("paid"),
-    )
-    try:
-        final = finish(
-            instance, instance.create_files(files(tmp_path), mode="gliner")
-        )
-        assert final["status"] == "failed"
-        assert "GLiNER" in final["error"]["message"]
-        assert calls == []
     finally:
         instance.close(wait=True)
 
@@ -381,7 +372,7 @@ def test_provider_configuration_failure_is_sanitized_before_document_work(
         assert final["status"] == "failed"
         assert "LLM" in final["error"]["message"]
         assert "key123" not in json.dumps(final)
-        assert instance.fixture_runtime.prepared == 0
+        assert instance.fixture_store.writes == []
     finally:
         instance.close(wait=True)
 
@@ -637,25 +628,19 @@ def test_openalex_job_returns_actionable_error_without_source_credentials(
         instance.close(wait=True)
 
 
-def test_mode_none_never_constructs_either_model_and_publishes_metadata_only(
+def test_mode_none_never_constructs_provider_and_publishes_metadata_only(
     tmp_path,
 ):
     def forbidden():
         raise AssertionError("disabled extractor was touched")
 
-    instance = manager(
-        tmp_path, provider_factory=forbidden, ner_runtime_factory=forbidden
-    )
+    instance = manager(tmp_path, provider_factory=forbidden)
     try:
         final = finish(
             instance, instance.create_files(files(tmp_path, 1), mode="none")
         )
         assert final["status"] == "completed"
-        assert (
-            final["documents"][0]["llm_status"]
-            == final["documents"][0]["gliner_status"]
-            == "disabled"
-        )
+        assert final["documents"][0]["llm_status"] == "disabled"
         assert instance.fixture_store.writes[0][1] is None
     finally:
         instance.close(wait=True)
@@ -680,7 +665,13 @@ def test_result_lookup_cannot_escape_job_directory_and_snapshots_are_detached(
 
 @pytest.mark.parametrize(
     "workers,mode",
-    [(0, "hybrid"), (17, "hybrid"), (True, "hybrid"), (1, "search")],
+    [
+        (0, "llm"),
+        (17, "llm"),
+        (True, "llm"),
+        (1, "search"),
+        (1, "unsupported"),
+    ],
 )
 def test_invalid_worker_or_mode_is_rejected_before_scheduling(
     tmp_path, workers, mode
@@ -703,20 +694,20 @@ def test_close_rejects_new_work(tmp_path):
         instance.create_files(files(tmp_path, 1))
 
 
-def test_source_payload_jobs_do_not_repeat_discovery_and_share_one_ner_model(
+def test_source_payload_jobs_skip_discovery_and_create_provider_per_job(
     tmp_path,
 ):
-    runtime, factories = Runtime(), []
+    factories = []
 
-    def runtime_factory():
+    def provider_factory():
         factories.append(1)
-        return runtime
+        return object()
 
     def forbidden(*args):
         raise AssertionError("discovery must not be run for supplied records")
 
     instance = manager(
-        tmp_path, source_fetcher=forbidden, ner_runtime_factory=runtime_factory
+        tmp_path, source_fetcher=forbidden, provider_factory=provider_factory
     )
     try:
         one = finish(
@@ -741,7 +732,7 @@ def test_source_payload_jobs_do_not_repeat_discovery_and_share_one_ner_model(
             ),
         )
         assert one["status"] == two["status"] == "completed"
-        assert factories == [1]
+        assert factories == [1, 1]
         assert len(instance.fixture_store.writes) == 2
     finally:
         instance.close(wait=True)
@@ -868,7 +859,7 @@ def test_registration_failure_never_dispatches_a_child_job(tmp_path):
         instance.close(wait=True)
 
 
-def test_republication_skips_provider_ner_pdf_and_model_calls(
+def test_republication_skips_provider_pdf_and_model_calls(
     tmp_path,
 ):
     processed, writes = [], []
@@ -901,7 +892,7 @@ def test_republication_skips_provider_ner_pdf_and_model_calls(
                 "republication must not touch any model or source"
             )
 
-        instance._provider_factory = instance._ner_runtime_factory = forbidden
+        instance._provider_factory = forbidden
         instance._pdf_support_checker = instance._snapshot_writer = forbidden
         instance._document_processor = forbidden
         second = finish(
@@ -999,25 +990,3 @@ def test_restart_preserves_interrupted_publication_stage(tmp_path):
         )
     finally:
         restored.close(wait=True)
-
-
-def test_hybrid_continues_without_unavailable_auxiliary_ner(tmp_path):
-    class MissingRuntime(Runtime):
-        def prepare(self):
-            raise ImportError("missing gliner")
-
-    def process(doc, ner_runtime, **kwargs):
-        assert ner_runtime is None
-        return extraction(doc, ner={"status": "disabled", "model": None})
-
-    instance = manager(
-        tmp_path,
-        ner_runtime_factory=MissingRuntime,
-        document_processor=process,
-    )
-    try:
-        final = finish(instance, instance.create_files(files(tmp_path)))
-        assert final["counts"]["succeeded"] == 2
-        assert final["documents"][0]["gliner_status"] == "disabled"
-    finally:
-        instance.close(wait=True)

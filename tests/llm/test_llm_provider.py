@@ -713,7 +713,9 @@ def test_gigachat_oauth_schema_request_and_default_ladder():
     assert auth.headers["rquid"] and auth.content == b"scope=GIGACHAT_API_PERS"
     request = server.chat[0]
     assert request["model"] == "GigaChat-3-Ultra"
+    assert request["max_tokens"] == 8192
     assert request["response_format"]["type"] == "json_schema"
+    assert request["response_format"]["strict"] is True
     assert (
         request["response_format"]["schema"]["properties"]["text"]["type"]
         == "string"
@@ -733,6 +735,9 @@ def test_gigachat_schema_has_no_unresolved_local_references():
     asyncio.run(gigachat(server).generate(Extraction, "s", {}))
     schema = json.dumps(server.chat[0]["response_format"]["schema"])
     assert "$ref" not in schema and "$defs" not in schema
+    assert server.chat[0]["response_format"]["schema"]["required"] == [
+        "entities", "claims", "context_requests"
+    ]
 
 
 def test_gigachat_balance_skips_low_models_and_402_moves_on():
@@ -763,10 +768,10 @@ def test_gigachat_balance_skips_low_models_and_402_moves_on():
 
 
 def test_gigachat_local_balance_estimate_retires_model_below_reserve():
-    # Reserve is 20 000 + 4 096 output tokens; one 1 000-token answer
+    # Reserve is 20 000 + 8 192 output tokens; one 1 000-token answer
     # crosses it.
     server = GigaChatServer(
-        balance={"GigaChat-3-Ultra": 25_000, "GigaChat-2-Max": 1_000_000}
+        balance={"GigaChat-3-Ultra": 29_000, "GigaChat-2-Max": 1_000_000}
     )
     provider = gigachat(server)
     asyncio.run(provider.generate(Answer, "s", {}))

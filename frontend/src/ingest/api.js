@@ -29,6 +29,7 @@ export const api = {
   resumeCrawl: id => request(`/crawls/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   retryFailedCrawl: id => request(`/crawls/${encodeURIComponent(id)}/retry-failed`, { method: 'POST' }),
   materials: (id, status, offset = 0, limit = 100) => request(`/crawls/${encodeURIComponent(id)}/materials?status=${encodeURIComponent(status)}&limit=${limit}&offset=${offset}`),
+  job: id => request(`/jobs/${encodeURIComponent(id)}`),
   status: () => request('/status'),
   settings: body => request('/settings', { method: 'POST', body: JSON.stringify(body) }),
   sourceSettings: body => request('/sources/settings', { method: 'POST', body: JSON.stringify(body) }),

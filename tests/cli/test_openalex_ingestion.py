@@ -44,8 +44,6 @@ def fast_ingestion(monkeypatch, tmp_path):
         pytest.fail("Fast metadata ingestion must not load PDF or models")
 
     monkeypatch.setattr(cli, "require_pdf_support", unexpected)
-    monkeypatch.setattr(cli, "_load_ner_model", unexpected)
-    monkeypatch.setattr(cli, "_semantic_deduplicator", unexpected)
     return store
 
 
@@ -123,7 +121,7 @@ def test_fast_crawl_authenticates_and_resumes_without_reimport(
 def test_crawl_rejects_unsupported_page_sizes(tmp_path, per_page):
     with pytest.raises(ValueError, match="per-page must be 1..100"):
         cli._crawl_openalex(
-            "sensors", 1, per_page, tmp_path / "crawl.json", False, "unused",
+            "sensors", 1, per_page, tmp_path / "crawl.json", False,
             fulltext=False,
         )
 
@@ -143,7 +141,7 @@ def test_empty_page_marks_checkpoint_complete(
     checkpoint = tmp_path / "empty.json"
     for _ in range(2):
         cli._crawl_openalex(
-            "sensors", 3, 1, checkpoint, False, "unused", fulltext=False
+            "sensors", 3, 1, checkpoint, False, fulltext=False
         )
     assert len(requests) == 1
     assert json.loads(checkpoint.read_text())["cursor"] is None
@@ -164,7 +162,7 @@ def test_repeated_cursor_stops_crawl_without_duplicate_import(
     )
     with pytest.raises(ValueError, match="Repeated OpenAlex cursor"):
         cli._crawl_openalex(
-            "sensors", limit, 1, tmp_path / "loop.json", False, "unused",
+            "sensors", limit, 1, tmp_path / "loop.json", False,
             fulltext=False,
         )
     assert fast_ingestion.documents == []
@@ -190,7 +188,7 @@ def test_missing_cursor_preserves_checkpoint_for_retry(
     )
     with pytest.raises(ValueError, match="missing next_cursor"):
         cli._crawl_openalex(
-            "sensors", 2, 1, checkpoint, False, "unused", fulltext=False
+            "sensors", 2, 1, checkpoint, False, fulltext=False
         )
     assert json.loads(checkpoint.read_text()) == saved
     assert fast_ingestion.documents == []

@@ -34,10 +34,9 @@ flowchart TD
     end
 
     subgraph C["3. Извлечение — extraction/processing.py → llm/pipeline.py"]
-        C0["process_material(mode=hybrid|llm|gliner|none)"]:::done
-        C1["NerRuntime + extract_mentions<br/>GLiNER: подсказки"]:::done
+        C0["process_material(mode=llm|none)"]:::done
         C2["plan_packets → ContextPacket<br/>PipelineSettings.call_limit"]:::done
-        C3["build_payload: чанки + карта документа<br/>+ метаданные + контракт предикатов + подсказки"]:::done
+        C3["build_payload: чанки + карта документа<br/>+ метаданные + контракт предикатов"]:::done
         C4["JsonLLM.generate(Extraction)<br/>prompts/extract.txt"]:::done
         C5["expand_packet: read_chunk / search_chunks<br/>(только внутри документа)"]:::partial
         C6["validate_local_extraction<br/>цитаты, роли, stage, TRL, ISO-код"]:::done
@@ -90,9 +89,7 @@ flowchart TD
     B2 --> B4
     B2 --> B5
     B5 --> C0
-    C0 --> C1
     C0 --> C2
-    C1 --> C3
     C2 --> C3
     C3 --> C4
     C4 -- "context_requests" --> C5
@@ -140,7 +137,7 @@ flowchart TD
 | 2 | Снимок | `snapshots.persist_snapshot` | байты → файл `artifacts/raw/<sha256>`; можно перепарсить без повторной загрузки |
 | 3 | Адаптер | `adapters.parse_*`, `file_adapters.parse_file` | сырой ответ → `DocumentEnvelope` (метаданные + `Chunk`) |
 | 4 | Полный текст | `fulltext.attach_openalex_fulltext` | PDF → чанки `fulltext` с `section_role` |
-| 5 | Оркестрация | `processing.process_material`, `JobManager` (веб) | режим `hybrid`/`llm`/`gliner`/`none` |
+| 5 | Оркестрация | `processing.process_material`, `JobManager` (веб) | режим `llm`/`none` |
 | 6 | Пакеты | `context.plan_packets`, `ContextPacket`, `PipelineSettings` | чанки → пакеты по 10, бюджет 3 вызова на пакет, не больше 120 |
 | 7 | Извлечение | `pipeline.process_document`, `JsonLLM`, `contracts.Extraction` | пакет → `LocalEntity`, `LocalClaim`, `ContextRequest` |
 | 8 | Проверка кодом | `validation.validate_local_extraction` | отбраковка сущностей и утверждений без цитат или с неверными ролями |

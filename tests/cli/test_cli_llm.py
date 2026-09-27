@@ -46,13 +46,6 @@ class MemoryStore:
         self.extractions.append(result)
 
 
-class FakeNER:
-    """GLiNER-shaped model returning no spans; no weights are loaded."""
-
-    def predict_entities(self, text, labels, threshold=0.5):
-        return []
-
-
 @pytest.fixture
 def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "load_environment", lambda: None)
@@ -78,18 +71,6 @@ def offline(monkeypatch, tmp_path):
     store = MemoryStore()
     monkeypatch.setattr(cli, "_store", lambda: store)
 
-    def no_legacy(*args, **kwargs):
-        pytest.fail(
-            "LLM/hybrid/no-extract path must not load "
-            "the semantic deduplicator"
-        )
-
-    def ner_model(name):
-        store.events.append("ner_model")
-        return FakeNER()
-
-    monkeypatch.setattr(cli, "_load_ner_model", ner_model)
-    monkeypatch.setattr(cli, "_semantic_deduplicator", no_legacy)
     return store
 
 
@@ -109,15 +90,14 @@ def record(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "arguments,hybrid",
+    "arguments",
     [
-        ([], True),
-        (["--extractor", "hybrid"], True),
-        (["--extractor", "llm"], False),
+        [],
+        ["--extractor", "llm"],
     ],
 )
-def test_ingest_defaults_to_hybrid_llm_with_auxiliary_ner(
-    monkeypatch, tmp_path, offline, arguments, hybrid
+def test_ingest_defaults_to_llm(
+    monkeypatch, tmp_path, offline, arguments
 ):
     source = record(tmp_path)
     output = tmp_path / "nested" / "extraction.json"
@@ -148,7 +128,6 @@ def test_ingest_defaults_to_hybrid_llm_with_auxiliary_ner(
     assert len(constructors) == 1
     assert len(provider.calls) == 1 and provider.calls[0]["stage"] == "extract"
     assert offline.events == [
-        *(["ner_model"] if hybrid else []),
         "open",
         "schema",
         "registry",
@@ -156,9 +135,7 @@ def test_ingest_defaults_to_hybrid_llm_with_auxiliary_ner(
         "close",
     ]
     saved = json.loads(output.read_text(encoding="utf-8"))
-    assert saved["run"]["metadata"]["ner"]["status"] == (
-        "ok" if hybrid else "disabled"
-    )
+    assert "ner" not in saved["run"]["metadata"]
     assert (
         saved["document_version_id"]
         == offline.documents[0].document_version_id
@@ -171,9 +148,8 @@ def test_ingest_defaults_to_hybrid_llm_with_auxiliary_ner(
     assert saved["run"]["metadata"]["coverage"]["unprocessed_chunk_ids"] == []
 
 
-@pytest.mark.parametrize("extractor", ["hybrid", "llm", "gliner"])
 def test_no_extract_ingest_never_constructs_provider(
-    monkeypatch, tmp_path, offline, extractor
+    monkeypatch, tmp_path, offline
 ):
     def prohibited(**kwargs):
         pytest.fail("--no-extract must not initialize an LLM")
@@ -189,7 +165,7 @@ def test_no_extract_ingest_never_constructs_provider(
             str(record(tmp_path)),
             "--no-extract",
             "--extractor",
-            extractor,
+            "llm",
         ],
     )
     cli.main()
@@ -267,7 +243,6 @@ def test_fetch_only_and_fetch_ingest_respect_extraction_switch(
     assert len(constructors) == int(extract)
     assert len(offline.documents) == int(ingest)
     assert len(offline.extractions) == int(extract)
-    assert offline.events.count("ner_model") == int(extract)
     assert len(provider.calls) == int(extract)
 
 
@@ -278,7 +253,7 @@ def test_provider_configuration_fails_before_any_graph_writes(
         {"id": "https://openalex.org/W1", "title": "Fixture"}
     )
     with pytest.raises(LLMError) as failure:
-        cli._ingest(document, True, "unused-gliner-name")
+        cli._ingest(document, True)
     assert failure.value.code == "configuration"
     assert offline.events == []
     assert offline.documents == [] and offline.extractions == []
@@ -299,14 +274,13 @@ def test_crawl_provider_configuration_fails_before_graph_writes_or_fetch(
     with pytest.raises(LLMError) as failure:
         if crawler == "openalex":
             cli._crawl_openalex(
-                "fixture", 1, 1, tmp_path / "oa.json", True, "unused"
+                "fixture", 1, 1, tmp_path / "oa.json", True
             )
         else:
             cli._crawl_pypi(
                 1,
                 tmp_path / "pypi.json",
                 True,
-                "unused",
                 requested_packages=["fixture"],
             )
     assert failure.value.code == "configuration"
@@ -317,10 +291,9 @@ def test_crawl_provider_configuration_fails_before_graph_writes_or_fetch(
 @pytest.mark.parametrize(
     "extra,extract,extractor",
     [
-        ([], True, "hybrid"),
+        ([], True, "llm"),
         (["--extractor", "llm"], True, "llm"),
-        (["--no-extract"], False, "hybrid"),
-        (["--extractor", "gliner"], True, "gliner"),
+        (["--no-extract"], False, "llm"),
     ],
 )
 def test_crawler_cli_passes_extraction_choice(
@@ -345,38 +318,16 @@ def test_crawler_cli_passes_extraction_choice(
     assert args[-1] == extractor
 
 
-@pytest.mark.parametrize(
-    "environment,expected_extractor,expected_model",
-    [
-        (None, "hybrid", "urchade/gliner_medium-v2.1"),
-        ("", "hybrid", "urchade/gliner_medium-v2.1"),
-        ("   ", "hybrid", "urchade/gliner_medium-v2.1"),
-        ("configured", "llm", "custom/gliner"),
-    ],
-)
-def test_optional_environment_defaults_match_readme(
-    monkeypatch, environment, expected_extractor, expected_model
-):
+def test_default_extractor_is_llm(monkeypatch):
     monkeypatch.setattr(cli, "load_environment", lambda: None)
     monkeypatch.delenv("LCTREND_CONFIG_DIR", raising=False)
-    for name, value in (
-        ("LCTREND_EXTRACTOR", "llm"),
-        ("GLINER_MODEL", "custom/gliner"),
-    ):
-        if environment is None:
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(
-                name, value if environment == "configured" else environment
-            )
     received = []
     monkeypatch.setattr(
         cli, "_crawl_openalex", lambda *args, **kwargs: received.append(args)
     )
     monkeypatch.setattr(sys, "argv", ["lctrend", "crawl-openalex", "robotics"])
     cli.main()
-    assert received[0][5] == expected_model
-    assert received[0][6] == expected_extractor
+    assert received[0][5] == "llm"
 
 
 def test_snapshot_is_content_addressed_and_repeated_bytes_are_not_rewritten(

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Tests inject an httpx.MockTransport here; production uses the network.
 TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
+_PUBMED_REQUEST_LOCK = asyncio.Lock()
 
 
 class SourceHTTPError(RuntimeError):
@@ -295,6 +296,26 @@ async def fetch_pdf(url: str) -> bytes:
         raise ValueError("URL did not return a PDF")
     logger.debug("PDF %s downloaded, %d bytes", url, len(raw))
     return raw
+
+
+async def fetch_pubmed_xml(pmid: str) -> bytes:
+    """Fetch one PubMed record from a fixed endpoint using a numeric PMID."""
+    if not re.fullmatch(r"[1-9][0-9]{0,11}", pmid):
+        raise ValueError("PubMed PMID must be numeric")
+    url = (
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?"
+        + urllib.parse.urlencode(
+            {"db": "pubmed", "id": pmid, "retmode": "xml"}
+        )
+    )
+    logger.debug("GET PubMed PMID %s", pmid)
+    # Without an NCBI API key, keep this process below three requests/second.
+    async with _PUBMED_REQUEST_LOCK:
+        await asyncio.sleep(0.4)
+        response = await request(
+            url, {"Accept": "application/xml"}, max_bytes=1_000_000
+        )
+    return response.content
 
 
 async def fetch_pypi(package: str) -> Dict[str, Any]:

@@ -57,8 +57,8 @@ def test_similar_but_distinct_technology_is_not_merged():
 
 
 def test_repeated_exact_mentions_share_one_provisional_concept():
-    first = mention("GLiNER")
-    second = mention("gliner")
+    first = mention("Sensor")
+    second = mention("sensor")
     second.mention_id = "m2"
     new, decisions = resolve_exact_mentions([first, second], [])
     assert len(new) == 1

@@ -28,6 +28,23 @@ WORK = {
     ],
 }
 
+PUBMED_WORK = {
+    "id": "https://openalex.org/W2908201961",
+    "doi": "https://doi.org/10.1038/s41591-018-0300-7",
+    "ids": {"pmid": "https://pubmed.ncbi.nlm.nih.gov/30617339"},
+}
+PUBMED_XML = (
+    b"<PubmedArticleSet><PubmedArticle><MedlineCitation>"
+    b"<PMID>30617339</PMID><Article><Abstract>"
+    b'<AbstractText Label="Background">'
+    b"Human and <i>artificial</i> intelligence.</AbstractText>"
+    b'<AbstractText Label="Conclusions">'
+    b"They can work together.</AbstractText>"
+    b"</Abstract></Article></MedlineCitation><PubmedData><ArticleIdList>"
+    b'<ArticleId IdType="doi">10.1038/s41591-018-0300-7</ArticleId>'
+    b"</ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>"
+)
+
 
 @pytest.fixture
 def docling(monkeypatch, tmp_path):
@@ -142,6 +159,176 @@ def test_work_without_pdf_stays_abstract_only_without_docling(monkeypatch):
     )
     assert document.coverage == "abstract_only"
     assert document.metadata["fulltext"]["status"] == "no_pdf_url"
+
+
+def test_missing_openalex_text_uses_matching_pubmed_abstract(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    pmids = []
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(PUBMED_WORK),
+            PUBMED_WORK,
+            fetch=lambda url: pytest.fail("no PDF URL to fetch"),
+            fetch_pubmed=lambda pmid: pmids.append(pmid) or PUBMED_XML,
+        )
+    )
+    assert pmids == ["30617339"]
+    assert document.coverage == "abstract_only"
+    assert len(document.chunks) == 1
+    assert document.chunks[0].kind == "abstract"
+    assert document.chunks[0].text == (
+        "Background: Human and artificial intelligence.\n\n"
+        "Conclusions: They can work together."
+    )
+    assert document.chunks[0].locator["source"] == "pubmed"
+    assert document.chunks[0].locator["doi"] == ("10.1038/s41591-018-0300-7")
+    assert document.metadata["fulltext"]["status"] == "no_pdf_url"
+    provenance = document.metadata["pubmed_abstract"]
+    assert provenance["status"] == "parsed"
+    assert provenance["pmid"] == "30617339"
+    assert (
+        provenance["sha256"] == document.chunks[0].locator["snapshot_sha256"]
+    )
+    assert (tmp_path / "raw" / provenance["sha256"]).read_bytes() == (
+        PUBMED_XML
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        (PUBMED_XML.replace(b"30617339", b"999"), "pmid_mismatch"),
+        (
+            PUBMED_XML.replace(b"10.1038/s41591-018-0300-7", b"10.1000/other"),
+            "doi_mismatch",
+        ),
+        (
+            PUBMED_XML.replace(
+                b'<AbstractText Label="Background">'
+                b"Human and <i>artificial</i> intelligence.</AbstractText>",
+                b"",
+            ).replace(
+                b'<AbstractText Label="Conclusions">'
+                b"They can work together.</AbstractText>",
+                b"",
+            ),
+            "no_abstract",
+        ),
+        (b"<not-xml", "invalid_xml"),
+        (b"<!ENTITY x 'bad'><PubmedArticleSet/>", "invalid_xml"),
+        (b"<html>upstream error</html>", "invalid_response"),
+    ],
+)
+def test_pubmed_abstract_rejects_unusable_records(raw, reason):
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(PUBMED_WORK),
+            PUBMED_WORK,
+            fetch_pubmed=lambda pmid: raw,
+        )
+    )
+    assert document.chunks == []
+    assert document.coverage == "metadata_only"
+    assert document.metadata["pubmed_abstract"]["status"] == reason
+
+
+@pytest.mark.parametrize(
+    ("work", "reason"),
+    [
+        (
+            {**PUBMED_WORK, "ids": {"pmid": "https://evil.example/30617339"}},
+            "missing_pmid",
+        ),
+        ({**PUBMED_WORK, "ids": {}}, "missing_pmid"),
+        ({**PUBMED_WORK, "doi": None}, "missing_doi"),
+    ],
+)
+def test_pubmed_fallback_requires_trusted_pmid_and_doi(work, reason):
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(work),
+            work,
+            fetch_pubmed=lambda pmid: pytest.fail("must not fetch"),
+        )
+    )
+    assert document.chunks == []
+    assert document.metadata["pubmed_abstract"]["status"] == reason
+
+
+def test_pubmed_fetch_failure_is_diagnostic():
+    def unavailable(pmid):
+        raise TimeoutError("temporary source outage")
+
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(PUBMED_WORK),
+            PUBMED_WORK,
+            fetch_pubmed=unavailable,
+        )
+    )
+    assert document.chunks == []
+    assert document.metadata["pubmed_abstract"] == {
+        "status": "fetch_failed",
+        "pmid": "30617339",
+        "doi": "10.1038/s41591-018-0300-7",
+        "error": "TimeoutError",
+    }
+
+
+def test_failed_pdf_candidate_can_fall_back_to_pubmed(monkeypatch, tmp_path):
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setattr(fulltext, "require_pdf_support", lambda: None)
+    work = {
+        **PUBMED_WORK,
+        "best_oa_location": {
+            "is_oa": True,
+            "pdf_url": "https://example.org/unavailable.pdf",
+        },
+    }
+
+    def no_pdf(url):
+        raise ValueError("PDF unavailable")
+
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(work),
+            work,
+            fetch=no_pdf,
+            fetch_pubmed=lambda pmid: PUBMED_XML,
+        )
+    )
+    assert document.metadata["fulltext"]["status"] == "failed"
+    assert document.metadata["pubmed_abstract"]["status"] == "parsed"
+    assert document.coverage == "abstract_only"
+
+
+def test_pubmed_connector_uses_fixed_host_and_bounds_response(monkeypatch):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, content=PUBMED_XML)
+
+    monkeypatch.setattr(connectors, "TRANSPORT", httpx.MockTransport(respond))
+    assert asyncio.run(connectors.fetch_pubmed_xml("30617339")) == PUBMED_XML
+    assert calls[0].url.host == "eutils.ncbi.nlm.nih.gov"
+    assert calls[0].url.params["db"] == "pubmed"
+    assert calls[0].url.params["id"] == "30617339"
+    with pytest.raises(ValueError, match="numeric"):
+        asyncio.run(connectors.fetch_pubmed_xml("30617339&db=other"))
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        connectors,
+        "TRANSPORT",
+        httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"x" * 1_000_001)
+        ),
+    )
+    with pytest.raises(ValueError, match="size limit"):
+        asyncio.run(connectors.fetch_pubmed_xml("30617339"))
 
 
 def test_missing_docling_is_explicit(monkeypatch):

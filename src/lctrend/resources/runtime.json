@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
-  "ner_model": "urchade/gliner_medium-v2.1",
-  "default_extractor": "hybrid",
+  "default_extractor": "llm",
   "raw_directory": "artifacts/raw",
   "ingestion": {"workers": 4},
   "openalex": {"limit": 500, "per_page": 100, "checkpoint": ".openalex-crawl.json"},
