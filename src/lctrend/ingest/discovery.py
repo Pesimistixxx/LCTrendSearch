@@ -15,7 +15,11 @@ from urllib.parse import unquote, urlencode, urlsplit
 
 from ..core.aio import resolve
 from ..core.config import load_catalog
-from .connectors import fetch_json, fetch_openalex_page
+from .connectors import (
+    fetch_json,
+    fetch_openalex_page,
+    normalize_openalex_work_id,
+)
 
 
 def _topic(value: str) -> str:
@@ -117,14 +121,11 @@ def material_identity(
         value = info.get("name") if isinstance(info, Mapping) else None
         return "pypi:" + _package(value or source_id)
     if source == "openalex":
-        value = str(payload.get("id") or source_id).strip()
-        direct_doi = _doi(value)
-        if direct_doi:
-            return f"doi:{direct_doi}"
-        if value.lower().startswith(("http://", "https://")):
-            value = urlsplit(value).path.rstrip("/").rsplit("/", 1)[-1]
-        if not re.fullmatch(r"W\d+", value, re.IGNORECASE):
-            raise ValueError("Invalid OpenAlex work identifier")
+        value = normalize_openalex_work_id(
+            str(payload.get("id") or source_id)
+        )
+        if value.startswith("doi:"):
+            return value
         return "openalex:" + value.casefold()
     if not source or not str(source_id).strip():
         raise ValueError("Material source and identifier are required")
@@ -142,6 +143,8 @@ async def discover_openalex(topic: str, cursor: str | None = "*") -> dict:
             None,
         )
     )
+    if not isinstance(payload, Mapping):
+        raise ValueError("Invalid OpenAlex discovery response")
     records, meta = payload.get("results"), payload.get("meta", {})
     if not isinstance(records, list) or not isinstance(meta, Mapping):
         raise ValueError("Invalid OpenAlex discovery response")
@@ -171,9 +174,15 @@ async def discover_openalex(topic: str, cursor: str | None = "*") -> dict:
                 "payload": dict(record),
             }
         )
+    if items and "next_cursor" not in meta:
+        raise ValueError("OpenAlex response is missing next_cursor")
     next_cursor = meta.get("next_cursor")
-    if next_cursor is not None and not isinstance(next_cursor, str):
+    if next_cursor is not None and (
+        not isinstance(next_cursor, str) or not next_cursor
+    ):
         raise ValueError("Invalid OpenAlex cursor")
+    if items and next_cursor == (cursor or "*"):
+        raise ValueError("Repeated OpenAlex cursor")
     # An empty page terminates accessible paging even if a source supplied a
     # stale next cursor; expose the inconsistency rather than loop forever.
     limitations = []

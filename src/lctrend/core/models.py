@@ -268,6 +268,9 @@ class EconomicEvidence(BaseModel):
     # Numeric reading of amount_text (scale words applied), same currency.
     amount_value: Optional[float] = None
     currency: Optional[str] = None
+    assertion_id: Optional[str] = None
+    unit: Optional[str] = None
+    period: Optional[str] = None
     confidence: Optional[float] = None
     polarity: str = "affirmed"
     modality: str = "reported"

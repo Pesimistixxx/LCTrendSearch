@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Tuple
 
 from ..core.aio import resolve
@@ -228,6 +230,11 @@ class GraphStore:
 
     @staticmethod
     async def _write_document(tx: Any, document: DocumentEnvelope) -> None:
+        # Mutable metadata overwritten on a content-identical version needs
+        # the current observation, never the earliest collection timestamp.
+        observed = (
+            document.retrieved_at or datetime.now(timezone.utc).isoformat()
+        )
         await _run(
             tx,
             """
@@ -253,18 +260,25 @@ class GraphStore:
                 v.metadata_json = $metadata_json,
                 v.created_at = $version_published_at,
                 v.version_published_at = $version_published_at,
+                v.document_published_at = $published_at,
+                v.document_type = $document_type,
+                v.source_family = $source.source_family,
+                v.reliability_tier = $source.reliability_tier,
                 v.retrieved_at = CASE
                     WHEN v.retrieved_at IS NULL
-                        OR $retrieved_at < v.retrieved_at
+                        OR $retrieved_at > v.retrieved_at
                     THEN $retrieved_at ELSE v.retrieved_at END,
                 v.metrics_observed_at = CASE
+                    WHEN $metrics_observed_at IS NULL THEN NULL
                     WHEN v.metrics_observed_at IS NULL
-                        OR $metrics_observed_at < v.metrics_observed_at
+                        OR $metrics_observed_at > v.metrics_observed_at
                     THEN $metrics_observed_at
                     ELSE v.metrics_observed_at END,
                 v.metrics_json = $metrics_json,
                 v.country_codes = $country_codes, v.company_ids = $company_ids,
                 v.university_ids = $university_ids, v.domain_ids = $domain_ids,
+                v.contributor_ids = $contributor_ids,
+                v.organization_ids = $organization_ids,
                 v.independence_group = $source.independence_group
             MERGE (d)-[:HAS_VERSION]->(v)
             MERGE (v)-[:FROM_SOURCE {record_id: $source.record_id}]->(s)
@@ -276,8 +290,10 @@ class GraphStore:
             language=document.language,
             published_at=document.published_at,
             version_published_at=document.version_published_at,
-            retrieved_at=document.retrieved_at,
-            metrics_observed_at=document.metrics_observed_at,
+            retrieved_at=observed,
+            metrics_observed_at=(document.metrics_observed_at or observed)
+            if document.metrics
+            else None,
             country_codes=[item.code for item in document.countries],
             company_ids=[
                 item.organization_id
@@ -290,6 +306,18 @@ class GraphStore:
                 if item.organization_type == "university"
             ],
             domain_ids=[item.domain_id for item in document.domains],
+            # Document-level party edges are replaced on every update; the
+            # version keeps its own parties for point-in-time features.
+            contributor_ids=list(
+                dict.fromkeys(
+                    item.contributor_id for item in document.contributors
+                )
+            ),
+            organization_ids=list(
+                dict.fromkeys(
+                    item.organization_id for item in document.organizations
+                )
+            ),
             external_ids=[
                 identifier.external_id for identifier in document.identifiers
             ],
@@ -772,13 +800,241 @@ class GraphStore:
             ]
         return mentions, documents, tasks
 
+    async def write_crawl_run(self, run: Dict[str, Any]) -> None:
+        """Record the bounds of one crawl: source, query, period, records
+        seen and checkpoint. Feature building separates "the source was
+        searched and has nothing" from "the source was never searched".
+        """
+        async with self._driver.session(database=self._database) as session:
+            await _run(
+                session,
+                """
+                MERGE (s:Source {source_id: $source_id})
+                ON CREATE SET s.source_family = $source_family
+                MERGE (r:CrawlRun {crawl_id: $crawl_id})
+                SET r.source_id = $source_id,
+                    r.source_family = $source_family,
+                    r.query = $query, r.filter = $filter,
+                    r.period_start = $period_start,
+                    r.period_end = $period_end,
+                    r.records_seen = $records_seen,
+                    r.records_ingested = $records_ingested,
+                    r.failures = $failures,
+                    r.checkpoint_json = $checkpoint_json,
+                    r.started_at = $started_at,
+                    r.finished_at = $finished_at,
+                    r.status = $status, r.exhaustive = $exhaustive,
+                    r.technology_ids = $technology_ids,
+                    r.observed_at = $observed_at,
+                    r.retrieved_at = $retrieved_at
+                MERGE (r)-[:SEARCHED]->(s)
+                """,
+                **{
+                    "query": None,
+                    "filter": None,
+                    "period_start": None,
+                    "period_end": None,
+                    "records_seen": 0,
+                    "records_ingested": 0,
+                    "failures": 0,
+                    "checkpoint_json": None,
+                    "finished_at": None,
+                    "status": "running",
+                    "exhaustive": False,
+                    "technology_ids": [],
+                    "observed_at": None,
+                    "retrieved_at": None,
+                    **run,
+                },
+            )
+
+    async def read_temporal_data(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Everything the temporal dataset needs, with its dates.
+
+        Rows are per document version (not per document), per mention day,
+        per dated relation and per assertion, so a snapshot can select only
+        what was published and observed by its date. The current Document
+        node supplies identity only; its mutable parties and metrics cannot
+        reconstruct historical version properties.
+        """
+        versions = """
+            MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
+                  -[:FROM_SOURCE]->(s:Source)
+            OPTIONAL MATCH (v)<-[:PROCESSED]-(run:ProcessingRun)
+            WHERE run.published = true OR run.status = 'succeeded'
+            RETURN d.document_id AS document_id,
+                   coalesce(v.document_type, d.document_type) AS document_type,
+                   coalesce(v.document_published_at, v.version_published_at)
+                       AS document_published_at,
+                   v.document_version_id AS version_id,
+                   v.version_published_at AS version_published_at,
+                   v.retrieved_at AS retrieved_at,
+                   v.metrics_observed_at AS metrics_observed_at,
+                   v.metrics_json AS metrics_json,
+                   v.metadata_json AS metadata_json,
+                   v.coverage AS coverage,
+                   v.quality_status AS quality_status,
+                   coalesce(v.country_codes, []) AS countries,
+                   coalesce(v.company_ids, []) AS companies,
+                   coalesce(v.university_ids, []) AS universities,
+                   coalesce(v.domain_ids, []) AS domains,
+                   coalesce(v.contributor_ids, []) AS contributors,
+                   coalesce(v.organization_ids, []) AS organizations,
+                   s.source_id AS source_id,
+                   v.source_family AS source_family,
+                   v.independence_group AS independence_group,
+                   v.reliability_tier AS reliability_tier,
+                   count(run) > 0 AS extracted,
+                   min(run.started_at) AS extracted_at
+        """
+        mentions = """
+            MATCH (t:Technology)<-[m:MENTIONS]-(c:Chunk)
+                  <-[:HAS_CHUNK]-(v:DocumentVersion)
+            OPTIONAL MATCH (run:ProcessingRun {run_id: m.run_id})
+            RETURN t.concept_id AS technology_id,
+                   v.document_version_id AS version_id,
+                   substring(coalesce(m.observed_at, ''), 0, 10)
+                       AS observed_at,
+                   coalesce(m.recorded_at, run.started_at) AS recorded_at,
+                   count(m) AS mentions,
+                   sum(coalesce(m.confidence, 0.0)) AS confidence_sum,
+                   count(m.confidence) AS confidence_count,
+                   sum(CASE WHEN m.resolution_status = 'accepted'
+                       THEN 1 ELSE 0 END) AS accepted,
+                   sum(CASE WHEN m.resolution_status = 'provisional'
+                       THEN 1 ELSE 0 END) AS provisional,
+                   sum(CASE WHEN m.method = $semantic
+                       THEN 1 ELSE 0 END) AS ambiguous,
+                   collect(DISTINCT c.content_hash) AS content_hashes
+        """
+        technologies = """
+            MATCH (t:Technology)
+            WHERE t.concept_id IS NOT NULL
+            RETURN t.concept_id AS technology_id,
+                   t.preferred_label AS technology,
+                   t.first_seen_at AS first_seen_at,
+                   t.status AS status, t.embedding AS embedding,
+                   t.embedding_observed_at AS embedding_observed_at
+        """
+        relations = """
+            MATCH (t:Technology)-[r:SOLVES|DEVELOPED_BY|USED_BY|FUNDED_BY
+                                 |DEVELOPED_IN|SUBTECHNOLOGY_OF]->(x)
+            OPTIONAL MATCH (run:ProcessingRun {run_id: r.run_id})
+            RETURN t.concept_id AS technology_id, type(r) AS relation,
+                   coalesce(x.concept_id, x.organization_id, x.domain_id)
+                       AS target_id,
+                   x.kind AS target_kind,
+                   labels(x) AS target_labels,
+                   r.document_version_id AS version_id,
+                   r.observed_at AS observed_at,
+                   coalesce(r.recorded_at, run.started_at) AS recorded_at
+        """
+        maturity = """
+            MATCH (t:Technology)-[r:HAS_MATURITY_EVIDENCE]->(c:Chunk)
+            OPTIONAL MATCH (run:ProcessingRun {run_id: r.run_id})
+                  -[:PROCESSED]->(v:DocumentVersion)
+            RETURN t.concept_id AS technology_id, r.stage AS stage,
+                   r.stage_rank AS stage_rank, r.trl AS trl,
+                   r.observed_at AS observed_at,
+                   coalesce(r.recorded_at, run.started_at) AS recorded_at,
+                   head(collect(v.document_version_id)) AS version_id
+        """
+        economics = """
+            MATCH (t:Technology)-[r:HAS_ECONOMIC_EVIDENCE]->(c:Chunk)
+            OPTIONAL MATCH (run:ProcessingRun {run_id: r.run_id})
+                  -[:PROCESSED]->(v:DocumentVersion)
+                  -[:FROM_SOURCE]->(s:Source)
+            RETURN t.concept_id AS technology_id,
+                   r.evidence_id AS evidence_id, r.category AS category,
+                   r.amount_value AS amount_value, r.currency AS currency,
+                   r.amount_text AS amount_text, r.unit AS unit,
+                   r.period AS period, r.assertion_id AS assertion_id,
+                   r.confidence AS confidence, r.status AS status,
+                   r.polarity AS polarity, r.modality AS modality,
+                   r.observed_at AS observed_at,
+                   coalesce(r.recorded_at, run.started_at) AS recorded_at,
+                   head(collect(v.document_version_id)) AS version_id,
+                   max(v.reliability_tier) AS reliability_tier
+        """
+        assertions = """
+            MATCH (v:DocumentVersion)-[:HAS_ASSERTION]->(a:Assertion)
+                  -[:SUBJECT]->(t:Technology)
+            OPTIONAL MATCH (a)-[:IN_CLAIM_GROUP]->(g:ClaimGroup)
+            OPTIONAL MATCH (a)-[:FROM_EVIDENCE_FAMILY]->(f:EvidenceFamily)
+            OPTIONAL MATCH (run:ProcessingRun)-[:CREATED]->(a)
+            WITH v, a, t, g, f, max(run.started_at) AS run_recorded_at
+            RETURN t.concept_id AS technology_id,
+                   a.assertion_id AS assertion_id, a.predicate AS predicate,
+                   a.status AS status,
+                   a.verification_status AS verification_status,
+                   a.polarity AS polarity, a.modality AS modality,
+                   a.evidence_kind AS evidence_kind,
+                   a.extraction_confidence AS confidence,
+                   a.observed_at AS observed_at,
+                   coalesce(a.recorded_at, run_recorded_at) AS recorded_at,
+                   v.document_version_id AS version_id,
+                   g.claim_group_id AS claim_group_id,
+                   f.family_id AS evidence_family_id
+        """
+        crawls = """
+            MATCH (r:CrawlRun)
+            RETURN r.crawl_id AS crawl_id, r.source_id AS source_id,
+                   r.source_family AS source_family, r.query AS query,
+                   r.period_start AS period_start,
+                   r.period_end AS period_end,
+                   r.records_seen AS records_seen,
+                   r.started_at AS started_at, r.finished_at AS finished_at,
+                   r.observed_at AS observed_at,
+                   r.retrieved_at AS retrieved_at,
+                   r.status AS status, r.failures AS failures,
+                   r.exhaustive AS exhaustive,
+                   r.technology_ids AS technology_ids
+        """
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        async with self._driver.session(database=self._database) as session:
+            labels = {
+                row["label"]
+                for row in await _records(
+                    session, "CALL db.labels() YIELD label RETURN label"
+                )
+            }
+            for name, query, needed in (
+                ("versions", versions, "DocumentVersion"),
+                ("mentions", mentions, "Technology"),
+                ("technologies", technologies, "Technology"),
+                ("relations", relations, "Technology"),
+                ("maturity", maturity, "Technology"),
+                ("economics", economics, "Technology"),
+                ("assertions", assertions, "Assertion"),
+                ("crawls", crawls, "CrawlRun"),
+            ):
+                result[name] = (
+                    [
+                        _data(record)
+                        for record in await _records(
+                            session,
+                            query,
+                            semantic=SEMANTIC_CANDIDATE_METHOD,
+                        )
+                    ]
+                    if needed in labels
+                    else []
+                )
+        logger.info(
+            "Temporal data: %s",
+            ", ".join(f"{name}={len(rows)}" for name, rows in result.items()),
+        )
+        return result
+
     async def read_signal_data(self) -> List[Dict[str, Any]]:
         """Dated per-technology signals projected from reviewed text claims:
         organizations, countries, taxonomy parents, maturity and economics.
         """
         query = """
             MATCH (t:Technology)-[r:DEVELOPED_BY|USED_BY|FUNDED_BY
-                                 |DEVELOPED_IN|SUBTECHNOLOGY_OF]->(x)
+                                 |DEVELOPED_IN|MANUFACTURED_IN|TESTED_IN
+                                 |DEPLOYED_IN|BELONGS_TO_DOMAIN|TARGETS_MARKET
+                                 |SUBTECHNOLOGY_OF]->(x)
             RETURN t.concept_id AS technology_id, type(r) AS signal,
                    x.concept_id AS target_id, null AS value,
                    r.observed_at AS observed_at
@@ -789,7 +1045,8 @@ class GraphStore:
                    r.observed_at AS observed_at
             UNION ALL
             MATCH (t:Technology)-[r:HAS_ECONOMIC_EVIDENCE]->(:Chunk)
-            WHERE r.polarity = 'affirmed'
+            WHERE r.status = 'accepted' AND r.polarity = 'affirmed'
+              AND r.modality IN ['reported', 'observed']
             RETURN t.concept_id AS technology_id, 'ECONOMIC' AS signal,
                    r.category AS target_id, r.amount_value AS value,
                    r.observed_at AS observed_at
@@ -797,8 +1054,91 @@ class GraphStore:
         async with self._driver.session(database=self._database) as session:
             return [_data(record) for record in await _records(session, query)]
 
+    async def read_related_chunks(
+        self,
+        query: str,
+        exclude_version_id: str,
+        limit_documents: int,
+        limit_chunks: int,
+        max_chars: int,
+    ) -> List[Dict[str, Any]]:
+        """Literal retrieval of whole original chunks from published successes.
+
+        Related sources are context, not evidence for the current document.
+        Oversized chunks are skipped rather than truncated or summarized.
+        """
+        query = str(query).strip().casefold()
+        if not query or len(query) > 1000:
+            return []
+        limit_documents = min(20, max(0, int(limit_documents)))
+        limit_chunks = min(100, max(0, int(limit_chunks)))
+        max_chars = min(200000, max(0, int(max_chars)))
+        if not limit_documents or not limit_chunks or not max_chars:
+            return []
+        statement = """
+            MATCH (run:ProcessingRun)-[:PROCESSED]->(v:DocumentVersion)
+                  <-[:HAS_VERSION]-(d:Document)
+            MATCH (v)-[:HAS_CHUNK]->(c:Chunk)
+            WHERE run.status = 'succeeded'
+              AND (run.published = true OR run.published IS NULL)
+              AND run.parser <> 'metadata'
+              AND v.document_version_id <> $exclude_version_id
+              AND c.parse_status = 'accepted'
+              AND (toLower(c.text) CONTAINS $search_text
+                   OR toLower(d.title) CONTAINS $search_text)
+            RETURN DISTINCT c.chunk_id AS chunk_id, c.text AS text,
+                   c.kind AS kind, c.locator_json AS locator_json,
+                   d.document_id AS document_id, d.title AS title,
+                   v.document_version_id AS document_version_id,
+                   c.order AS chunk_order
+            ORDER BY document_id, document_version_id, chunk_order, chunk_id
+            LIMIT $candidate_limit
+        """
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(
+                session,
+                statement,
+                search_text=query,
+                exclude_version_id=exclude_version_id,
+                candidate_limit=min(2000, limit_documents * limit_chunks * 4),
+            )
+        output, documents, seen = [], set(), set()
+        used = 0
+        for record in records:
+            row = _data(record)
+            text = row.get("text")
+            identity = (row.get("document_version_id"), row.get("chunk_id"))
+            document_id = row.get("document_id")
+            if (
+                not isinstance(text, str)
+                or not text
+                or identity in seen
+                or identity[0] == exclude_version_id
+                or not document_id
+                or used + len(text) > max_chars
+                or (
+                    document_id not in documents
+                    and len(documents) >= limit_documents
+                )
+            ):
+                continue
+            seen.add(identity)
+            documents.add(document_id)
+            used += len(text)
+            locator = row.pop("locator_json", None)
+            if locator:
+                try:
+                    row["locator"] = json.loads(locator)
+                except (TypeError, ValueError):
+                    pass
+            row.pop("chunk_order", None)
+            output.append(row)
+            if len(output) >= limit_chunks:
+                break
+        return output
+
     async def read_taxonomy_input(
-        self, kinds: List[str]
+        self, kinds: List[str], snapshot: str | None = None
     ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
         """Embedded concepts with their document dates, and reviewed
         (child, parent) SUBTECHNOLOGY_OF pairs.
@@ -806,15 +1146,24 @@ class GraphStore:
         concepts = """
             MATCH (c:__LABEL__)
             WHERE c.embedding IS NOT NULL AND c.concept_id IS NOT NULL
-            OPTIONAL MATCH (c)<-[:MENTIONS]-(:Chunk)<-[:HAS_CHUNK]-
-                  (:DocumentVersion)<-[:HAS_VERSION]-(d:Document)
+            OPTIONAL MATCH (c)<-[:MENTIONS]-(chunk:Chunk)<-[:HAS_CHUNK]-
+                  (v:DocumentVersion)<-[:HAS_VERSION]-(d:Document)
+            WITH c, collect(DISTINCT CASE WHEN d.document_id IS NOT NULL
+                THEN {document_id: d.document_id,
+                      date: coalesce(chunk.created_at, v.version_published_at,
+                                     d.created_at)} END) AS document_evidence
             RETURN c.concept_id AS concept_id, c.preferred_label AS label,
                    c.kind AS kind, c.embedding AS embedding,
-                   c.first_seen_at AS first_seen_at,
-                   collect(DISTINCT d.created_at) AS document_dates
+                   c.embedding_model AS embedding_model,
+                   c.embedding_observed_at AS embedding_observed_at,
+                   size(c.embedding) AS embedding_dimensions,
+                   c.first_seen_at AS first_seen_at, document_evidence,
+                   [item IN document_evidence | item.date] AS document_dates
         """
         parents = """
-            MATCH (child)-[:SUBTECHNOLOGY_OF]->(parent)
+            MATCH (child)-[r:SUBTECHNOLOGY_OF]->(parent)
+            WHERE $snapshot IS NULL OR (r.observed_at IS NOT NULL
+                AND substring(toString(r.observed_at), 0, 10) <= $snapshot)
             RETURN DISTINCT child.concept_id AS child,
                    parent.concept_id AS parent
         """
@@ -828,7 +1177,14 @@ class GraphStore:
                 )
             pairs = [
                 (item["child"], item["parent"])
-                for item in map(_data, await _records(session, parents))
+                for item in map(
+                    _data,
+                    await _records(
+                        session,
+                        parents,
+                        snapshot=snapshot[:10] if snapshot else None,
+                    ),
+                )
             ]
         return rows, pairs
 
@@ -937,6 +1293,68 @@ class GraphStore:
             and assertion.polarity == "affirmed"
             and assertion.modality in ("reported", "observed")
         )
+
+    @staticmethod
+    def _domain_identity_links(
+        document: DocumentEnvelope, result: ExtractionResult
+    ) -> List[Dict[str, Any]]:
+        """Exact labels and unique curated aliases bridge existing domains.
+
+        Case and whitespace normalization is safe here; stemming, punctuation
+        removal and embedding proximity are deliberately not identity proof.
+        Duplicate metadata labels and shared curated aliases remain separate.
+        """
+
+        def canonical(value: str) -> str:
+            return " ".join(
+                unicodedata.normalize("NFKC", value).casefold().split()
+            )
+
+        domains: Dict[str, set] = {}
+        for domain in document.domains:
+            domains.setdefault(canonical(domain.name), set()).add(
+                domain.domain_id
+            )
+        curated: Dict[str, set] = {}
+        for entry in load_catalog("sources").get("domains", []):
+            name = canonical(entry["name"])
+            for label in [entry["name"], *entry.get("aliases", [])]:
+                curated.setdefault(canonical(label), set()).add(name)
+        reviewed: Dict[str, List[str]] = {}
+        for assertion in result.assertions:
+            if GraphStore._reviewed(assertion):
+                for concept_id in assertion.roles.values():
+                    reviewed.setdefault(concept_id, []).append(
+                        assertion.assertion_id
+                    )
+        links = []
+        for concept in result.concepts:
+            label = canonical(concept.preferred_label)
+            direct_matches = domains.get(label, set())
+            matches = set(direct_matches)
+            canonical_names = curated.get(label, set())
+            if len(canonical_names) == 1:
+                matches.update(domains.get(next(iter(canonical_names)), set()))
+            if (
+                concept.kind == ConceptKind.DOMAIN
+                and (
+                    concept.status == "accepted"
+                    or concept.concept_id in reviewed
+                )
+                and len(matches) == 1
+            ):
+                links.append(
+                    {
+                        "concept_id": concept.concept_id,
+                        "domain_id": next(iter(matches)),
+                        "assertion_ids": sorted(
+                            set(reviewed.get(concept.concept_id, []))
+                        ),
+                    }
+                )
+                if not direct_matches:
+                    links[-1]["method"] = "exact_curated_alias"
+        return links
 
     @staticmethod
     def _projection_links(
@@ -1174,6 +1592,27 @@ class GraphStore:
                     code=concept.preferred_label,
                 )
 
+        for link in GraphStore._domain_identity_links(document, result):
+            await _run(
+                tx,
+                """
+                MATCH (c:Domain {concept_id: $concept_id})
+                MATCH (x:Domain {domain_id: $domain_id})
+                MERGE (c)-[r:SAME_AS {document_version_id: $version_id}]->(x)
+                SET r.status = 'accepted', r.method = $method,
+                    r.assertion_ids = $assertion_ids,
+                    r.observed_at = $observed_at
+                """,
+                version_id=document.document_version_id,
+                observed_at=_version_date(document),
+                method=link.get("method", "exact_canonical_label"),
+                **{
+                    key: value
+                    for key, value in link.items()
+                    if key != "method"
+                },
+            )
+
         embedded: Dict[str, List[Dict[str, Any]]] = {}
         for concept_id, vector in result.concept_embeddings.items():
             if concept_id in labels:
@@ -1188,10 +1627,12 @@ class GraphStore:
                     UNWIND $rows AS row
                     MATCH (c:{label} {{concept_id: row.concept_id}})
                     SET c.embedding = row.vector,
-                        c.embedding_model = $model
+                        c.embedding_model = $model,
+                        c.embedding_observed_at = $recorded_at
                     """,
                     rows=batch,
                     model=result.embedding_model,
+                    recorded_at=run.started_at,
                 )
 
         # A semantic match is a review candidate, never an identity.
@@ -1311,10 +1752,12 @@ class GraphStore:
                         r.resolution_status = row.resolution_status,
                         r.method = row.method, r.score = row.score,
                         r.basis = row.basis, r.run_id = $run_id,
-                        r.observed_at = row.observed_at
+                        r.observed_at = row.observed_at,
+                        r.recorded_at = $recorded_at
                     """,
                     rows=batch,
                     run_id=run.run_id,
+                    recorded_at=run.started_at,
                 )
 
         for link in GraphStore._projection_links(document, result):
@@ -1331,7 +1774,8 @@ class GraphStore:
                     r.start = $start, r.end = $end,
                     r.assertion_id = $assertion_id,
                     r.method = 'reviewed_assertion', r.run_id = $run_id,
-                    r.observed_at = $observed_at
+                    r.observed_at = $observed_at,
+                    r.recorded_at = $recorded_at
                 """,
                 source=link["source"],
                 target=link["target"],
@@ -1342,6 +1786,7 @@ class GraphStore:
                 assertion_id=link["assertion_id"],
                 version_id=document.document_version_id,
                 run_id=run.run_id,
+                recorded_at=run.started_at,
                 observed_at=_chunk_date(document, link["chunk_id"]),
             )
 
@@ -1356,7 +1801,8 @@ class GraphStore:
                       {{assertion_id: $assertion_id, start: $start}}]->(chunk)
                 SET r.stage = $stage, r.stage_rank = $stage_rank,
                     r.trl = $trl, r.quote = $quote, r.end = $end,
-                    r.run_id = $run_id, r.observed_at = $observed_at
+                    r.run_id = $run_id, r.observed_at = $observed_at,
+                    r.recorded_at = $recorded_at
                 """,
                 subject=row["subject"],
                 chunk_id=row["chunk_id"],
@@ -1368,6 +1814,7 @@ class GraphStore:
                 stage_rank=row["stage_rank"],
                 trl=row["trl"],
                 run_id=run.run_id,
+                recorded_at=run.started_at,
                 observed_at=_chunk_date(document, row["chunk_id"]),
             )
 
@@ -1384,12 +1831,16 @@ class GraphStore:
                     r.start = $start, r.end = $end,
                     r.amount_text = $amount_text,
                     r.amount_value = $amount_value, r.currency = $currency,
+                    r.unit = $unit, r.period = $period,
+                    r.assertion_id = $assertion_id,
                     r.confidence = $confidence, r.status = $status,
                     r.run_id = $run_id,
                     r.polarity = $polarity, r.modality = $modality,
-                    r.observed_at = $observed_at
+                    r.observed_at = $observed_at,
+                    r.recorded_at = $recorded_at
                 """,
                 run_id=run.run_id,
+                recorded_at=run.started_at,
                 observed_at=_chunk_date(document, evidence.chunk_id),
                 **evidence.model_dump(),
             )
@@ -1410,7 +1861,8 @@ class GraphStore:
                     a.extraction_confidence = $extraction_confidence,
                     a.verification_status = $verification_status,
                     a.status = $status,
-                    a.observed_at = $observed_at
+                    a.observed_at = $observed_at,
+                    a.recorded_at = $recorded_at
                 MERGE (v)-[:HAS_ASSERTION]->(a)
                 MERGE (r)-[creation:CREATED]->(a)
                 SET creation.status = $status,
@@ -1418,6 +1870,7 @@ class GraphStore:
                 """,
                 version_id=document.document_version_id,
                 run_id=run.run_id,
+                recorded_at=run.started_at,
                 observed_at=_chunk_date(
                     document, assertion.evidence[0].chunk_id
                 )

@@ -10,6 +10,8 @@ React + Vite, два экрана в одном приложении:
 Из корня `LCTrendSearch`:
 
 ```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# Заполните OPENALEX_API_KEY и NEO4J_* перед запуском.
 docker compose up -d --build --remove-orphans --wait
 ```
 
@@ -17,7 +19,9 @@ docker compose up -d --build --remove-orphans --wait
 Экран встроен в основной React-интерфейс и доступен из его навигации.
 Ввести тему и нажать «Собирать». Compose запускает фронтенд, API и
 PostgreSQL; Neo4j подключается по внешнему адресу `NEO4J_URI` из `.env`.
-Исходные ключи также задаются в `.env`. В Docker настройки LLM, сохранённые
+Получите бесплатный ключ на [странице настроек OpenAlex](https://openalex.org/settings/api) и задайте `OPENALEX_API_KEY` в `.env` либо сохраните его через «Настройки источников». `OPENALEX_MAILTO` — необязательный контактный email. Для первого запуска задайте тему `edge computing` и лимит 10. Пустой лимит запускает полный обход доступной выдачи. Для быстрой загрузки аннотаций без PDF и моделей используйте [команды quick start](../README.md#быстрый-старт-openalex).
+
+Исходные ключи также задаются в `.env`. В Docker настройки LLM и источников, сохранённые
 через форму, лежат в `artifacts/ingestion/settings.env` и переживают
 перезапуск. При запуске Python вне Docker форма сохраняет их в `.env`.
 Пустая тема запускает обход всех настроенных направлений из
@@ -35,6 +39,8 @@ GLiNER и обработчик PDF могут загружать модели.
 | Пустая тема | Обойти направления из `crawl_directions` в `sources.json` (сейчас: Artificial intelligence, Robotics, Edge computing, Fintech); не весь интернет и не весь OpenAlex |
 | «Лимит на направление и источник» | Не более N статей OpenAlex и N репозиториев GitHub на каждое направление, общий бюджет для всех алиасов направления. Уже обработанные ранее материалы входят в лимит, но LLM повторно не вызывается. PyPI-пакеты из README в лимит не входят. Пустое поле — вся выдача |
 | «Настройки LLM» | Выбрать провайдера и сохранить параметры в `.env` локально или в `settings.env` внутри Docker |
+| «Настройки источников» | Сохранить API key OpenAlex и необязательный контактный email. Пустое поле ключа сохраняет прежний ключ |
+| Статус OpenAlex | Показывает наличие ключа, без раскрытия значения; доступность API и лимиты выясняются при запросе |
 | Провайдер | `gigachat` использует ключ авторизации GigaChat; `openai_compatible` — совместимый API `/chat/completions` |
 | Модель | Общее стартовое имя для извлечения и проверки; у GigaChat пустое имя использует настроенную лестницу |
 | «Адрес API» | Обязательный в форме корень API с версией, например `https://api.giga.chat/v1`, без `/chat/completions` |
@@ -47,6 +53,20 @@ GLiNER и обработчик PDF могут загружать модели.
 | «Что получено» у документа | Покрытие (карточка / аннотация / полный текст), статус PDF и причины неудач, число фрагментов и символов, сколько фрагментов прочитала LLM, сам текст фрагментов |
 
 Все переменные окружения и параметры CLI подробно разобраны в [основном README](../README.md#что-означает-каждая-настройка-env). Статус «LLM настроена» означает корректную локальную конфигурацию; доступность модели и остаток токенов выясняются при обращении к провайдеру.
+
+Настройки источника доступны через `POST /api/ingest/sources/settings` с JSON `{"openalex_api_key":"YOUR_KEY","openalex_mailto":"you@example.org"}`. `null` или пустая строка ключа сохраняет прежнее значение. `GET /api/ingest/status` возвращает `sources.openalex` с полями `configured`, `has_key`, `mailto`, `message`; ключ не возвращается и не передаётся в сборку React. Compose читает настройки из backend `.env` и `LCTREND_SETTINGS_FILE`; не задавайте секрет в `VITE_*`.
+
+### Быстрая загрузка OpenAlex через HTTP API
+
+Для сохранения аннотаций без PDF и извлечения создайте отдельное задание. Neo4j должна быть настроена; LLM, GLiNER и Docling для этого режима не нужны:
+
+```powershell
+$body = @{query="edge computing"; limit=10; mode="none"; fulltext=$false; filter="has_abstract:true,type:article"} | ConvertTo-Json
+$job = Invoke-RestMethod -Method Post -Uri http://localhost:5188/api/ingest/jobs -ContentType "application/json" -Body $body
+Invoke-RestMethod "http://localhost:5188/api/ingest/jobs/$($job.job_id)"
+```
+
+`mode=none` отключает извлечение, `fulltext=false` — загрузку PDF. Проверьте статус и список документов задания: ответ 202 означает только постановку в очередь. Такие задания доступны через `/api/ingest/jobs`; тематическая форма «Собирать» по-прежнему использует PDF и режим `hybrid`.
 
 ## Как передать одну статью, а не тему
 
@@ -107,7 +127,7 @@ flowchart LR
     N --> P[Отметить обработанным в реестре]
 ```
 
-Документы идут последовательно. CLI (`python -m lctrend`) и веб вызывают
+Документы обрабатываются параллельно в пределах `LCTREND_WORKERS`. CLI (`python -m lctrend`) и веб вызывают
 один `process_material` из `src/lctrend/extraction/processing.py`.
 Режимы API: `hybrid` (по умолчанию), `llm`, `gliner`, `none`.
 В `hybrid` используется штатный `llm.pipeline.process_document`:

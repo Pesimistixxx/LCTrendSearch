@@ -17,6 +17,7 @@ services:
   backend:
     build:
       context: .
+    # Includes OPENALEX_API_KEY and OPENALEX_MAILTO for server-side requests.
     env_file: .env
     environment:
       POSTGRES_HOST: postgres

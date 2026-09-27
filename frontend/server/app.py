@@ -23,6 +23,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -60,6 +61,27 @@ class ModelSettings(BaseModel):
     api_key: Optional[str] = Field(default=None, max_length=20000)
 
 
+class SourceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    openalex_api_key: Optional[str] = Field(default=None, max_length=20000)
+    openalex_mailto: str = Field(default="", max_length=320)
+
+    @field_validator("openalex_api_key")
+    @classmethod
+    def clean_key(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and any(char in value for char in "\r\n\0"):
+            raise ValueError("Ключ должен быть одной строкой")
+        return value.strip() if value is not None else None
+
+    @field_validator("openalex_mailto")
+    @classmethod
+    def clean_mailto(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValueError("Укажите email для OpenAlex")
+        return value
+
+
 class CrawlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     topic: str = Field(default="", max_length=1000)
@@ -78,6 +100,22 @@ def _installed(name: str) -> bool:
         return importlib.util.find_spec(name) is not None
     except (ValueError, ImportError):
         return False
+
+
+def _source_status() -> dict:
+    has_key = bool(os.getenv("OPENALEX_API_KEY", "").strip())
+    return {
+        "openalex": {
+            "configured": has_key,
+            "has_key": has_key,
+            "mailto": os.getenv("OPENALEX_MAILTO", ""),
+            "message": (
+                "Ключ настроен; доступ к OpenAlex проверяется при сборе"
+                if has_key
+                else "Без ключа — ограниченный доступ; ключ увеличивает лимит"
+            ),
+        },
+    }
 
 
 def _status() -> dict:
@@ -149,6 +187,7 @@ def _status() -> dict:
             "model": load_catalog("runtime")["ner_model"],
         },
         "pdf": {"installed": _installed("docling")},
+        "sources": _source_status(),
         "defaults": {
             "mode": "hybrid",
             "workers": default_workers(),
@@ -188,6 +227,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app):
         load_environment()
+        from lctrend.core.catalog_validation import validate_catalogs
+        validate_catalogs()
         if app.state.manager is None:
             from .jobs import JobManager
 
@@ -210,6 +251,22 @@ def create_app(
     app.state.manager = manager
     app.state.crawls = crawl_manager
     readiness = status_reader or _status
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path in (
+            "/api/ingest/settings",
+            "/api/ingest/sources/settings",
+        ):
+            # Pydantic's default errors echo invalid input and passwords.
+            return JSONResponse(
+                {"detail": "Проверьте параметры настроек"}, status_code=422
+            )
+        from fastapi.exception_handlers import (
+            request_validation_exception_handler,
+        )
+
+        return await request_validation_exception_handler(request, exc)
 
     @app.middleware("http")
     async def local_mutations(request: Request, call_next):
@@ -261,6 +318,53 @@ def create_app(
         except ValueError as exc:
             logger.warning("Rejected ingestion request: %s", exc)
             raise HTTPException(400, "Проверьте параметры загрузки") from None
+
+    def require_idle(message: str):
+        processing_jobs = any(
+            j["status"] in ("queued", "running", "cancelling")
+            for j in get_manager().list_jobs()
+        )
+        processing_crawls = app.state.crawls is not None and any(
+            c["status"] in ("queued", "running", "pausing")
+            for c in app.state.crawls.list_crawls()
+        )
+        if processing_jobs or processing_crawls:
+            raise HTTPException(409, message)
+
+    def save_environment(values: dict, validate=None):
+        from dotenv import set_key
+
+        before = {key: os.environ.get(key) for key in values}
+        temporary = None
+        try:
+            os.environ.update(values)
+            if validate is not None:
+                validate()
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            with NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=env_path.parent,
+                prefix=".env-",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                if env_path.exists():
+                    handle.write(env_path.read_text(encoding="utf-8-sig"))
+            for key, value in values.items():
+                set_key(str(temporary), key, value, quote_mode="always")
+            temporary.replace(env_path)
+        except Exception:
+            for key, old in before.items():
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
+            raise
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
 
     @app.get("/api/health")
     def health():
@@ -442,23 +546,12 @@ def create_app(
 
     @app.post("/api/ingest/settings")
     def model_settings(body: ModelSettings):
-        from dotenv import set_key
-
         from lctrend.llm.client import JsonLLM, LLMError
 
         with settings_lock:
-            processing_jobs = any(
-                j["status"] in ("queued", "running", "cancelling")
-                for j in get_manager().list_jobs()
+            require_idle(
+                "Дождитесь завершения обработки перед сменой модели"
             )
-            processing_crawls = app.state.crawls is not None and any(
-                c["status"] in ("queued", "running", "pausing")
-                for c in app.state.crawls.list_crawls()
-            )
-            if processing_jobs or processing_crawls:
-                raise HTTPException(
-                    409, "Дождитесь завершения обработки перед сменой модели"
-                )
             values = {
                 "LLM_PROVIDER": body.provider,
                 "LLM_MODEL": body.model.strip(),
@@ -474,33 +567,10 @@ def create_app(
                     if body.provider == "gigachat"
                     else "LLM_API_KEY"
                 ] = body.api_key.strip()
-            before = {key: os.environ.get(key) for key in values}
-            temporary = None
             try:
-                os.environ.update(values)
                 # Configuration check, no request/payment.
-                JsonLLM.from_environment()
-                env_path.parent.mkdir(parents=True, exist_ok=True)
-                with NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=env_path.parent,
-                    prefix=".env-",
-                    suffix=".tmp",
-                    delete=False,
-                ) as handle:
-                    temporary = Path(handle.name)
-                    if env_path.exists():
-                        handle.write(env_path.read_text(encoding="utf-8-sig"))
-                for key, value in values.items():
-                    set_key(str(temporary), key, value, quote_mode="always")
-                temporary.replace(env_path)
+                save_environment(values, JsonLLM.from_environment)
             except Exception as exc:
-                for key, old in before.items():
-                    if old is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = old
                 if isinstance(exc, LLMError):
                     # LLMError carries only a code and a safe message.
                     logger.warning("Model settings rejected: %s", exc)
@@ -511,9 +581,6 @@ def create_app(
                 raise HTTPException(
                     500, "Не удалось сохранить настройки проекта"
                 ) from None
-            finally:
-                if temporary:
-                    temporary.unlink(missing_ok=True)
             logger.info(
                 "Model settings saved: provider=%s model=%s key_updated=%s",
                 body.provider,
@@ -521,6 +588,28 @@ def create_app(
                 body.api_key is not None and bool(body.api_key.strip()),
             )
         return readiness()
+
+    @app.post("/api/ingest/sources/settings")
+    def source_settings(body: SourceSettings):
+        with settings_lock:
+            require_idle(
+                "Дождитесь завершения обработки перед сменой источников"
+            )
+            values = {"OPENALEX_MAILTO": body.openalex_mailto}
+            if body.openalex_api_key:
+                values["OPENALEX_API_KEY"] = body.openalex_api_key
+            try:
+                save_environment(values)
+            except Exception:
+                logger.error("Cannot save source settings")
+                raise HTTPException(
+                    500, "Не удалось сохранить настройки источников"
+                ) from None
+            logger.info(
+                "OpenAlex settings saved: key_updated=%s",
+                bool(body.openalex_api_key),
+            )
+        return {**readiness(), "sources": _source_status()}
 
     if (frontend / "assets").is_dir():
         app.mount(

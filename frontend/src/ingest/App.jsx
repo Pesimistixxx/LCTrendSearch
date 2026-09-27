@@ -72,6 +72,7 @@ export default function Ingestion() {
     <p className="eyebrow">Источники и проверка загрузки</p>
     <h1>Сбор материалов</h1>
     <p className="status">База: {service ? service.neo4j?.available ? 'подключена' : 'недоступна' : 'проверяем'} · LLM: {service?.llm?.configured ? 'настроена' : 'нужна настройка'} · GLiNER: {service?.gliner?.installed ? 'установлен' : 'не установлен'}</p>
+    <p className="status">OpenAlex: {service?.sources?.openalex?.configured ? 'ключ настроен' : 'без ключа — ограниченный доступ'}</p>
     <form onSubmit={upload}>
       <label>Тематика<input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Пусто — все настроенные направления" maxLength={1000} /></label>
       <label>Лимит на направление и источник<input type="number" min="1" max="10000" value={limit} onChange={event => setLimit(event.target.value)} placeholder="Пусто — вся выдача" /></label>
@@ -81,6 +82,7 @@ export default function Ingestion() {
       <button type="submit" disabled={busy || !ready || active || (limit !== '' && !(Number(limit) >= 1 && Number(limit) <= 10000 && Number.isInteger(Number(limit))))}>{busy ? 'Подождите…' : 'Собирать'}</button>
       {!ready && service && <p className="hint">Перед загрузкой нужно подключить базу и настроить модели.{!service.pdf?.installed && ' Для получения PDF требуется модуль Docling.'}</p>}
     </form>
+    <SourceSettings service={service} active={active} onSave={status => { setService(status); setRefresh(value => value + 1) }} />
     <Settings service={service} active={active} onSave={status => { setService(status); setRefresh(value => value + 1) }} />
     {error && <p className="error" role="alert">{error}</p>}
     {crawls.length > 1 && <label className="history">Запуск<select value={crawlId} onChange={event => setCrawlId(event.target.value)}>{crawls.map(item => <option key={item.crawl_id} value={item.crawl_id}>{item.topic || 'Все настроенные направления'} · {new Date(item.created_at).toLocaleString('ru-RU')} · {label(item.status)}</option>)}</select></label>}
@@ -99,6 +101,29 @@ export default function Ingestion() {
       <Materials crawlId={crawlId} status="failed" title="Ошибки обработки" refresh={crawl.updated_at || JSON.stringify(counts)} action={!active && counts.failed > 0 && ready ? <button className="secondary" disabled={busy} onClick={() => control('retry')}>Повторить ошибки</button> : null} />
     </section> : <p className="hint">Загрузок пока нет.</p>}
   </section>
+}
+
+function SourceSettings({ service, active, onSave }) {
+  const [opened, setOpened] = useState(false), [key, setKey] = useState(''), [mailto, setMailto] = useState('')
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [initialized, setInitialized] = useState(false)
+  useEffect(() => {
+    if (!service?.sources?.openalex || initialized) return
+    setMailto(service.sources.openalex.mailto || ''); setInitialized(true)
+  }, [service, initialized])
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setError('')
+    try { onSave(await api.sourceSettings({ openalex_api_key: key.trim() || null, openalex_mailto: mailto.trim() })); setKey('') }
+    catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+  return <details className="settings" open={opened}><summary onClick={event => { event.preventDefault(); setOpened(value => !value) }}>Настройки источников</summary><form onSubmit={save}>
+    <label>Ключ API OpenAlex (необязательно)<input type="password" autoComplete="new-password" value={key} onChange={event => setKey(event.target.value)} placeholder={service?.sources?.openalex?.has_key ? 'Ключ уже задан. Пустое поле сохранит его.' : 'Введите ключ OpenAlex'} disabled={active} /></label>
+    <p className="hint"><a href="https://openalex.org/settings/api" target="_blank" rel="noreferrer">Получить ключ OpenAlex</a> для увеличения лимита запросов. Сохранение настроек не отправляет запросы к API.</p>
+    <label>Email для OpenAlex (необязательно)<input type="email" value={mailto} onChange={event => setMailto(event.target.value)} maxLength={320} disabled={active} /></label>
+    {active && <p className="hint">Настройки можно менять после завершения загрузки.</p>}
+    {error && <p className="error" role="alert">{error}</p>}
+    <button disabled={busy || active}>{busy ? 'Сохраняем…' : 'Сохранить источники'}</button>
+  </form></details>
 }
 
 function Settings({ service, active, onSave }) {

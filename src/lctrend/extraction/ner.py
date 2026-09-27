@@ -109,6 +109,14 @@ def extract_mentions(
                 )
             ]
             mentions.extend(composites)
+    # Broad fields from auxiliary NER are still preserved for audit, but do
+    # not establish a technology identity without contextual LLM review.
+    for mention in mentions:
+        if (
+            mention.type_candidates == [ConceptKind.TECHNOLOGY]
+            and mention.surface_text.casefold() in generic_technologies
+        ):
+            mention.type_candidates = [ConceptKind.CANDIDATE]
     mentions.sort(
         key=lambda item: (item.chunk_id, item.start, item.end, item.mention_id)
     )

@@ -123,6 +123,20 @@ def _entity_refs(value: Any) -> Iterable[Any]:
             yield from _entity_refs(item)
 
 
+def _currency_grounded(currency: str, raw: str, aliases: dict) -> bool:
+    """A symbol can remain ambiguous; a bare dollar never proves USD.
+
+    Whole-word boundaries prevent a code such as TRY from matching an
+    ordinary word. Symbols keep their original meaning without FX inference.
+    """
+    for alias in aliases.get(currency, []):
+        left = r"(?<!\w)" if alias[0].isalnum() else ""
+        right = r"(?!\w)" if alias[-1].isalnum() else ""
+        if re.search(left + re.escape(alias) + right, raw, re.IGNORECASE):
+            return True
+    return False
+
+
 def validate_local_extraction(
     document: DocumentEnvelope,
     extraction: Extraction,
@@ -145,6 +159,7 @@ def validate_local_extraction(
     if not visible.issubset(chunks):
         raise ValueError("visible_ids references unknown chunks")
     schema = load_catalog("llm_schema")
+    country_codes = set(load_catalog("countries")["iso_alpha2"])
     entity_counts = Counter(entity.local_id for entity in result.entities)
     claim_counts = Counter(claim.claim_id for claim in result.claims)
     entities = {entity.local_id: entity for entity in result.entities}
@@ -169,11 +184,16 @@ def validate_local_extraction(
             add(key, "duplicate_entity_id")
         if not entity.local_id.strip() or not entity.label.strip():
             add(key, "empty_entity_identifier_or_label")
+        if entity.kind.value == "Country" and not entity.country_code:
+            add(key, "country_code_missing")
         if entity.country_code is not None:
             if entity.kind.value != "Country":
                 add(key, "country_code_on_non_country")
-            elif not re.fullmatch(
-                schema["country_code_pattern"], entity.country_code
+            elif (
+                not re.fullmatch(
+                    schema["country_code_pattern"], entity.country_code
+                )
+                or entity.country_code not in country_codes
             ):
                 add(key, "invalid_country_code")
         entity.evidence = anchor_spans(key, entity.evidence)
@@ -224,8 +244,8 @@ def validate_local_extraction(
                     and claim.qualifiers[name] not in allowed
                 ):
                     add(key, "invalid_qualifier:" + name)
-            # A maturity level is never inferred: the number must be written
-            # in the quoted source, e.g. "TRL 6".
+            # A maturity number must follow its marker. Six devices or six
+            # months of tests cannot silently become TRL 6.
             for name, (low, high) in rule.get(
                 "grounded_integer_qualifiers", {}
             ).items():
@@ -238,12 +258,24 @@ def validate_local_extraction(
                     or not low <= number <= high
                 ):
                     add(key, "invalid_qualifier:" + name)
-                elif not any(
-                    re.search(rf"(?<!\d){number}(?!\d)", quote)
-                    for quote in quotes
-                ):
-                    add(key, "qualifier_not_grounded:" + name)
+                else:
+                    marker = rule.get("integer_qualifier_markers", {}).get(
+                        name, r"(?<!\d)"
+                    )
+                    if not any(
+                        re.search(
+                            marker + rf"{number}(?![\d.,]\d|\d)",
+                            quote,
+                            re.IGNORECASE,
+                        )
+                        for quote in quotes
+                    ):
+                        add(key, "qualifier_not_grounded:" + name)
         for value in claim.values:
+            contract = (rule or {}).get("value_contract", {})
+            for field in contract.get("required_fields", []):
+                if value.get(field) is None or value.get(field) == "":
+                    add(key, "missing_value_field:" + field)
             raw = value.get("raw")
             grounded = (
                 isinstance(raw, str)
@@ -252,7 +284,33 @@ def validate_local_extraction(
             )
             if not grounded:
                 add(key, "value_not_grounded")
+            for field in contract.get("grounded_fields", []):
+                item = value.get(field)
+                if item is not None and (
+                    not isinstance(item, str)
+                    or not item.strip()
+                    or not any(item in quote for quote in quotes)
+                ):
+                    add(key, "value_field_not_grounded:" + field)
+            if "currency" in contract.get("required_fields", []):
+                currency = value.get("currency")
+                aliases = schema.get("currency_aliases", {})
+                if not isinstance(currency, str) or currency not in aliases:
+                    add(key, "invalid_currency")
+                elif not isinstance(raw, str) or not _currency_grounded(
+                    currency, raw, aliases
+                ):
+                    add(key, "currency_not_grounded")
             numeric = value.get("value")
+            if contract.get("numeric_value"):
+                try:
+                    if isinstance(numeric, bool) or not isinstance(
+                        numeric, (int, float, Decimal, str)
+                    ):
+                        raise InvalidOperation
+                    Decimal(str(numeric))
+                except InvalidOperation:
+                    add(key, "invalid_numeric_value")
             if isinstance(numeric, bool):
                 add(key, "invalid_numeric_value")
             elif isinstance(numeric, (int, float, Decimal, str)):

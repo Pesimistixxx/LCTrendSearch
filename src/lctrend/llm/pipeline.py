@@ -32,7 +32,10 @@ from ..core.models import (
     stable_id,
     validate_extraction,
 )
-from ..extraction.economics import extract_economic_evidence
+from ..extraction.economics import (
+    economic_evidence_from_assertions,
+    extract_economic_evidence,
+)
 from ..extraction.ner import extract_mentions
 from ..extraction.resolver import ConceptRegistry, resolve_mentions
 from .client import CALL_LOG, LLMError, Provider
@@ -40,7 +43,7 @@ from .context import (
     ContextBudgetError,
     PipelineSettings,
     build_payload,
-    expand_packet,
+    expand_context,
     plan_packets,
     review_payload,
 )
@@ -400,6 +403,7 @@ async def process_document(
     ner: Any = None,
     ner_name: str | None = None,
     event=None,
+    context_reader=None,
 ) -> ExtractionResult:
     """Process one document; its provider calls are audited separately
     even when one provider serves several concurrent documents.
@@ -417,6 +421,7 @@ async def process_document(
             ner_name,
             event,
             log,
+            context_reader,
         )
     finally:
         CALL_LOG.reset(token)
@@ -432,6 +437,7 @@ async def _process_document(
     ner_name: str | None,
     event,
     call_log: list,
+    context_reader=None,
 ) -> ExtractionResult:
     """Return an auditable extraction.
 
@@ -551,6 +557,7 @@ async def _process_document(
             )
             continue
         packet = original
+        related_context = []
         try:
             packet_hints = (
                 None
@@ -588,8 +595,13 @@ async def _process_document(
                     packet_id=packet.packet_id,
                     context_round=context_round + 1,
                 )
-                expanded, outcomes = expand_packet(
-                    document, packet, extraction.context_requests, settings
+                expanded, expanded_related, outcomes = await expand_context(
+                    document,
+                    packet,
+                    extraction.context_requests,
+                    settings,
+                    related_context,
+                    context_reader,
                 )
                 trace.append(
                     {
@@ -600,12 +612,34 @@ async def _process_document(
                             r.model_dump() for r in extraction.context_requests
                         ],
                         "outcomes": outcomes,
+                        "related_sources": [
+                            {
+                                key: row[key]
+                                for key in (
+                                    "chunk_id",
+                                    "document_id",
+                                    "document_version_id",
+                                    "title",
+                                )
+                            }
+                            | {
+                                "text_hash": stable_id(
+                                    "context-text", row["text"]
+                                )
+                            }
+                            for row in expanded_related
+                        ],
                     }
                 )
-                if expanded == packet and not (
-                    outcomes
-                    and all(
-                        o.get("status") == "already_visible" for o in outcomes
+                if (
+                    expanded == packet
+                    and expanded_related == related_context
+                    and not (
+                        outcomes
+                        and all(
+                            o.get("status") in {"already_visible", "no_match"}
+                            for o in outcomes
+                        )
                     )
                 ):
                     break
@@ -628,6 +662,7 @@ async def _process_document(
                             + expanded.support_chunk_ids,
                             hybrid["max_hints_per_packet"],
                         ),
+                        related_context=expanded_related,
                     )
                 except ContextBudgetError:
                     metadata["issues"].append(
@@ -638,6 +673,7 @@ async def _process_document(
                     )
                     break
                 packet = expanded
+                related_context = expanded_related
                 extraction = await budget.call(
                     Extraction,
                     prompts["extract"],
@@ -734,6 +770,14 @@ async def _process_document(
                         valid.model_dump(mode="python"),
                         visible,
                         settings,
+                        related_context=related_context,
+                    )
+                    trace.append(
+                        {
+                            "stage": "review_context",
+                            "packet_id": packet.packet_id,
+                            "context": payload["review_context"],
+                        }
                     )
                     review = await budget.call(
                         Review, prompts["review"], payload, "review"
@@ -1048,6 +1092,9 @@ async def _process_document(
         assertions=list(assertions.values()),
         economic_evidence=extract_economic_evidence(
             document.chunks, list(mentions.values()), concepts, resolutions
+        )
+        + economic_evidence_from_assertions(
+            document, list(assertions.values()), concepts
         ),
         concept_embeddings=embeddings,
         embedding_model=embedding_model,

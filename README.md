@@ -4,7 +4,59 @@
 
 [Архитектура: две схемы, пояснения этапов и код](docs/pipeline-before-after.md) · [Что означают списки строк](docs/catalogs.md) · [Веб-интерфейс сбора](frontend/README.md)
 
-Реализована многоэтапная обработка материалов. Сбор и проверка загрузки встроены в основной React-интерфейс. Поиск и ранжирование технологических кандидатов пока показывают демонстрационные данные; расчёт обучающих признаков сохранён.
+Реализована многоэтапная обработка материалов и сборка временного датасета технологий. Сбор и проверка загрузки встроены в основной React-интерфейс. Поиск и ранжирование технологических кандидатов пока показывают демонстрационные данные.
+
+## Быстрый старт: OpenAlex
+
+Все команды ниже запускайте из каталога `LCTrendSearch`. OpenAlex подключён к разбору сохранённого JSON, получению статьи по DOI/ID, тематическому обходу, HTTP API и записи документов в Neo4j. Для первой загрузки карточки и аннотации достаточно базового Python-пакета; `--no-fulltext` отключает PDF и загрузку моделей Docling.
+
+### Самая быстрая проверка без Docker и базы
+
+Нужен Python 3.9+; для полного набора PDF/NER и веб-интерфейса используйте Python 3.12, как в Docker. PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e .
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+New-Item -ItemType Directory -Force artifacts | Out-Null
+```
+
+В `.env` задайте `OPENALEX_API_KEY`: создайте бесплатную учётную запись и скопируйте ключ из [настроек OpenAlex](https://openalex.org/settings/api). Ключ рекомендован для массовой загрузки; для нескольких пробных запросов API допускает ограниченный доступ без него. `OPENALEX_MAILTO` — необязательный контактный email, не замена ключу. Актуальные правила и лимиты описаны в [документации авторизации OpenAlex](https://help.openalex.org/api/authentication/).
+
+```powershell
+.venv\Scripts\python.exe -m lctrend fetch openalex "https://doi.org/10.7717/peerj.4375" --no-fulltext --output artifacts/paper-envelope.json
+# Эквивалентно: fetch openalex W2741809807 или fetch openalex "doi:10.7717/peerj.4375"
+$paper = Get-Content artifacts/paper-envelope.json -Raw -Encoding UTF8 | ConvertFrom-Json
+$paper | Select-Object title, coverage
+$paper.chunks | Select-Object -First 2 kind, text
+```
+
+`coverage=abstract_only` означает доступную аннотацию, `metadata_only` — только карточку. Этот шаг не требует Neo4j, LLM или GLiNER. Повторный разбор сохранённого исходного ответа API выполняется командой `parse openalex work.json`; `paper-envelope.json` уже содержит внутреннюю схему и не подходит на место `work.json`.
+
+### Docker и веб-интерфейс
+
+Нужен запущенный Docker с Compose. Если `.env` ещё нет, скопируйте `.env.example`; заполните `OPENALEX_API_KEY` и параметры существующей внешней базы `NEO4J_*`. Для извлечения сущностей настройте GigaChat или совместимый LLM API. Быструю загрузку только документов выполняйте с `--no-extract`.
+
+```powershell
+docker compose up -d --build --wait
+docker compose exec backend python -m lctrend init-graph
+docker compose exec backend python -m lctrend fetch openalex W2741809807 --no-fulltext --output /app/artifacts/paper-envelope.json
+```
+
+Откройте [сбор материалов](http://localhost:5188/#view=ingest). `FRONTEND_PORT` меняет порт. Ключ OpenAlex также можно сохранить через «Настройки источников»; API показывает только факт наличия ключа. Compose передаёт `.env` только API-сервису; ключ не нужен в `VITE_*`. Первая сборка устанавливает зависимости PDF/NER и может занять больше времени; для получения одной аннотации быстрее локальная команда выше. После изменения `.env` примените `docker compose up -d --force-recreate backend`.
+
+### Быстрая загрузка темы в Neo4j
+
+Настройте `NEO4J_*` в `.env`. Ограниченный обход ниже сохраняет карточки, аннотации, авторов и организации без вызовов LLM/NER и скачивания PDF:
+
+```powershell
+.venv\Scripts\python.exe -m lctrend init-graph
+.venv\Scripts\python.exe -m lctrend crawl-openalex "edge computing" --limit 20 --per-page 20 --filter "has_abstract:true,type:article" --no-fulltext --no-extract --checkpoint artifacts/openalex-edge.json
+```
+
+В Docker используйте `docker compose exec backend python` вместо `.venv\Scripts\python.exe`, а checkpoint задайте как `/app/artifacts/openalex-edge.json`. Для последующего извлечения из аннотаций уберите `--no-extract` и используйте `--extractor llm` с настроенным LLM; локально установите `.[llm]`. Для PDF дополнительно установите `.[pdf]` и уберите `--no-fulltext`.
+
+Checkpoint сохраняет `query`, `filter`, `processed`, `failures` и позицию `cursor` после каждой страницы. Повтор той же команды продолжает обход; `--limit` — общий предел с учётом `processed`, поэтому для следующих 20 записей увеличьте его до 40. Для другой темы, фильтра или повторной обработки с новым режимом укажите новый файл checkpoint. Счётчик `failures` и журнал `logs/lctrend.log` помогают проверить ошибки; это не число успешно извлечённых технологий. Без извлечения создаются документы и текстовые фрагменты, а утверждения и технологические признаки появятся после обработки моделью.
 
 ## Какие модели используются
 
@@ -13,7 +65,7 @@
 | LLM: извлечение и проверка утверждений | GigaChat, лестница `GigaChat-3-Ultra` → `GigaChat-2-Max` → `GigaChat-2-Pro` → `GigaChat-2`; либо любая модель OpenAI-совместимого API | `LLM_PROVIDER`, `LLM_MODEL*`, [llm.json](src/lctrend/resources/llm.json) | Режимы `hybrid` (по умолчанию) и `llm` |
 | NER: подсказки сущностей | GLiNER `urchade/gliner_medium-v2.1` | `GLINER_MODEL`, [runtime.json](src/lctrend/resources/runtime.json) | `hybrid` (подсказки для LLM) и `gliner` (основной извлекатель) |
 | Разбор PDF | Docling (собственные модели разметки страниц и OCR) | extra `[pdf]` | Любой PDF: локальный файл, загрузка через API, полный текст OpenAlex |
-| Эмбеддинги для сопоставления сущностей | GigaChat `EmbeddingsGigaR` через API `/embeddings` (косинус; локальная альтернатива — `sentence-transformers/all-MiniLM-L6-v2`) + локальный `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | **Только в режиме `gliner`.** В `hybrid`/`llm` resolver детерминированный: нормализация, леммы (simplemma), явные синонимы |
+| Эмбеддинги для сопоставления сущностей | GigaChat `EmbeddingsGigaR` через API `/embeddings` (косинус; локальная альтернатива — `sentence-transformers/all-MiniLM-L6-v2`) + локальный `cross-encoder/stsb-distilroberta-base` (проверка пары) | `DEDUP_*`, [resolver.json](src/lctrend/resources/resolver.json) | Работают в `gliner`, `hybrid` и `llm`. В двух LLM-режимах смысловое сходство сохраняется как кандидат `POSSIBLY_SAME_AS` для проверки |
 
 Эмбеддинг-совпадение никогда не объединяет сущности автоматически: пара получает статус `ambiguous` и остаётся на проверку. Векторного индекса в Neo4j нет — эмбеддинги вычисляются в памяти на время одной обработки.
 
@@ -108,8 +160,7 @@ $paper.metadata.parse_warnings # локальный PDF
 ## Запуск
 
 ```powershell
-# Только при первом запуске, если .env ещё нет:
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # Укажите внешнюю Neo4j в NEO4J_* и настройте LLM-провайдера.
 docker compose up -d --build --remove-orphans --wait
 ```
@@ -126,9 +177,9 @@ JSON заданий, результаты и исходные материалы
 логи — в `logs/`. Реестр обхода SQLite хранится в Docker-томе
 `ingestion_ledger`: режим WAL требует файловой системы Linux, поэтому
 папка `artifacts/ingestion/crawl` внутри контейнера перекрыта этим томом.
-Кэш моделей также хранится в отдельном Docker-томе. Настройки LLM
+Кэш моделей также хранится в отдельном Docker-томе. Настройки LLM и OpenAlex
 из интерфейса сохраняются в `artifacts/ingestion/settings.env` и действуют
-после пересоздания контейнеров. Они имеют приоритет над настройками LLM
+после пересоздания контейнеров. Они имеют приоритет над соответствующими настройками
 из `.env`; чтобы снова использовать `.env`, удалите файл сохранённых
 настроек и пересоздайте API. Первое обращение к GLiNER/Docling может
 потребовать загрузки моделей. Первая сборка образа устанавливает их
@@ -150,12 +201,12 @@ docker compose exec backend python -m lctrend ingest file /app/artifacts/report.
 ```
 
 CLI читает `.env` без перезаписи экспортированных переменных (в Docker
-дополнительно читает сохранённые настройки LLM). Neo4j хранит документы,
+дополнительно читает сохранённые настройки LLM и OpenAlex). Neo4j хранит документы,
 исходные блоки, сущности, утверждения, цитаты и аудит обработки.
 PostgreSQL зарезервирован под будущую ранжированную выдачу сигналов:
 сейчас код в него не пишет и не читает, но `backend` ждёт его healthcheck.
 
-LLM-провайдер использует endpoint `/chat/completions`. Задайте модель или лестницу; для GigaChat уже есть штатная лестница. Отдельные модели стадий задаются через `LLM_EXTRACT_MODEL` и `LLM_REVIEW_MODEL`. Извлекатель и проверяющий используют разные промпты. Отсутствующая настройка не переключает обработку на фиктивные ответы. Зависимость httpx нужна для LLM; для чистого разбора файлов и API без извлечения она не нужна.
+LLM-провайдер использует endpoint `/chat/completions`. Задайте модель или лестницу; для GigaChat уже есть штатная лестница. Отдельные модели стадий задаются через `LLM_EXTRACT_MODEL` и `LLM_REVIEW_MODEL`. Извлекатель и проверяющий используют разные промпты. Отсутствующая настройка не переключает обработку на фиктивные ответы. Зависимость httpx входит в базовый пакет и используется сетевыми коннекторами и LLM.
 
 ## Массовая загрузка
 
@@ -206,7 +257,7 @@ python -m lctrend crawl-pypi --packages gliner pydantic
 | `crawl-openalex QUERY` | Получать страницы статей по поисковой строке и записывать результат в Neo4j с сохранением позиции обхода |
 | `crawl-pypi` | Обрабатывать `--packages` либо равномерную выборку из списка имён PyPI; тематического поиска по реестру нет |
 | `export-features --snapshot DATE` | Выгрузить признаки технологий из графа на дату среза в CSV |
-| `build-training-set` | Выгрузить исторические обучающие строки и метки по числу будущих документов; модель не обучает |
+| `build-training-set` | Выгрузить исторические срезы технологий, будущие результаты реализации и временные разбиения; модель не обучает |
 
 ### Что означает каждый параметр CLI
 
@@ -220,7 +271,7 @@ python -m lctrend crawl-pypi --packages gliner pydantic
 | `--extraction-output PATH` | `ingest`, `fetch --ingest` | Сохранить ExtractionResult отдельным JSON; при `--no-extract` файл не создаётся. `--output` сохраняет другой объект — DocumentEnvelope |
 | `--no-fulltext` | `fetch openalex`, `crawl-openalex` | Не загружать PDF, использовать доступную карточку/аннотацию |
 | `--limit N` | Сборщики | Предел статей OpenAlex (500) / успешных загрузок пакетов PyPI (5000). С `--packages` равен числу заданных имён |
-| `--per-page N` | `crawl-openalex` | Размер страницы API, по умолчанию 100; CLI принимает 1–200, действительный предел зависит от API |
+| `--per-page N` | `crawl-openalex` | Размер страницы API, по умолчанию 100; допустимо 1–100 |
 | `--filter TEXT` | `crawl-openalex` | Фильтр OpenAlex, например `is_oa:true,has_abstract:true,type:article`, вместе с поисковой строкой |
 | `--checkpoint PATH` | Сборщики | JSON с позицией обхода, по умолчанию `.openalex-crawl.json` / `.pypi-crawl.json`. Для другого запроса/списка используйте отдельный файл |
 | `--packages NAME …` | `crawl-pypi` | Явный список пакетов вместо выборки |
@@ -228,10 +279,30 @@ python -m lctrend crawl-pypi --packages gliner pydantic
 | `--snapshot DATE` | `export-features` | Обязательная дата среза `YYYY-MM-DD` |
 | `--start-year N` | `build-training-set` | Первый год срезов, по умолчанию 2015 |
 | `--horizon-years N` | `build-training-set` | Число лет после среза, по умолчанию 3 |
-| `--min-documents N` | `build-training-set` | Минимум документов до среза для включения технологии, по умолчанию 2 |
-| `--positive-future-documents N` | `build-training-set` | От этого числа будущих документов метка 1, по умолчанию 5 |
-| `--negative-future-documents N` | `build-training-set` | До этого числа будущих документов метка 0, по умолчанию 1; промежуточные значения исключаются |
+| `--min-documents N` | `build-training-set` | Минимум видимых документов до среза для включения технологии, по умолчанию 2 |
+| `--end-date DATE` | `build-training-set` | Последняя дата среза `YYYY-MM-DD`; по умолчанию конец корпуса |
+| `--subgraphs-output PATH` | `build-training-set` | Дополнительно сохранить ограниченные подграфы каждого среза в JSONL |
+| `--no-taxonomy` | `export-features`, `build-training-set` | Отключить семантические, таксономические и графовые признаки новизны |
 | `--help` | Любая команда | Справка, например `python -m lctrend fetch --help` |
+
+### Временной датасет технологий
+
+Одна строка — технология на дату `snapshot_date` (`snapshot_id`). Обе CSV-команды используют единый `TemporalCorpus`: признаки строятся только из версий документов, упоминаний, связей, зрелости, экономических свидетельств и наблюдений метрик, доступных к этой дате. Поздняя выгрузка старой статьи не делает её метрики историческими наблюдениями. Существующий граф без дат версий и наблюдений может дать неполные исторические срезы.
+
+```powershell
+python -m lctrend export-features --snapshot 2020-01-01 --output artifacts/features-2020.csv
+python -m lctrend build-training-set --start-year 2015 --horizon-years 3 --end-date 2025-01-01 --output artifacts/dataset.csv --subgraphs-output artifacts/subgraphs.jsonl
+```
+
+Признаки покрывают динамику публикаций, кода, пакетов и патентов; независимость и концентрацию источников; участников и связи; зрелость и экономические сигналы; семантическую новизну и положение в графе. Недоступное значение сохраняется пустым с индикатором пропуска: отсутствие собранного источника отличается от наблюдаемого нуля. Рядом с CSV сохраняется `<output>.manifest.json` с описанием схемы и отдельным списком входных признаков.
+
+`label_realized` отражает реализацию технологии в интервале после среза до `horizon_end`: независимые подтверждения и результат внедрения либо коммерциализации. Число будущих публикаций само по себе не даёт положительную метку. `future_*` — будущие результаты для формирования и проверки метки; их нельзя подавать модели как признаки. При незавершённом горизонте, неизвестной исходной зрелости или недостаточном покрытии источников метка остаётся пустой с причиной, а не превращается в 0. Пороги и параметры заданы в `resources/dataset.json`; прежние `--positive-future-documents` и `--negative-future-documents` удалены.
+
+Отрицательная метка требует полного наблюдения научных, программных, пакетных, патентных и коммерческих источников в горизонте. Текущие ограниченные CLI-обходы сохраняют аудит с `exhaustive=false` и не доказывают отсутствие реализации; без полного покрытия многие строки останутся без метки.
+
+`split` содержит временное разбиение: последние размеченные срезы идут в `test`; для `valid` выбираются последние более ранние срезы, чей горизонт заканчивается до начала теста. Строки, чей горизонт пересекает начало следующей части, получают `purged`; строки без метки — `unlabeled`. Для обучения используйте только `train`, для оценки — соответствующие `valid`/`test`, и список признаков из описания схемы. Если размеченной истории недостаточно, одна из частей может быть пустой.
+
+JSONL-подграфы содержат типизированные узлы и связи, ограниченные датой среза и лимитами `dataset.json → subgraph`; маска использует 1 для пропуска и 0 для наблюдаемого значения. Рядом сохраняется manifest со схемой признаков узлов и рёбер. `graph.subgraphs.to_pyg(sample, feature_schema=manifest)` преобразует образец в `torch_geometric.data.HeteroData` с одинаковым порядком колонок, когда установлены необязательные `torch` и `torch-geometric`. Экспорт CSV/JSONL не требует этих библиотек. Обучение Graph Transformer и итоговое ранжирование пока не реализованы.
 
 ### Извлечение: hybrid по умолчанию
 
@@ -278,6 +349,7 @@ LLM_MODEL=your-model-name
 | `POSTGRES_PORT` | Внешний порт PostgreSQL, по умолчанию 5432; backend внутри Docker обращается к порту 5432 контейнера |
 | `FRONTEND_PORT` | Порт веб-интерфейса на компьютере, по умолчанию 5188 |
 | `GITHUB_TOKEN` | Необязательный токен для запросов к GitHub API |
+| `OPENALEX_API_KEY` | Ключ из [настроек OpenAlex](https://openalex.org/settings/api), рекомендован для массовой загрузки; backend передаёт его в запросах API |
 | `OPENALEX_MAILTO` | Необязательный контактный email для запросов OpenAlex; это не ключ API или адрес статьи |
 | `LLM_PROVIDER` | `gigachat` или `openai_compatible`; в образце — GigaChat, без настройки — совместимый провайдер из `llm.json` |
 | `GIGACHAT_CREDENTIALS` | Ключ авторизации из кабинета GigaChat для получения OAuth-токена; не сам временный access token |
@@ -294,15 +366,16 @@ LLM_MODEL=your-model-name
 | `LLM_MODEL_LADDER` | Имена моделей через запятую в порядке переключения; пусто — порядок из `llm.json` |
 | `LCTREND_EXTRACTOR` | Режим CLI: `hybrid`, `llm`, `gliner`; пусто — `hybrid`. Веб-обход по теме использует свой режим `hybrid` |
 | `GLINER_MODEL` | Имя модели GLiNER; пусто — `urchade/gliner_medium-v2.1` |
-| `DEDUP_EMBEDDING_PROVIDER` | Источник эмбеддингов resolver, только режим `gliner`: `gigachat` (по умолчанию, ключи `GIGACHAT_*`) или `transformers` (локальная модель) |
+| `DEDUP_EMBEDDING_PROVIDER` | Источник эмбеддингов resolver: `gigachat` (по умолчанию, ключи `GIGACHAT_*`) или `transformers` (локальная модель) |
 | `DEDUP_EMBEDDING_MODEL` | Эмбеддинг-модель resolver; пусто — `EmbeddingsGigaR` для GigaChat, `sentence-transformers/all-MiniLM-L6-v2` для `transformers` |
+| `DEDUP_IN_LLM` | Необязательный `0`/`1`, переопределяет `resolver.json → semantic.use_in_llm` для режимов llm/hybrid |
 | `DEDUP_DECISION_MODEL` | Cross-encoder проверки пары; пусто — `cross-encoder/stsb-distilroberta-base` |
 | `DEDUP_COSINE_THRESHOLD` | Минимальный косинус для передачи пары cross-encoder, по умолчанию 0.78 |
 | `DEDUP_DECISION_THRESHOLD` | Минимальная оценка cross-encoder для кандидата `ambiguous`, по умолчанию 0.80 |
 | `LCTREND_CONFIG_DIR` | Каталог с вашими версиями JSON-каталогов, схемы и промптов; одноимённые файлы заменяются целиком |
 | `LCTREND_RAW_DIR` | Каталог снимков исходных байтов, по умолчанию `artifacts/raw` |
 | `LCTREND_UPLOAD_DIR` | Файлы, загруженные через HTTP API; по умолчанию `artifacts/ingestion/uploads` |
-| `LCTREND_SETTINGS_FILE` | Файл сохранённых настроек LLM; Compose задаёт `/app/artifacts/ingestion/settings.env`. Без него локальная веб-форма пишет в `.env` |
+| `LCTREND_SETTINGS_FILE` | Файл сохранённых настроек LLM и OpenAlex; Compose задаёт `/app/artifacts/ingestion/settings.env`. Без него локальная веб-форма пишет в `.env` |
 | `LCTREND_LOG_LEVEL` | Уровень сообщений в консоли, по умолчанию `INFO` |
 | `LCTREND_LOG_FILE` | Файл журнала, по умолчанию `logs/lctrend.log` |
 | `LCTREND_LOG_FILE_LEVEL` | Уровень файлового журнала, по умолчанию `DEBUG` |
@@ -351,8 +424,10 @@ ProcessingRun хранит бюджеты, попытки вызовов, рез
 
 Назначение каждого каталога — в [docs/catalogs.md](docs/catalogs.md). `pipeline.json` задаёт размеры пакетов, лимиты контекста, общий бюджет LLM-вызовов и ограничения файлов; `llm.json` — клиент и ответы; `llm_schema.json` — допустимые отношения и роли. Большая статья может получить неполное покрытие при исчерпании бюджета даже после успешного разбора PDF.
 
+Каталоги также задают экономические утверждения, отрасли, рынки и роли стран. По запросу `search_graph` обе LLM-стадии получают исходные блоки ранее обработанных документов Neo4j как дополнительный контекст. Цитаты утверждений остаются привязаны к текущему документу. Лимиты находятся в `pipeline.json → graph_context`; дополнительные секреты в `.env` не требуются. CLI и веб-сервер проверяют каталоги при старте; новые правила требуют переобработки уже загруженных документов.
+
 ```powershell
 python -m pytest
 ```
 
-Тесты используют сохранённые ответы, фиктивные LLM и транзакции. Реальные LLM, Neo4j и качество OCR отдельно требуют проверки на ваших материалах. Существующая база и CSV автоматически не пересчитываются. Прежние export-features/build-training-set сохранены с исходными алгоритмами и форматом.
+Тесты используют сохранённые ответы, фиктивные LLM и транзакции, а также временной корпус с будущими наблюдениями для проверки отсутствия утечки. Реальные LLM, Neo4j и качество OCR отдельно требуют проверки на ваших материалах. Существующая база и CSV автоматически не пересчитываются; повторный запуск export-features/build-training-set создаёт новый формат временного датасета.

@@ -1,6 +1,30 @@
 {
-  "schema_version": 2,
-  "measurement_predicates": ["reported_measurement", "reported_comparison"],
+  "schema_version": 3,
+  "measurement_predicates": ["reported_measurement", "reported_comparison", "reported_cost", "reported_investment", "reported_revenue", "reported_market_size", "reported_savings"],
+  "economic_predicates": {"reported_cost": "cost", "reported_investment": "investment", "reported_revenue": "revenue", "reported_market_size": "market", "reported_savings": "savings"},
+  "currency_aliases": {
+    "USD": ["USD", "US$", "US dollar", "U.S. dollar", "доллар США", "долларов США"],
+    "EUR": ["EUR", "€", "euro", "euros", "евро"],
+    "RUB": ["RUB", "₽", "рубль", "рубля", "рублей", "руб."],
+    "GBP": ["GBP", "£", "pound sterling", "фунт стерлингов", "фунтов стерлингов"],
+    "CNY": ["CNY", "RMB", "renminbi", "юань", "юаней"],
+    "JPY": ["JPY", "Japanese yen", "японских иен"],
+    "CHF": ["CHF", "Swiss francs", "швейцарских франков"],
+    "CAD": ["CAD", "C$", "Canadian dollars"],
+    "AUD": ["AUD", "A$", "Australian dollars"],
+    "NZD": ["NZD", "NZ$", "New Zealand dollars"],
+    "HKD": ["HKD", "HK$", "Hong Kong dollars"],
+    "SGD": ["SGD", "S$", "Singapore dollars"],
+    "INR": ["INR", "₹", "Indian rupees"],
+    "KRW": ["KRW", "₩", "South Korean won"],
+    "SEK": ["SEK"], "NOK": ["NOK"], "DKK": ["DKK"],
+    "PLN": ["PLN", "zł"], "CZK": ["CZK"], "HUF": ["HUF"],
+    "BRL": ["BRL", "R$"], "MXN": ["MXN"], "ZAR": ["ZAR"],
+    "TRY": ["TRY", "₺"], "KZT": ["KZT", "₸", "тенге"],
+    "AED": ["AED"], "SAR": ["SAR"], "ILS": ["ILS", "₪"],
+    "UAH": ["UAH", "₴", "гривен"], "BYN": ["BYN"],
+    "$": ["$"], "¥": ["¥"]
+  },
   "number_pattern": "(?<![\\w.])[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)(?:[eE][+-]?\\d+)?",
   "country_code_pattern": "^[A-Z]{2}$",
   "predicates": {
@@ -68,12 +92,58 @@
       "required_roles": ["subject", "parent"], "allowed_roles": ["subject", "parent"],
       "role_types": {"subject": ["Technology", "Method", "Material"], "parent": ["Technology", "Method", "Material", "Domain"]}
     },
+    "belongs_to_domain": {
+      "required_roles": ["subject", "domain"], "allowed_roles": ["subject", "domain"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "domain": ["Domain"]}
+    },
+    "targets_market": {
+      "required_roles": ["subject", "market"], "allowed_roles": ["subject", "market"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "market": ["MarketSegment"]}
+    },
+    "manufactured_in": {
+      "required_roles": ["subject", "country"], "allowed_roles": ["subject", "country", "organization"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "country": ["Country"], "organization": ["Organization", "Company", "University"]}
+    },
+    "tested_in": {
+      "required_roles": ["subject", "country"], "allowed_roles": ["subject", "country", "organization", "application"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "country": ["Country"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"]}
+    },
+    "deployed_in": {
+      "required_roles": ["subject", "country"], "allowed_roles": ["subject", "country", "organization", "application"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "country": ["Country"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"]}
+    },
+    "reported_cost": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "application"],
+      "role_types": {"subject": ["Technology"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"]},
+      "value_contract": {"required_fields": ["raw", "value", "currency"], "numeric_value": true, "grounded_fields": ["unit", "period"]}
+    },
+    "reported_investment": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "country"],
+      "role_types": {"subject": ["Technology"], "organization": ["Organization", "Company", "University"], "country": ["Country"]},
+      "value_contract": {"required_fields": ["raw", "value", "currency"], "numeric_value": true, "grounded_fields": ["unit", "period"]}
+    },
+    "reported_revenue": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "market"],
+      "role_types": {"subject": ["Technology"], "organization": ["Organization", "Company", "University"], "market": ["MarketSegment"]},
+      "value_contract": {"required_fields": ["raw", "value", "currency"], "numeric_value": true, "grounded_fields": ["unit", "period"]}
+    },
+    "reported_market_size": {
+      "required_roles": ["subject", "market"], "allowed_roles": ["subject", "market", "country"],
+      "role_types": {"subject": ["Technology"], "market": ["MarketSegment"], "country": ["Country"]},
+      "value_contract": {"required_fields": ["raw", "value", "currency"], "numeric_value": true, "grounded_fields": ["unit", "period"]}
+    },
+    "reported_savings": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "baseline", "application", "organization"],
+      "role_types": {"subject": ["Technology"], "baseline": ["Technology", "Method", "Material"], "application": ["ApplicationContext", "Task"], "organization": ["Organization", "Company", "University"]},
+      "value_contract": {"required_fields": ["raw", "value", "currency"], "numeric_value": true, "grounded_fields": ["unit", "period"]}
+    },
     "reports_maturity_stage": {
       "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "application"],
       "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"], "application": ["ApplicationContext", "Task"]},
       "required_qualifiers": ["stage"],
       "qualifier_enums": {"stage": ["concept", "laboratory_validation", "prototype", "pilot", "commercial_deployment", "mass_adoption"]},
-      "grounded_integer_qualifiers": {"trl": [1, 9]}
+      "grounded_integer_qualifiers": {"trl": [1, 9]},
+      "integer_qualifier_markers": {"trl": "(?:\\bTRL\\b|\\bУГТ\\b|\\btechnology readiness level\\b|\\bуров(?:ень|ня|ню|не|нем) готовности технологии\\b|\\bуров(?:ень|ня|ню|не|нем) технологической готовности\\b)\\s*(?:(?:level|уровень|уровня)\\s*)?(?:[:=–—-]\\s*)?"}
     }
   }
 }

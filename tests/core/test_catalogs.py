@@ -32,7 +32,7 @@ def test_schema_identifiers_and_catalog_names_cannot_inject_paths_or_cypher():
         resource_path("../secrets")
 
 
-def test_container_settings_survive_restart_and_only_override_model_keys(
+def test_container_settings_survive_restart_and_only_override_allowed_keys(
     tmp_path, monkeypatch
 ):
     import os
@@ -41,14 +41,20 @@ def test_container_settings_survive_restart_and_only_override_model_keys(
     env_file.write_text("LLM_MODEL=initial\n", encoding="utf-8")
     settings = tmp_path / "settings.env"
     settings.write_text(
-        "LLM_MODEL=saved\nLLM_API_KEY=saved-key\nNEO4J_URI=wrong\n",
+        "LLM_MODEL=saved\nLLM_API_KEY=saved-key\n"
+        "OPENALEX_API_KEY=saved-openalex\n"
+        "OPENALEX_MAILTO=research@example.org\nNEO4J_URI=wrong\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("LCTREND_SETTINGS_FILE", str(settings))
     monkeypatch.setenv("LLM_MODEL", "initial")
     monkeypatch.setenv("LLM_API_KEY", "initial-key")
+    monkeypatch.setenv("OPENALEX_API_KEY", "initial-openalex")
+    monkeypatch.setenv("OPENALEX_MAILTO", "initial@example.org")
     monkeypatch.setenv("NEO4J_URI", "neo4j+s://external.example")
     load_environment(env_file)
     assert os.environ["LLM_MODEL"] == "saved"
     assert os.environ["LLM_API_KEY"] == "saved-key"
+    assert os.environ["OPENALEX_API_KEY"] == "saved-openalex"
+    assert os.environ["OPENALEX_MAILTO"] == "research@example.org"
     assert os.environ["NEO4J_URI"] == "neo4j+s://external.example"

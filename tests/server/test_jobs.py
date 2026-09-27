@@ -541,6 +541,102 @@ def test_source_exhaustion_preserves_requested_target_without_fabricating_docume
         instance.close(wait=True)
 
 
+@pytest.mark.parametrize(
+    "meta",
+    [None, {}, {"next_cursor": "*"}, {"next_cursor": ""}, {"next_cursor": 2}],
+)
+def test_openalex_invalid_cursor_fails_before_import_even_at_limit(
+    tmp_path, meta
+):
+    page = {"results": [{"id": "https://openalex.org/W1", "title": "One"}]}
+    if meta is not None:
+        page["meta"] = meta
+    instance = manager(tmp_path, source_fetcher=lambda *args: page)
+    try:
+        final = finish(
+            instance, instance.create_openalex("sensors", 1, fulltext=False)
+        )
+        assert final["status"] == "failed"
+        assert not final["documents"]
+        assert not final["discovery_finished"]
+        assert not instance.fixture_store.writes
+    finally:
+        instance.close(wait=True)
+
+
+def test_openalex_job_uses_saved_api_key_without_persisting_it(
+    tmp_path, monkeypatch
+):
+    import httpx
+
+    from lctrend.ingest import connectors
+
+    requests = []
+    monkeypatch.setenv("OPENALEX_API_KEY", "private-openalex-key")
+    monkeypatch.setenv("OPENALEX_MAILTO", "researcher@example.org")
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"id": "https://openalex.org/W1", "title": "One"}],
+                "meta": {"next_cursor": None},
+            },
+        )
+
+    monkeypatch.setattr(connectors, "TRANSPORT", httpx.MockTransport(respond))
+    instance = manager(tmp_path)
+    try:
+        final = finish(
+            instance,
+            instance.create_openalex(
+                "sensors", 150, mode="none", fulltext=False
+            ),
+        )
+        assert final["status"] == "completed"
+        assert len(requests) == 1
+        assert requests[0].headers["Authorization"] == (
+            "Bearer private-openalex-key"
+        )
+        assert "private-openalex-key" not in str(requests[0].url)
+        assert requests[0].url.params["mailto"] == "researcher@example.org"
+        assert requests[0].url.params["per-page"] == "100"
+        assert len(instance.fixture_store.writes) == 1
+        assert "private-openalex-key" not in json.dumps(final)
+        for path in instance.directory.glob("**/*.json"):
+            assert "private-openalex-key" not in path.read_text(
+                encoding="utf-8"
+            )
+    finally:
+        instance.close(wait=True)
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_openalex_job_returns_actionable_error_without_source_credentials(
+    tmp_path, status, caplog
+):
+    from lctrend.ingest.connectors import SourceHTTPError
+
+    def failed_fetch(*args):
+        raise SourceHTTPError(
+            status, "https://api.openalex.org/works?api_key=private-source-key"
+        )
+
+    instance = manager(tmp_path, source_fetcher=failed_fetch)
+    try:
+        final = finish(
+            instance, instance.create_openalex("sensors", 1, fulltext=False)
+        )
+        assert final["status"] == "failed"
+        assert final["error"]["code"] == f"http_{status}"
+        assert "OpenAlex" in final["error"]["message"]
+        assert "private-source-key" not in json.dumps(final)
+        assert "private-source-key" not in caplog.text
+    finally:
+        instance.close(wait=True)
+
+
 def test_mode_none_never_constructs_either_model_and_publishes_metadata_only(
     tmp_path,
 ):

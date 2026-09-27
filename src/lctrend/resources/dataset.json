@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "note": "Temporal dataset: one row per technology x snapshot. Features use only data knowable at the snapshot; outcomes use the horizon after it.",
+  "snapshots": {"start_year": 2015, "month": 1, "day": 1, "step_months": 12},
+  "horizon_years": 3,
+  "min_documents": 2,
+  "label": {
+    "note": "Realization, not publication popularity: independent confirmation plus an implementation or commercial outcome, for a technology not yet commercial at the snapshot.",
+    "min_future_independent_sources": 2,
+    "required_negative_families": ["scholarly", "code", "package_registry", "patent", "commercial"],
+    "implementation_outcomes": ["future_patents", "future_repositories", "future_packages", "future_users", "future_commercial_evidence"],
+    "commercial_stage_rank": 5
+  },
+  "split": {"note": "Temporal split by snapshot date; the last labelled snapshots validate and test.", "valid_snapshots": 1, "test_snapshots": 1},
+  "reliability_tier_max": 3,
+  "commercial_economic_categories": ["commercialization", "market", "savings", "procurement"],
+  "factual_modalities": ["reported", "observed"],
+  "speculative_modalities": ["planned", "hypothetical"],
+  "stage_ranks": {"prototype": 3, "pilot": 4, "commercial": 5},
+  "semantic": {"outlier_neighbors": 5},
+  "graph": {"betweenness_samples": 256, "seed": 13},
+  "subgraph": {"hops": 2, "max_neighbors": 30, "max_nodes": 400},
+  "coverage_families": {"scholarly": "article", "code": "repository", "package_registry": "package", "patent": "patent"},
+  "growth_source_families": {"scholarly": "scholarly", "code": "code", "package_registry": "package", "patent": "patent"}
+}

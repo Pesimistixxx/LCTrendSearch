@@ -21,11 +21,14 @@
     "abstract": "^\\W*(?:\\d+\\.?\\s*)?(?:abstract|summary|аннотация|реферат)\\b",
     "introduction": "\\b(?:introduction|background|motivation|введение|актуальность)\\b",
     "related_work": "\\b(?:related work|prior work|literature review|state of the art|обзор)\\b",
-    "method": "\\b(?:methods?|methodology|approach|materials|experimental setup|model|architecture|design|метод\\w*|подход|материалы)\\b",
-    "results": "\\b(?:results?|evaluation|experiments?|findings|performance|результат\\w*|эксперимент\\w*)\\b",
+    "method": "\\b(?:methods?|methodology|approach|materials|experimental setup|model|architecture|design|метод\\w*|подход|материалы|методика|методология)\\b",
+    "results": "\\b(?:results?|evaluation|experiments?|findings|performance|результат\\w*|эксперимент\\w*|оценка качества|валидация)\\b",
     "discussion": "\\b(?:discussion|analysis|обсуждение|анализ)\\b",
-    "limitations": "\\b(?:limitations?|threats to validity|future work|ограничени\\w*)\\b",
-    "conclusion": "\\b(?:conclusions?|concluding|заключение|выводы)\\b"
+    "limitations": "\\b(?:limitations?|threats to validity|future work|ограничени\\w*|угрозы валидности|дальнейшая работа)\\b",
+    "conclusion": "\\b(?:conclusions?|concluding|заключение|выводы)\\b",
+    "problem_statement": "\\b(?:problem statement|problem formulation|постановка задачи|постановка проблемы)\\b",
+    "deployment": "\\b(?:deployment|implementation|practical applications?|внедрение|практическое применение|опытная эксплуатация)\\b",
+    "economics": "\\b(?:economic evaluation|cost analysis|financial analysis|экономическая оценка|финансовый анализ|оценка стоимости)\\b"
   },
   "file_formats": {
     ".txt": {"adapter": "text", "media_type": "text/plain"},
@@ -37,15 +40,12 @@
     ".pdf": {"adapter": "pdf", "media_type": "application/pdf"}
   },
   "file_limits": {"max_file_bytes": 52428800, "docx_document_xml_bytes": 26214400, "docx_core_xml_bytes": 1048576, "pdf_max_pages": 200, "pdf_timeout_seconds": 900},
-  "openalex_fulltext": {
-    "max_candidates": 3,
-    "skipped_labels": ["page_header", "page_footer", "reference"],
-    "bibliography_heading": "^\\s*(?:\\d+\\.?\\s*)?(?:references|bibliography|literature cited|список литературы|литература)\\s*$"
-  },
+  "openalex_fulltext": {"max_candidates": 3, "skipped_labels": ["page_header", "page_footer", "reference"], "bibliography_heading": "^\\s*(?:\\d+\\.?\\s*)?(?:references|bibliography|literature cited|список литературы|литература)\\s*$"},
   "html": {"excluded_tags": ["script", "style", "noscript", "template"], "block_tags": ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote", "td", "th"], "void_tags": ["area", "base", "br", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]},
   "file_warnings": {
     "docx": ["docx_pages_not_rendered; headers_footers_footnotes_images_not_extracted", "docx_table_cells_retained; merged_cell_geometry_not_reconstructed"],
     "html": ["html_rendered_text; scripts_styles_templates_not_extracted; browser_layout_not_rendered", "html_table_cells_retained_without_row_column_geometry"],
     "pdf": ["pdf_layout_and_ocr_require_validation; table_markdown_is_a_derived_representation"]
-  }
+  },
+  "graph_context": {"enabled": true, "max_documents": 3, "max_chunks": 4, "max_chars": 6000, "max_search_chars": 200}
 }

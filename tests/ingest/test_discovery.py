@@ -53,6 +53,40 @@ def test_invalid_doi_link_is_not_a_cross_source_identity():
 @pytest.mark.parametrize(
     "identifier",
     [
+        " w123 ",
+        "https://openalex.org/W123?tab=overview#abstract",
+        "https://api.openalex.org/works/W123",
+    ],
+)
+def test_openalex_id_forms_share_material_identity(identifier):
+    assert material_identity("openalex", identifier) == "openalex:w123"
+
+
+def test_unrelated_url_is_not_an_openalex_material():
+    with pytest.raises(ValueError, match="OpenAlex|doi.org"):
+        material_identity("openalex", "https://example.org/W123")
+
+
+@pytest.mark.parametrize(
+    "meta,message",
+    [
+        ({"count": 1}, "missing next_cursor"),
+        ({"next_cursor": "*"}, "Repeated OpenAlex cursor"),
+        ({"next_cursor": ""}, "Invalid OpenAlex cursor"),
+    ],
+)
+def test_discovery_rejects_broken_continuation(monkeypatch, meta, message):
+    monkeypatch.setattr(
+        "lctrend.ingest.discovery.fetch_openalex_page",
+        lambda *args: {"results": [{"id": "W123"}], "meta": meta},
+    )
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(discover_openalex("sensors"))
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
         "Org/Repo",
         "https://github.com/ORG/REPO/",
         "https://github.com/Org/Repo.git",

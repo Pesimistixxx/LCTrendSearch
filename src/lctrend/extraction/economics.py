@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Iterable, List, Optional, Sequence
 
 from ..core.config import load_catalog
 from ..core.models import (
+    Assertion,
     Chunk,
     Concept,
     ConceptKind,
+    DocumentEnvelope,
     EconomicEvidence,
     Mention,
     ResolutionDecision,
@@ -54,6 +57,118 @@ def amount_value(amount: str, scales: dict[str, float]) -> Optional[float]:
         if re.search(r"\b" + re.escape(word), lowered):
             return value * factor
     return value
+
+
+def _reviewed_amount(value: float, raw: str, scales: dict) -> Optional[float]:
+    """Use the reviewed numeric reading, preserving its quoted scale."""
+    for word, factor in scales.items():
+        if re.search(r"\b" + re.escape(word), raw.casefold()):
+            value *= factor
+            break
+    return value if math.isfinite(value) else None
+
+
+def economic_evidence_from_assertions(
+    document: DocumentEnvelope,
+    assertions: Sequence[Assertion],
+    concepts: Sequence[Concept],
+) -> List[EconomicEvidence]:
+    """Project reviewed financial facts; regex candidates remain separate.
+
+    Values retain the source currency, period and unit. A quoted scale may
+    normalize its numeric magnitude, but there is no currency conversion or
+    extrapolation of a forecast into an observed outcome.
+    """
+    predicates = load_catalog("llm_schema").get("economic_predicates", {})
+    rules = load_catalog("extraction")["economics"]
+    technologies = {
+        concept.concept_id
+        for concept in concepts
+        if concept.kind == ConceptKind.TECHNOLOGY
+    }
+    chunks = {chunk.chunk_id: chunk for chunk in document.chunks}
+    output = []
+    seen = set()
+    for assertion in assertions:
+        category = predicates.get(assertion.predicate)
+        subject = assertion.roles.get("subject")
+        if (
+            assertion.predicate not in predicates
+            or not category
+            or subject not in technologies
+            or assertion.status != "accepted"
+            or assertion.verification_status != "supported"
+            or assertion.polarity != "affirmed"
+            or assertion.modality not in {"reported", "observed"}
+        ):
+            continue
+        for value in assertion.values:
+            raw = value.get("raw")
+            number = value.get("value")
+            if (
+                not isinstance(raw, str)
+                or not raw.strip()
+                or isinstance(number, bool)
+                or not isinstance(number, (int, float))
+                or not math.isfinite(number)
+                or number < 0
+                or not isinstance(value.get("currency"), str)
+                or not value["currency"].strip()
+            ):
+                continue
+            for span in assertion.evidence:
+                chunk = chunks.get(span.chunk_id)
+                if (
+                    chunk is None
+                    or not (0 <= span.start < span.end <= len(chunk.text))
+                    or chunk.text[span.start : span.end] != span.quote
+                    or raw not in span.quote
+                    or any(
+                        value.get(field) is not None
+                        and (
+                            not isinstance(value[field], str)
+                            or value[field] not in span.quote
+                        )
+                        for field in ("unit", "period")
+                    )
+                ):
+                    continue
+                key = (
+                    assertion.assertion_id,
+                    span.chunk_id,
+                    span.start,
+                    span.end,
+                    raw,
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                output.append(
+                    EconomicEvidence(
+                        evidence_id=stable_id(
+                            "reviewed-economic-evidence", *key
+                        ),
+                        technology_concept_id=subject,
+                        assertion_id=assertion.assertion_id,
+                        chunk_id=span.chunk_id,
+                        category=category,
+                        quote=span.quote,
+                        start=span.start,
+                        end=span.end,
+                        amount_text=raw,
+                        amount_value=_reviewed_amount(
+                            float(number), raw, rules["scales"]
+                        ),
+                        currency=value.get("currency"),
+                        unit=value.get("unit"),
+                        period=value.get("period"),
+                        polarity=assertion.polarity,
+                        modality=assertion.modality,
+                        confidence=assertion.extraction_confidence,
+                        status="accepted",
+                    )
+                )
+    return output
 
 
 def extract_economic_evidence(

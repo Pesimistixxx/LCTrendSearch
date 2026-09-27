@@ -61,6 +61,8 @@ def load_environment(path: Optional[Path] = None) -> None:
             "LLM_API_KEY",
             "GIGACHAT_BASE_URL",
             "GIGACHAT_CREDENTIALS",
+            "OPENALEX_API_KEY",
+            "OPENALEX_MAILTO",
         }
         for key, value in dotenv_values(settings_file).items():
             if key in allowed and value is not None:

@@ -321,7 +321,10 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             )
             for domain in domains:
                 seen = set()
-                for query in [domain["name"], *domain.get("aliases", [])]:
+                queries = [domain["name"], *domain.get(
+                    "search_aliases", domain.get("aliases", [])
+                )]
+                for query in queries:
                     if query.strip().casefold() in seen:
                         continue
                     seen.add(query.strip().casefold())

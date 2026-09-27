@@ -218,6 +218,7 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
                     "document_version_id": "v1",
                     "published_at": None,
                     "chunks": [],
+                    "domains": [],
                 },
             )(),
             result,

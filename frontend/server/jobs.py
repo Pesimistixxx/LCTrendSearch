@@ -96,7 +96,8 @@ def _error(exc: Exception, stage: str) -> dict[str, str]:
         ),
         "pdf_support": "Для обработки PDF требуется установленный Docling.",
         "discovery": (
-            "Не удалось получить следующую страницу публикаций OpenAlex."
+            "Не удалось получить следующую страницу публикаций OpenAlex. "
+            "Проверьте ключ API и параметры поиска."
         ),
         "parse": "Не удалось разобрать исходный документ.",
         "fulltext": "Не удалось подготовить полный текст публикации.",
@@ -109,6 +110,17 @@ def _error(exc: Exception, stage: str) -> dict[str, str]:
         ),
         "storage": "Не удалось сохранить результат обработки на диск.",
     }
+    if stage == "discovery":
+        source_messages = {
+            "http_401": "OpenAlex отклонил ключ API. Обновите ключ источника.",
+            "http_403": "Нет доступа к OpenAlex. Проверьте ключ и лимиты API.",
+            "http_429": (
+                "Достигнут лимит OpenAlex. Продолжите сбор после "
+                "восстановления лимита API."
+            ),
+        }
+        if code in source_messages:
+            messages[stage] = source_messages[code]
     return {
         "code": code,
         "message": messages.get(
@@ -913,10 +925,10 @@ class JobManager:
                     "Job %s stopped at stage %s after cancellation",
                     job_id,
                     stage,
-                    exc_info=True,
                 )
             else:
-                logger.exception(
+                # Source exceptions may carry URLs with API credentials.
+                logger.error(
                     "Job %s failed at stage %s (%s)",
                     job_id,
                     stage,
@@ -971,11 +983,25 @@ class JobManager:
                     os.getenv("OPENALEX_MAILTO"),
                     task.get("filter"),
                 )
-                payloads = page.get("results", [])
+                if not isinstance(page, dict):
+                    raise ValueError("Invalid OpenAlex response")
+                payloads = page.get("results")
                 if not isinstance(payloads, list):
                     raise ValueError("Invalid OpenAlex results")
                 if not payloads:
                     break
+                meta = page.get("meta")
+                if not isinstance(meta, dict) or "next_cursor" not in meta:
+                    raise ValueError("Missing OpenAlex next cursor")
+                next_cursor = meta["next_cursor"]
+                if next_cursor is not None and (
+                    not isinstance(next_cursor, str)
+                    or not next_cursor
+                    or next_cursor in seen_cursors
+                ):
+                    raise ValueError("Invalid or repeated OpenAlex cursor")
+                if any(not isinstance(payload, dict) for payload in payloads):
+                    raise ValueError("Invalid OpenAlex record")
                 batch = []
                 with self._lock:
                     for payload in payloads:
@@ -1009,7 +1035,7 @@ class JobManager:
                 # one; the worker semaphore still bounds document concurrency.
                 pending |= self._schedule(job_id, batch, context)
                 pending = {task for task in pending if not task.done()}
-                cursor = page.get("meta", {}).get("next_cursor")
+                cursor = next_cursor
             if pending:
                 await asyncio.gather(*pending)
         except BaseException:
@@ -1185,6 +1211,11 @@ class JobManager:
             else:
                 processor = self._document_processor
             registry = context["registry"]
+            context_options = {}
+            if self._document_processor is None:
+                context_options["context_reader"] = getattr(
+                    context["store"], "read_related_chunks", None
+                )
             result = await aio.call(
                 processor,
                 document,
@@ -1193,6 +1224,7 @@ class JobManager:
                 ner_runtime=context["runtime"],
                 registry=registry if registry is not None else [],
                 event=lambda event: self._progress(job_id, doc_id, event),
+                **context_options,
             )
             result = ExtractionResult.model_validate(result)
             await self._publish_result(

@@ -9,8 +9,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.aio import resolve
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope, stable_id
+
+SUPPLEMENTAL_PURPOSE = (
+    "Supplemental interpretation only; not evidence for this document"
+)
 
 
 class ContextBudgetError(ValueError):
@@ -178,6 +183,7 @@ def build_payload(
     settings: PipelineSettings,
     feedback: Optional[List[str]] = None,
     hints: Optional[List[Dict[str, Any]]] = None,
+    related_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     chunks = _selected(
         document, [*packet.focus_chunk_ids, *packet.support_chunk_ids]
@@ -234,6 +240,11 @@ def build_payload(
         },
         "feedback": feedback or [],
     }
+    if related_context:
+        payload["related_context"] = {
+            "purpose": SUPPLEMENTAL_PURPOSE,
+            "chunks": related_context,
+        }
     if hints is not None:
         # Machine NER spans are optional navigation: the first thing dropped.
         visible = [hint for hint in hints if hint["chunk_id"] in selected_ids]
@@ -447,6 +458,128 @@ def expand_packet(
     return result, outcomes
 
 
+async def expand_context(
+    document, packet, requests, settings, related_context, reader=None
+):
+    """Resolve bounded reads without extending source evidence."""
+    config = load_catalog("pipeline").get("graph_context", {})
+    result, related, outcomes = packet, list(related_context), []
+    for index, value in enumerate(requests):
+        request = value.model_dump(mode="json")
+        outcome = {**request, "added_chunk_ids": []}
+        if index >= settings.max_requests_per_round:
+            outcome["status"] = "request_limit"
+        elif value.tool != "search_graph":
+            candidate, local = expand_packet(
+                document, result, [value], settings
+            )
+            outcome = local[0]
+            try:
+                build_payload(
+                    document, candidate, settings, related_context=related
+                )
+            except ContextBudgetError as error:
+                outcome.update(
+                    status="context_budget",
+                    budget_reason=str(error),
+                    added_chunk_ids=[],
+                )
+            else:
+                result = candidate
+        elif not config.get("enabled") or reader is None:
+            outcome["status"] = "graph_unavailable"
+        elif (
+            not value.argument.strip()
+            or len(value.argument) > config["max_search_chars"]
+        ):
+            outcome["status"] = "invalid_query"
+        else:
+            try:
+                rows = await resolve(
+                    reader(
+                        query=value.argument.strip(),
+                        exclude_version_id=document.document_version_id,
+                        limit_documents=config["max_documents"],
+                        limit_chunks=config["max_chunks"],
+                        max_chars=config["max_chars"],
+                    )
+                )
+                if not isinstance(rows, (list, tuple)):
+                    outcome["status"] = "invalid_graph_context"
+                    outcomes.append(outcome)
+                    continue
+            except Exception:
+                outcome["status"] = "graph_read_failed"
+            else:
+                outcome["status"] = "no_match"
+                for row in rows:
+                    # Foreign chunks must retain original text and provenance.
+                    required = (
+                        "chunk_id",
+                        "text",
+                        "document_id",
+                        "document_version_id",
+                        "title",
+                        "kind",
+                    )
+                    if not isinstance(row, dict) or any(
+                        not isinstance(row.get(key), str) for key in required
+                    ):
+                        outcome["status"] = "invalid_graph_context"
+                        continue
+                    if (
+                        row["document_version_id"]
+                        == document.document_version_id
+                    ):
+                        outcome["status"] = "invalid_graph_context"
+                        continue
+                    if any(
+                        item["chunk_id"] == row["chunk_id"] for item in related
+                    ):
+                        outcome["status"] = "already_visible"
+                        continue
+                    candidate = [
+                        *related,
+                        {
+                            key: row[key]
+                            for key in (*required, "locator")
+                            if key in row
+                        },
+                    ]
+                    if (
+                        len(candidate) > config["max_chunks"]
+                        or len({item["document_id"] for item in candidate})
+                        > config["max_documents"]
+                        or sum(len(item["text"]) for item in candidate)
+                        > config["max_chars"]
+                    ):
+                        outcome["status"] = "context_budget"
+                        outcome.setdefault("omitted_chunk_ids", []).append(
+                            row["chunk_id"]
+                        )
+                        continue
+                    try:
+                        build_payload(
+                            document,
+                            result,
+                            settings,
+                            related_context=candidate,
+                        )
+                    except ContextBudgetError as error:
+                        outcome.update(
+                            status="context_budget", budget_reason=str(error)
+                        )
+                        outcome.setdefault("omitted_chunk_ids", []).append(
+                            row["chunk_id"]
+                        )
+                    else:
+                        related = candidate
+                        outcome["added_chunk_ids"].append(row["chunk_id"])
+                        outcome["status"] = "added"
+        outcomes.append(outcome)
+    return result, related, outcomes
+
+
 def _cited_ids(value: Any) -> set:
     found = set()
     if isinstance(value, dict):
@@ -468,6 +601,7 @@ def review_payload(
     extractiondict: Dict[str, Any],
     visible_ids: Iterable[str],
     settings: PipelineSettings,
+    related_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     visible = set(visible_ids)
     _selected(document, visible)
@@ -487,12 +621,21 @@ def review_payload(
             "required_chunk_ids": [chunk.chunk_id for chunk in chunks],
             "neighbor_chunk_ids": [],
             "omitted_neighbor_chunk_ids": [],
+            "omitted_related_chunk_ids": [],
         },
     }
     if _payload_size(payload) > settings.max_payload_chars:
         raise ContextBudgetError("review_payload_chars_limit")
     by_id = _index(document)
-    for chunk_id in _neighbor_ids(document, required):
+    # Re-check all extractor-visible context, including nonadjacent requested
+    # sections. Then add local neighbors if space remains.
+    support = [
+        chunk.chunk_id for chunk in _selected(document, visible - required)
+    ]
+    support += [
+        cid for cid in _neighbor_ids(document, required) if cid not in support
+    ]
+    for chunk_id in support:
         if by_id[chunk_id].parse_status == "rejected":
             payload["review_context"]["omitted_neighbor_chunk_ids"].append(
                 chunk_id
@@ -519,6 +662,23 @@ def review_payload(
         except ContextBudgetError:
             payload["review_context"]["omitted_neighbor_chunk_ids"].append(
                 chunk_id
+            )
+        else:
+            payload = candidate
+    # Supplemental foreign material must not crowd out mandatory current
+    # evidence. Preserve whole blocks and make every omission visible.
+    for row in related_context or []:
+        previous = payload.get("related_context", {}).get("chunks", [])
+        candidate = {
+            **payload,
+            "related_context": {
+                "purpose": SUPPLEMENTAL_PURPOSE,
+                "chunks": [*previous, row],
+            },
+        }
+        if _payload_size(candidate) > settings.max_payload_chars:
+            payload["review_context"]["omitted_related_chunk_ids"].append(
+                row["chunk_id"]
             )
         else:
             payload = candidate

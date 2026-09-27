@@ -48,7 +48,7 @@ class LocalClaim(LocalModel):
 
 
 class ContextRequest(LocalModel):
-    tool: Literal["read_chunk", "search_chunks"]
+    tool: Literal["read_chunk", "search_chunks", "search_graph"]
     argument: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 

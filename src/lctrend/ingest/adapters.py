@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..core.config import load_catalog
@@ -21,6 +22,7 @@ from ..core.models import (
     SourceRef,
     stable_id,
 )
+from .connectors import normalize_openalex_work_id
 
 
 def _source(
@@ -268,12 +270,18 @@ def _pypi_people(value: Any) -> List[str]:
 def _abstract_from_inverted_index(
     index: Optional[Mapping[str, Iterable[int]]],
 ) -> str:
-    if not index:
+    if not isinstance(index, Mapping):
         return ""
     positioned = [
         (position, word)
         for word, positions in index.items()
+        if isinstance(word, str) and isinstance(positions, (list, tuple))
         for position in positions
+        if (
+            isinstance(position, int)
+            and not isinstance(position, bool)
+            and position >= 0
+        )
     ]
     return " ".join(word for _, word in sorted(positioned))
 
@@ -282,15 +290,27 @@ def parse_openalex(
     payload: Mapping[str, Any], raw: Optional[bytes] = None
 ) -> DocumentEnvelope:
     raw = raw or repr(dict(payload)).encode("utf-8")
-    openalex_id = str(payload["id"]).rsplit("/", 1)[-1]
-    doi = str(payload.get("doi") or "").removeprefix("https://doi.org/")
+    openalex_id = normalize_openalex_work_id(str(payload["id"]))
+    if not openalex_id.startswith("W"):
+        raise ValueError("OpenAlex work record must have a W-prefixed ID")
+    doi_value = payload.get("doi") or (payload.get("ids") or {}).get("doi")
+    doi = ""
+    if doi_value:
+        doi_id = normalize_openalex_work_id(str(doi_value))
+        if not doi_id.startswith("doi:"):
+            raise ValueError("OpenAlex DOI field must contain a DOI")
+        doi = doi_id.removeprefix("doi:")
     identity = doi or openalex_id
     document_id = stable_id("document", "openalex", identity)
     version_id = stable_id("version", document_id, _observation_hash(payload))
     abstract = _abstract_from_inverted_index(
         payload.get("abstract_inverted_index")
     )
-    canonical_url = payload.get("doi") or payload.get("id")
+    canonical_url = (
+        f"https://doi.org/{doi}"
+        if doi
+        else f"https://openalex.org/{openalex_id}"
+    )
 
     contributors = []
     organizations: Dict[str, Organization] = {}
@@ -347,7 +367,12 @@ def parse_openalex(
                     name=name,
                     external_ids=[
                         ExternalId(scheme="openalex", value=author_id)
-                    ],
+                    ]
+                    + (
+                        [ExternalId(scheme="orcid", value=author["orcid"])]
+                        if author.get("orcid")
+                        else []
+                    ),
                     affiliation_ids=affiliation_ids,
                 )
             )
@@ -361,6 +386,14 @@ def parse_openalex(
         for grant in payload.get("grants") or []
     ]
     funders.extend(payload.get("funders") or [])
+    awards = payload.get("awards") or []
+    funders.extend(
+        {
+            "id": award.get("funder_id"),
+            "display_name": award.get("funder_display_name"),
+        }
+        for award in awards
+    )
     for funder in funders:
         name = funder.get("display_name")
         if not name:
@@ -389,13 +422,28 @@ def parse_openalex(
                     "award_id": grant["award_id"],
                 }
             )
+    for award in awards:
+        if award.get("funder_award_id"):
+            grant = {
+                "funder": award.get("funder_display_name"),
+                "award_id": award["funder_award_id"],
+            }
+            if grant not in grants:
+                grants.append(grant)
 
-    domains = _domains_from_topics(payload.get("topics") or [])
+    topics = payload.get("topics") or (
+        [payload["primary_topic"]] if payload.get("primary_topic") else []
+    )
+    domains = _domains_from_topics(topics)
     location = payload.get("primary_location") or {}
 
     identifiers = [ExternalId(scheme="openalex", value=openalex_id)]
     if doi:
         identifiers.append(ExternalId(scheme="doi", value=doi))
+    for scheme in ("pmid", "pmcid"):
+        value = (payload.get("ids") or {}).get(scheme)
+        if value:
+            identifiers.append(ExternalId(scheme=scheme, value=str(value)))
 
     chunks = (
         [
@@ -435,13 +483,15 @@ def parse_openalex(
         chunks=chunks,
         metadata={
             "type": payload.get("type"),
-            "topics": payload.get("topics") or [],
+            "topics": topics,
             "venue": (location.get("source") or {}).get("display_name"),
             "venue_type": (location.get("source") or {}).get("type"),
             "open_access": (payload.get("open_access") or {}).get("oa_status"),
             "is_retracted": bool(payload.get("is_retracted")),
             "grants": grants,
+            "awards": awards,
             "counts_by_year": payload.get("counts_by_year") or [],
+            "referenced_works": payload.get("referenced_works") or [],
         },
         metrics={
             **(
@@ -451,12 +501,60 @@ def parse_openalex(
             ),
             "citation_count": float(payload.get("cited_by_count") or 0),
             "reference_count": float(
-                payload.get("referenced_works_count") or 0
+                payload.get("referenced_works_count")
+                if payload.get("referenced_works_count") is not None
+                else len(payload.get("referenced_works") or [])
             ),
             "authorship_count": float(len(payload.get("authorships") or [])),
         },
         coverage="abstract_only" if abstract else "metadata_only",
     )
+
+
+def _week_date(timestamp: Any) -> Optional[str]:
+    try:
+        moment = datetime.fromtimestamp(int(timestamp), timezone.utc)
+        return moment.date().isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _github_history(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Dated repository activity: release dates, weekly commit totals and
+    the first commit week of every contributor.
+    """
+    commit_weeks = {
+        week: int(item.get("total") or 0)
+        for item in payload.get("commit_activity") or []
+        if isinstance(item, Mapping)
+        for week in [_week_date(item.get("week"))]
+        if week
+    }
+    first_weeks = []
+    for author in payload.get("contributor_stats") or []:
+        if not isinstance(author, Mapping):
+            continue
+        active = [
+            week
+            for item in author.get("weeks") or []
+            if isinstance(item, Mapping) and int(item.get("c") or 0) > 0
+            for week in [_week_date(item.get("w"))]
+            if week
+        ]
+        if active:
+            first_weeks.append(min(active))
+    history: Dict[str, Any] = {}
+    if isinstance(payload.get("releases"), list):
+        history["release_dates"] = sorted(
+            str(release["published_at"])
+            for release in payload.get("releases") or []
+            if isinstance(release, Mapping) and release.get("published_at")
+        )
+    if isinstance(payload.get("commit_activity"), list):
+        history["commit_weeks"] = dict(sorted(commit_weeks.items()))
+    if isinstance(payload.get("contributor_stats"), list):
+        history["contributor_first_weeks"] = sorted(first_weeks)
+    return history
 
 
 def parse_github(
@@ -605,11 +703,13 @@ def parse_github(
             "license": (repo.get("license") or {}).get("spdx_id"),
             "stars": repo.get("stargazers_count"),
             "fork": bool(repo.get("fork")),
+            **_github_history(payload),
         },
         metrics={
             "stars": float(repo.get("stargazers_count") or 0),
             "forks": float(repo.get("forks_count") or 0),
             "watchers": float(repo.get("subscribers_count") or 0),
+            "open_issues": float(repo.get("open_issues_count") or 0),
         },
         coverage="selected_files" if chunks else "metadata_only",
     )
@@ -636,6 +736,22 @@ def parse_pypi(
         for item in payload.get("urls") or []
         if item.get("upload_time_iso_8601")
     )
+    # First upload of every release: the package's history is dated, so a
+    # snapshot can count releases known at its date. The project exists
+    # since its first release, not since the current version's upload.
+    release_dates = sorted(
+        min(uploads)
+        for uploads in (
+            [
+                item["upload_time_iso_8601"]
+                for item in files or []
+                if item.get("upload_time_iso_8601")
+            ]
+            for files in (payload.get("releases") or {}).values()
+        )
+        if uploads
+    )
+    first_release = min([*release_dates, *uploaded_at[:1]], default=None)
     domains = _domains_from_values(
         [name, info.get("summary") or "", *(info.get("classifiers") or [])]
     )
@@ -686,7 +802,7 @@ def parse_pypi(
         document_version_id=version_id,
         document_type=DocumentType.PACKAGE,
         title=name,
-        published_at=uploaded_at[0] if uploaded_at else None,
+        published_at=first_release,
         version_published_at=uploaded_at[0] if uploaded_at else None,
         retrieved_at=payload.get("_retrieved_at"),
         metrics_observed_at=payload.get("_retrieved_at"),
@@ -709,6 +825,7 @@ def parse_pypi(
             "project_urls": info.get("project_urls") or {},
             "requires_python": info.get("requires_python"),
             "country_status": "provided" if countries else "unavailable",
+            "release_dates": release_dates,
         },
         metrics={"release_file_count": float(len(payload.get("urls") or []))},
         coverage="full_text" if chunks else "metadata_only",
@@ -777,6 +894,15 @@ def _publication_date(root: ET.Element) -> Optional[str]:
     if date and re.fullmatch(r"\d{8}", date):
         date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
     return date
+
+
+def _priority_date(root: ET.Element) -> Optional[str]:
+    dates = []
+    for claim in _elements(root, "priority-claim"):
+        value = _first_text(claim, "date")
+        if value and re.fullmatch(r"\d{8}", value):
+            dates.append(f"{value[:4]}-{value[4:6]}-{value[6:]}")
+    return min(dates, default=None)
 
 
 def parse_epo(
@@ -926,6 +1052,17 @@ def parse_epo(
                 " ".join("".join(item.itertext()).split())
                 for item in _elements(root, "classification-ipcr")
             ],
+            # A family groups filings of one invention; priority dates the
+            # invention itself (patent age), publication dates the document.
+            "family_id": next(
+                (
+                    element.get("family-id")
+                    for element in root.iter()
+                    if element.get("family-id")
+                ),
+                None,
+            ),
+            "priority_date": _priority_date(root),
         },
         coverage=(
             "full_text"

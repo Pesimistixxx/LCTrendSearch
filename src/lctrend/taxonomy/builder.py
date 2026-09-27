@@ -44,6 +44,9 @@ class TaxonomyConcept:
     vector: Sequence[float]
     first_seen: Optional[date] = None
     document_dates: List[date] = field(default_factory=list)
+    document_evidence: List[Tuple[str, date]] = field(default_factory=list)
+    embedding_model: Optional[str] = None
+    embedding_observed_at: Optional[date] = None
 
     @classmethod
     def from_row(cls, row: Dict[str, object]) -> "TaxonomyConcept":
@@ -55,6 +58,13 @@ class TaxonomyConcept:
             vector=list(row["embedding"]),
             first_seen=_date(row.get("first_seen_at")),
             document_dates=[value for value in dates if value],
+            document_evidence=[
+                (str(item["document_id"]), _date(item["date"]))
+                for item in row.get("document_evidence") or []
+                if item.get("document_id") and _date(item.get("date"))
+            ],
+            embedding_model=row.get("embedding_model"),
+            embedding_observed_at=_date(row.get("embedding_observed_at")),
         )
 
 
@@ -128,7 +138,12 @@ def _spherical_kmeans(
 
 
 def _popularity(concept: TaxonomyConcept) -> float:
-    return math.log1p(len(concept.document_dates))
+    count = (
+        len({item[0] for item in concept.document_evidence})
+        if concept.document_evidence
+        else len(concept.document_dates)
+    )
+    return math.log1p(count)
 
 
 def _label(
@@ -167,7 +182,15 @@ def build_taxonomy(
     for concept in concepts:
         dates = [value for value in concept.document_dates if value <= cutoff]
         seen = concept.first_seen or (min(dates) if dates else None)
-        if concept.kind not in kinds or not seen or seen > cutoff:
+        if (
+            concept.kind not in kinds
+            or not seen
+            or seen > cutoff
+            or (
+                concept.embedding_observed_at
+                and concept.embedding_observed_at > cutoff
+            )
+        ):
             continue
         known[concept.concept_id] = TaxonomyConcept(
             concept_id=concept.concept_id,
@@ -176,9 +199,63 @@ def build_taxonomy(
             vector=concept.vector,
             first_seen=seen,
             document_dates=dates,
+            document_evidence=[
+                item for item in concept.document_evidence if item[1] <= cutoff
+            ],
+            embedding_model=concept.embedding_model,
+            embedding_observed_at=concept.embedding_observed_at,
+        )
+    parents = sorted(
+        set(
+            (child, parent)
+            for child, parent in parents
+            if child in known and parent in known and child != parent
+        )
+    )
+    dimensions = set()
+    models = set()
+    for concept in known.values():
+        vector = np.asarray(concept.vector, dtype=float)
+        if (
+            vector.ndim != 1
+            or not vector.size
+            or not np.isfinite(vector).all()
+            or not np.linalg.norm(vector)
+        ):
+            raise ValueError(
+                f"Invalid taxonomy embedding for {concept.concept_id}"
+            )
+        dimensions.add(vector.size)
+        models.add(concept.embedding_model)
+    if len(dimensions) > 1 or len(models) > 1:
+        raise ValueError(
+            "Taxonomy embeddings must share one model and dimension"
         )
     version = stable_id(
-        "taxonomy", cutoff.isoformat(), json_value(config), *sorted(known)
+        "taxonomy",
+        cutoff.isoformat(),
+        json_value(config),
+        json_value(
+            [
+                {
+                    "id": cid,
+                    "label": known[cid].label,
+                    "kind": known[cid].kind,
+                    "vector": list(known[cid].vector),
+                    "model": known[cid].embedding_model,
+                    "first_seen": known[cid].first_seen.isoformat(),
+                    "documents": sorted(
+                        (doc, day.isoformat())
+                        for doc, day in known[cid].document_evidence
+                    ),
+                    "dates": sorted(
+                        day.isoformat() for day in known[cid].document_dates
+                    ),
+                }
+                for cid in sorted(known)
+            ]
+        ),
+        json_value(parents),
     )
     ids = sorted(known)
     vectors: Dict[str, np.ndarray] = {}
@@ -278,11 +355,18 @@ def build_taxonomy(
     two_years_ago = cutoff - timedelta(days=730)
     previous_snapshot = cutoff - timedelta(days=int(config["known_age_days"]))
     for node in nodes.values():
-        dates = [
-            value
-            for cid in node.subtree_ids
-            for value in known[cid].document_dates
-        ]
+        dated_documents = {}
+        for cid in node.subtree_ids:
+            concept = known[cid]
+            evidence = concept.document_evidence or [
+                (f"legacy:{cid}:{index}", value)
+                for index, value in enumerate(concept.document_dates)
+            ]
+            for doc_id, value in evidence:
+                dated_documents[doc_id] = min(
+                    value, dated_documents.get(doc_id, value)
+                )
+        dates = list(dated_documents.values())
         node.documents_last_year = sum(value > year_ago for value in dates)
         node.documents_previous_year = sum(
             two_years_ago < value <= year_ago for value in dates

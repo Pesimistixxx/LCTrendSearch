@@ -7,10 +7,11 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from .core.aio import resolve
 from .core.config import load_catalog, load_environment
@@ -21,11 +22,14 @@ from .extraction.processing import (
 )
 from .extraction.resolver import ConceptRegistry
 from .graph.store import GraphStore
+from .graph.subgraphs import sample_subgraph, write_subgraph_rows
+from .graph.temporal import TemporalCorpus
 from .graph.training import (
-    build_feature_rows,
-    build_training_rows,
-    write_feature_rows,
-    write_training_rows,
+    build_dataset_rows,
+    build_snapshot_rows,
+    dataset_feature_fields,
+    write_dataset_rows,
+    write_snapshot_rows,
 )
 from .ingest.adapters import (
     parse_epo,
@@ -45,7 +49,6 @@ from .ingest.snapshots import persist_snapshot as _snapshot
 from .taxonomy import (
     TaxonomyConcept,
     build_taxonomy,
-    taxonomy_features,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,6 +152,7 @@ async def _write_ingested_async(
             semantic=(semantic or _semantic_deduplicator())
             if extractor == "gliner"
             else None,
+            context_reader=getattr(store, "read_related_chunks", None),
         )
     async with publication or _NoLock():
         if result is not None:
@@ -222,6 +226,57 @@ def _provider(extract: bool, extractor: str):
     return None
 
 
+def _crawl_run(platform: str, query: str, filter: Optional[str] = None):
+    bounds = {}
+    for part in (filter or "").split(","):
+        key, separator, value = part.partition(":")
+        if separator and key in (
+            "from_publication_date", "to_publication_date"
+        ):
+            bounds[key] = date.fromisoformat(value).isoformat()
+    return {
+        "crawl_id": f"crawl:{uuid4()}",
+        "source_id": f"source:{platform}",
+        "source_family": load_catalog("sources")["platforms"][platform][
+            "source_family"
+        ],
+        "query": query,
+        "filter": filter,
+        "period_start": bounds.get("from_publication_date"),
+        "period_end": bounds.get("to_publication_date"),
+        "records_seen": 0,
+        "records_ingested": 0,
+        "failures": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "status": "running",
+        # A limited topic search or registry sample cannot prove absence.
+        "exhaustive": False,
+    }
+
+
+@asynccontextmanager
+async def _crawl_audit(store, run, checkpoint):
+    await resolve(store.write_crawl_run(dict(run)))
+    try:
+        yield
+    except BaseException:
+        run["status"] = "failed"
+        raise
+    else:
+        run["status"] = "completed"
+    finally:
+        run["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if checkpoint.exists():
+            run["checkpoint_json"] = checkpoint.read_text(encoding="utf-8")
+        try:
+            await resolve(store.write_crawl_run(dict(run)))
+        except Exception:
+            logger.exception(
+                "Failed to finalize crawl audit %s", run["crawl_id"]
+            )
+
+
 async def _job_registry(store, extract: bool):
     """One in-memory registry for a whole crawl, read from the graph once."""
     if not extract:
@@ -241,8 +296,11 @@ def _crawl_openalex(
     filter: Optional[str] = None,
     workers: int = 1,
 ) -> None:
-    if limit <= 0 or not 1 <= per_page <= 200:
-        raise ValueError("limit must be positive and per-page must be 1..200")
+    if limit <= 0 or not 1 <= per_page <= 100:
+        raise ValueError("limit must be positive and per-page must be 1..100")
+    if not query.strip():
+        raise ValueError("OpenAlex query must be nonempty")
+    query = query.strip()
     if not 1 <= workers <= 16:
         raise ValueError("workers must be 1..16")
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +319,8 @@ def _crawl_openalex(
     processed = int(state.get("processed", 0))
     failures = int(state.get("failures", 0))
     cursor = state.get("cursor", "*")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor):
+        raise ValueError("Invalid OpenAlex checkpoint cursor")
     logger.info(
         "OpenAlex crawl query=%r filter=%r limit=%d workers=%d resumed_at=%d",
         query,
@@ -338,10 +398,17 @@ def _crawl_openalex(
     async def crawl():
         nonlocal processed, failures, cursor
         slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
-        async with _opened(_store()) as store:
+        seen_cursors = set()
+        crawl_run = _crawl_run("openalex", query, filter)
+        async with _opened(_store()) as store, _crawl_audit(
+            store, crawl_run, checkpoint
+        ):
             await resolve(store.ensure_schema())
             registry = await _job_registry(store, extract)
             while processed < limit and cursor:
+                if cursor in seen_cursors:
+                    raise ValueError("Repeated OpenAlex cursor")
+                seen_cursors.add(cursor)
                 page = await resolve(
                     fetch_openalex_page(
                         query,
@@ -351,9 +418,41 @@ def _crawl_openalex(
                         filter,
                     )
                 )
-                works = page.get("results", [])
+                if not isinstance(page, dict):
+                    raise ValueError("Invalid OpenAlex page")
+                works, meta = page.get("results"), page.get("meta", {})
+                if (
+                    not isinstance(works, list)
+                    or not isinstance(meta, dict)
+                    or any(not isinstance(work, dict) for work in works)
+                ):
+                    raise ValueError("Invalid OpenAlex results")
+                if works and "next_cursor" not in meta:
+                    raise ValueError(
+                        "OpenAlex response is missing next_cursor"
+                    )
+                next_cursor = meta.get("next_cursor")
+                if next_cursor is not None and (
+                    not isinstance(next_cursor, str) or not next_cursor
+                ):
+                    raise ValueError("Invalid OpenAlex cursor")
+                if works and next_cursor in seen_cursors:
+                    raise ValueError("Repeated OpenAlex cursor")
                 if not works:
                     logger.info("OpenAlex returned no more works")
+                    cursor = None
+                    checkpoint.write_text(
+                        json.dumps(
+                            {
+                                "query": query,
+                                "filter": filter,
+                                "processed": processed,
+                                "failures": failures,
+                                "cursor": cursor,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
                     break
                 outcomes = await asyncio.gather(
                     *(
@@ -363,7 +462,10 @@ def _crawl_openalex(
                 )
                 processed += len(works)
                 failures += outcomes.count(False)
-                cursor = page.get("meta", {}).get("next_cursor")
+                crawl_run["records_seen"] += len(works)
+                crawl_run["records_ingested"] += outcomes.count(True)
+                crawl_run["failures"] += outcomes.count(False)
+                cursor = next_cursor
                 checkpoint.write_text(
                     json.dumps(
                         {
@@ -376,6 +478,10 @@ def _crawl_openalex(
                     ),
                     encoding="utf-8",
                 )
+                crawl_run["checkpoint_json"] = checkpoint.read_text(
+                    encoding="utf-8"
+                )
+                await resolve(store.write_crawl_run(dict(crawl_run)))
                 elapsed = perf_counter() - started
                 logger.info(
                     "processed=%d/%d failures=%d elapsed=%.1fs "
@@ -457,12 +563,19 @@ def _crawl_pypi(
 
     async def crawl():
         nonlocal processed, successful, failures
-        async with _opened(_store()) as store:
+        crawl_run = _crawl_run(
+            "pypi",
+            json.dumps(requested_packages or {"sample_phase": sample_phase}),
+        )
+        async with _opened(_store()) as store, _crawl_audit(
+            store, crawl_run, checkpoint
+        ):
             await resolve(store.ensure_schema())
             registry = await _job_registry(store, extract)
             for package in packages[processed:]:
                 if successful >= limit:
                     break
+                crawl_run["records_seen"] += 1
                 try:
                     payload = await resolve(fetch_pypi(package))
                     raw = json.dumps(
@@ -481,8 +594,10 @@ def _crawl_pypi(
                         registry=registry,
                     )
                     successful += 1
+                    crawl_run["records_ingested"] += 1
                 except Exception as exc:
                     failures += 1
+                    crawl_run["failures"] += 1
                     logger.warning("skipped=%s error=%s", package, exc)
                     logger.debug("Package %s failed", package, exc_info=True)
                 processed += 1
@@ -502,6 +617,10 @@ def _crawl_pypi(
                         ),
                         encoding="utf-8",
                     )
+                    crawl_run["checkpoint_json"] = checkpoint.read_text(
+                        encoding="utf-8"
+                    )
+                    await resolve(store.write_crawl_run(dict(crawl_run)))
                     elapsed = perf_counter() - started
                     logger.info(
                         "successful=%d/%d processed=%d failures=%d "
@@ -524,6 +643,8 @@ def main() -> None:
         sys.stderr.reconfigure(encoding="utf-8")
     load_environment()
     log_path = setup_logging()
+    from .core.catalog_validation import validate_catalogs
+    validate_catalogs()
     settings = load_catalog("runtime")
     ner_model = os.getenv("GLINER_MODEL", "").strip() or settings["ner_model"]
     default_extractor = (
@@ -607,7 +728,10 @@ def main() -> None:
         "--limit", type=int, default=settings["openalex"]["limit"]
     )
     crawl_command.add_argument(
-        "--per-page", type=int, default=settings["openalex"]["per_page"]
+        "--per-page",
+        type=int,
+        default=settings["openalex"]["per_page"],
+        help="OpenAlex works per request, 1..100",
     )
     crawl_command.add_argument(
         "--checkpoint",
@@ -672,34 +796,43 @@ def main() -> None:
     )
     pypi_crawl_command.add_argument("--ner-model", default=ner_model)
 
+    dataset_settings = load_catalog("dataset")
     training_command = subparsers.add_parser(
-        "build-training-set", help="Export temporal technology training rows"
+        "build-training-set",
+        help="Export technology snapshots and future realization labels",
     )
     training_command.add_argument(
         "--output", type=Path, default=Path(settings["training"]["output"])
     )
     training_command.add_argument(
-        "--start-year", type=int, default=settings["training"]["start_year"]
+        "--start-year",
+        type=int,
+        default=dataset_settings["snapshots"]["start_year"],
     )
     training_command.add_argument(
         "--horizon-years",
         type=int,
-        default=settings["training"]["horizon_years"],
+        default=dataset_settings["horizon_years"],
     )
     training_command.add_argument(
         "--min-documents",
         type=int,
-        default=settings["training"]["min_documents"],
+        default=dataset_settings["min_documents"],
     )
     training_command.add_argument(
-        "--positive-future-documents",
-        type=int,
-        default=settings["training"]["positive_future_documents"],
+        "--end-date",
+        type=date.fromisoformat,
+        help="Last snapshot date (YYYY-MM-DD; defaults to corpus end)",
     )
     training_command.add_argument(
-        "--negative-future-documents",
-        type=int,
-        default=settings["training"]["negative_future_documents"],
+        "--subgraphs-output",
+        type=Path,
+        help="Also export bounded point-in-time subgraphs as JSONL",
+    )
+    training_command.add_argument(
+        "--no-taxonomy",
+        action="store_true",
+        help="Skip semantic, taxonomy and graph novelty features",
     )
     features_command = subparsers.add_parser(
         "export-features", help="Export snapshot graph features"
@@ -711,7 +844,7 @@ def main() -> None:
     features_command.add_argument(
         "--no-taxonomy",
         action="store_true",
-        help="Skip taxonomy novelty features",
+        help="Skip semantic, taxonomy and graph novelty features",
     )
     taxonomy_command = subparsers.add_parser(
         "build-taxonomy",
@@ -751,13 +884,13 @@ async def _ensure_schema(store):
     await resolve(store.ensure_schema())
 
 
-async def _training_data(store):
-    return await resolve(store.read_training_data())
+async def _temporal_data(store):
+    return TemporalCorpus(await resolve(store.read_temporal_data()))
 
 
-async def _taxonomy_data(store):
+async def _taxonomy_data(store, snapshot=None):
     kinds = load_catalog("taxonomy")["kinds"]
-    return await resolve(store.read_taxonomy_input(kinds))
+    return await resolve(store.read_taxonomy_input(kinds, snapshot=snapshot))
 
 
 def _taxonomy(snapshot: str, data) -> Any:
@@ -796,11 +929,6 @@ def _taxonomy_tree(taxonomy) -> Dict[str, Any]:
     }
 
 
-async def _feature_data(store):
-    mentions, documents, tasks = await resolve(store.read_training_data())
-    return mentions, documents, tasks, await resolve(store.read_signal_data())
-
-
 def _run(args: argparse.Namespace) -> None:
     if args.command == "init-graph":
         asyncio.run(_graph(_ensure_schema))
@@ -834,27 +962,47 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "build-training-set":
-        mentions, documents, tasks = asyncio.run(_graph(_training_data))
-        rows = build_training_rows(
-            mentions,
-            documents,
-            tasks,
-            args.start_year,
-            args.horizon_years,
-            args.min_documents,
-            args.positive_future_documents,
-            args.negative_future_documents,
+        corpus = asyncio.run(_graph(_temporal_data))
+        rows = build_dataset_rows(
+            corpus,
+            start_year=args.start_year,
+            horizon_years=args.horizon_years,
+            min_documents=args.min_documents,
+            end_date=args.end_date,
+            include_novelty=not args.no_taxonomy,
         )
         logger.info(
             "rows=%d output=%s",
-            write_training_rows(args.output, rows),
+            write_dataset_rows(args.output, rows),
             args.output,
         )
+        if args.subgraphs_output:
+            config = load_catalog("dataset")["subgraph"]
+            feature_fields = dataset_feature_fields()
+            samples = (
+                sample_subgraph(
+                    corpus.view(date.fromisoformat(row["snapshot_date"])),
+                    row["technology_id"],
+                    label=row["label_realized"],
+                    split=row["split"],
+                    config=config,
+                    features={name: row.get(name) for name in feature_fields},
+                )
+                for row in rows
+            )
+            logger.info(
+                "subgraphs=%d output=%s",
+                write_subgraph_rows(args.subgraphs_output, samples),
+                args.subgraphs_output,
+            )
         return
 
     if args.command == "build-taxonomy":
         taxonomy = _taxonomy(
-            args.snapshot, asyncio.run(_graph(_taxonomy_data))
+            args.snapshot,
+            asyncio.run(
+                _graph(lambda store: _taxonomy_data(store, args.snapshot))
+            ),
         )
 
         async def write(store):
@@ -880,22 +1028,15 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "export-features":
-        mentions, documents, tasks, signals = asyncio.run(
-            _graph(_feature_data)
-        )
-        taxonomy = (
-            None
-            if args.no_taxonomy
-            else taxonomy_features(
-                _taxonomy(args.snapshot, asyncio.run(_graph(_taxonomy_data)))
-            )
-        )
-        rows = build_feature_rows(
-            mentions, documents, tasks, args.snapshot, signals, taxonomy
+        corpus = asyncio.run(_graph(_temporal_data))
+        rows = build_snapshot_rows(
+            corpus,
+            args.snapshot,
+            include_novelty=not args.no_taxonomy,
         )
         logger.info(
             "rows=%d output=%s",
-            write_feature_rows(args.output, rows),
+            write_snapshot_rows(args.output, rows),
             args.output,
         )
         return

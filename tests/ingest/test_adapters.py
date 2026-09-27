@@ -82,6 +82,103 @@ def test_openalex_maps_every_topic_to_a_canonical_domain():
     assert document.domains[0].parent_name == "Artificial intelligence"
 
 
+def test_openalex_normalizes_doi_identity_and_reads_ids_fallback():
+    first = parse_openalex(
+        {
+            "id": "https://openalex.org/works/w123",
+            "doi": "http://dx.doi.org/10.1234/ABC",
+        }
+    )
+    second = parse_openalex(
+        {
+            "id": "W123",
+            "ids": {
+                "doi": "10.1234/abc",
+                "pmid": "https://pubmed.ncbi.nlm.nih.gov/1",
+            },
+        }
+    )
+    assert first.document_id == second.document_id
+    assert first.source.record_id == "W123"
+    assert first.source.canonical_url == "https://doi.org/10.1234/abc"
+    assert {item.scheme: item.value for item in second.identifiers} == {
+        "openalex": "W123",
+        "doi": "10.1234/abc",
+        "pmid": "https://pubmed.ncbi.nlm.nih.gov/1",
+    }
+
+
+def test_openalex_current_reference_list_and_primary_topic_are_preserved():
+    payload = {
+        "id": "W123",
+        "referenced_works": ["W1", "W2"],
+        "primary_topic": {"display_name": "Named entity recognition"},
+        "authorships": [
+            {
+                "author": {
+                    "id": "https://openalex.org/A1",
+                    "display_name": "Ada",
+                    "orcid": "https://orcid.org/0000-0001-0002-0003",
+                }
+            }
+        ],
+    }
+    document = parse_openalex(payload)
+    assert document.metrics["reference_count"] == 2
+    assert document.metadata["referenced_works"] == ["W1", "W2"]
+    assert document.domains[0].name == "Natural language processing"
+    assert document.contributors[0].external_ids[1].scheme == "orcid"
+    payload["referenced_works_count"] = 0
+    assert parse_openalex(payload).metrics["reference_count"] == 0
+
+
+def test_openalex_abstract_ignores_invalid_positions_without_crashing():
+    document = parse_openalex(
+        {
+            "id": "W123",
+            "abstract_inverted_index": {
+                "sensor": [2],
+                "A": [0],
+                "new": [1, None, "bad", False, -1],
+                "missing": None,
+            },
+        }
+    )
+    assert document.chunks[0].text == "A new sensor"
+    document = parse_openalex({"id": "W123", "abstract_inverted_index": []})
+    assert document.coverage == "metadata_only"
+
+
+def test_openalex_parses_current_awards_and_deduplicates_funders():
+    award = {
+        "id": "https://openalex.org/G1",
+        "funder_award_id": "A-1",
+        "funder_id": "https://openalex.org/F1",
+        "funder_display_name": "Science Foundation",
+    }
+    document = parse_openalex(
+        {
+            "id": "W123",
+            "awards": [award],
+            "funders": [
+                {
+                    "id": "https://openalex.org/F1",
+                    "display_name": "Science Foundation",
+                }
+            ],
+        }
+    )
+    assert len(document.organizations) == 1
+    assert document.organizations[0].role == "funder"
+    assert document.metadata["awards"] == [award]
+    assert document.metadata["grants"] == [
+        {
+            "funder": "Science Foundation",
+            "award_id": "A-1",
+        }
+    ]
+
+
 def test_github_decodes_readme_and_release():
     payload = {
         "repository": {

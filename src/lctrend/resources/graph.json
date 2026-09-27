@@ -2,20 +2,24 @@
   "assertion_roles": {
     "subject": "SUBJECT", "problem": "PROBLEM", "task": "TASK", "method": "METHOD",
     "baseline": "BASELINE", "application": "APPLICATION", "metric": "METRIC", "material": "MATERIAL",
-    "organization": "ORGANIZATION", "country": "COUNTRY", "parent": "PARENT"
+    "organization": "ORGANIZATION", "country": "COUNTRY", "parent": "PARENT", "domain": "DOMAIN", "market": "MARKET"
   },
   "organization_relationships": {"owner": "OWNED_BY", "applicant": "APPLIED_BY", "funder": "FUNDED_BY"},
   "organization_labels": {"university": "University", "company": "Company"},
-  "solution_predicates": ["solves_task"],
   "projection_note": "Each projection turns a reviewed, affirmed, reported/observed assertion into a direct edge carrying its evidence, run and date.",
   "projections": {
-    "solves_task": {"relationship": "SOLVES", "source_role": "subject", "target_role": "task", "source_kinds": ["Technology"], "target_kinds": ["Task"]},
+    "solves_task": {"relationship": "SOLVES", "source_role": "subject", "target_role": "task", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Task"]},
     "developed_by": {"relationship": "DEVELOPED_BY", "source_role": "subject", "target_role": "organization", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Organization", "Company", "University"]},
     "used_by": {"relationship": "USED_BY", "source_role": "subject", "target_role": "organization", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Organization", "Company", "University"]},
     "funded_by": {"relationship": "FUNDED_BY", "source_role": "subject", "target_role": "organization", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Organization", "Company", "University"]},
     "developed_in": {"relationship": "DEVELOPED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]},
     "located_in": {"relationship": "LOCATED_IN", "source_role": "organization", "target_role": "country", "source_kinds": ["Organization", "Company", "University"], "target_kinds": ["Country"]},
-    "subtechnology_of": {"relationship": "SUBTECHNOLOGY_OF", "source_role": "subject", "target_role": "parent", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Technology", "Method", "Material", "Domain"]}
+    "subtechnology_of": {"relationship": "SUBTECHNOLOGY_OF", "source_role": "subject", "target_role": "parent", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Technology", "Method", "Material", "Domain"]},
+    "belongs_to_domain": {"relationship": "BELONGS_TO_DOMAIN", "source_role": "subject", "target_role": "domain", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Domain"]},
+    "targets_market": {"relationship": "TARGETS_MARKET", "source_role": "subject", "target_role": "market", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["MarketSegment"]},
+    "manufactured_in": {"relationship": "MANUFACTURED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]},
+    "tested_in": {"relationship": "TESTED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]},
+    "deployed_in": {"relationship": "DEPLOYED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]}
   },
   "maturity_predicate": "reports_maturity_stage",
   "maturity_stage_rank": {"concept": 1, "laboratory_validation": 2, "prototype": 3, "pilot": 4, "commercial_deployment": 5, "mass_adoption": 6}

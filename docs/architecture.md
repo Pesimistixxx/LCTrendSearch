@@ -67,10 +67,11 @@ flowchart TD
         F4["taxonomy_features: semantic_novelty,<br/>new_branch_in_known_area, branch_growth"]:::done
     end
 
-    subgraph G["7. Признаки и модель — graph/training.py"]
-        G1["build_feature_rows (export-features)"]:::done
-        G2["build_training_rows (build-training-set)<br/>метка: рост за 3 года; без таксономии"]:::partial
-        G3["Хайп и шум: только reliability_tier,<br/>independence_group и их разнообразие"]:::partial
+    subgraph G["7. Временной датасет — graph/temporal.py, features.py, training.py"]
+        G1["TemporalCorpus → build_snapshot_rows<br/>признаки только на дату среза"]:::done
+        G2["build_dataset_rows (build-training-set)<br/>реализация в горизонте, пропуски, purged splits"]:::done
+        G8["sample_subgraph → JSONL<br/>типизированные узлы/связи; optional PyG"]:::done
+        G3["Надёжность, независимость,<br/>концентрация и качество свидетельств"]:::done
         G4["Отбор кандидатов"]:::missing
         G5["Graph Transformer / HGT"]:::missing
         G6["Интерпретируемый классификатор + SHAP"]:::missing
@@ -127,6 +128,7 @@ flowchart TD
     G4 -.-> G5
     G5 -.-> G6
     G2 -.-> G6
+    G1 --> G8
     G6 -.-> G7
 ```
 
@@ -148,8 +150,9 @@ flowchart TD
 | 12 | Результат | `core.models.ExtractionResult` | mentions, concepts, assertions, resolutions, economic_evidence, concept_embeddings |
 | 13 | Запись | `GraphStore.write_processed` | документ + результат в одной транзакции |
 | 14 | Таксономия | `taxonomy.build_taxonomy`, `GraphStore.write_taxonomy` | эмбеддинги концептов → дерево `TaxonomyNode` на дату среза |
-| 15 | Признаки | `training.build_feature_rows`, `taxonomy_features` | граф + дерево → CSV признаков по технологиям |
-| 16 | Обучающая выборка | `training.build_training_rows` | граф → строки с меткой «рост за 3 года» |
+| 15 | Признаки | `TemporalCorpus`, `training.build_snapshot_rows`, `features`, `novelty` | версии и наблюдения до даты T → CSV признаков и manifest |
+| 16 | Обучающая выборка | `training.build_dataset_rows` | срезы T → признаки, будущие результаты реализации и временные разбиения |
+| 17 | Подграфы | `subgraphs.sample_subgraph`, `write_subgraph_rows`, `to_pyg` | срез T → ограниченный типизированный JSONL; необязательный `HeteroData` |
 
 ## 3. Модель данных
 
@@ -257,13 +260,27 @@ flowchart LR
 - `new_branch_in_known_area` — ветка в основном новая, а родительская в основном старая;
 - `branch_growth`, `branch_new_share`, `taxonomy_level`, `taxonomy_node_size`, `taxonomy_sibling_count`, `taxonomy_general_term`.
 
-## 6. Все колонки `export-features`
+## 6. Временной датасет
 
-- Активность: `document_count`, `mention_count`, `documents_last_year`, `publication_growth`, `first_seen_date`, `technology_age_days`, `citation_count`.
-- Распространение: `country_count`, `company_count`, `university_count`, `domain_count`, `source_type_diversity`, `independence_group_diversity`, `new_relation_count`, `patent_data_available`, `repository_data_available`.
-- Участники из текста: `developer_count`, `user_count`, `funder_count`, `text_country_count`, `parent_technology_count`, `task_count`.
-- Зрелость и экономика: `max_maturity_rank`, `max_trl`, `economic_evidence_count`, `economic_data_available`.
-- Таксономия: 8 колонок из раздела 5.
+`export-features` и `build-training-set` читают один набор данных через `GraphStore.read_temporal_data`, который содержит версии документов, датированные упоминания, связи, assertions, зрелость, экономику и аудит обходов источников. `TemporalCorpus.view(T)` отсекает данные, опубликованные, полученные или наблюдённые после T. Метрики используют собственную дату наблюдения; истории релизов, коммитов и цитирования также обрезаются. Позднее обновление документа не меняет его прошлый срез. Если старые данные не содержат даты наблюдения, достоверный исторический признак может остаться неизвестным.
+
+Строка соответствует `technology_id × snapshot_date`; `snapshot_id` обозначает дату среза. Группы признаков:
+
+- Динамика документов и упоминаний в нескольких окнах, рост публикаций и цитирований, патентов, репозиториев и пакетов, ускорение и плато.
+- Независимость и надёжность источников, разнообразие источников, концентрация, повторяемость материалов, полнота текста и качество разрешения сущностей.
+- Разнообразие стран, организаций и областей, новые участники и связи; экономические утверждения отдельно от прогнозов и отрицаний.
+- Зрелость, TRL, история прототипа и пилота, частота релизов, активность пакетов, патентные семьи и стандартизация.
+- Семантическая новизна, положение в таксономии, центральности и мосты между областями; дорогие вычисления общие для всех технологий среза.
+
+Пустое значение и индикатор пропуска отличают неизвестное от нуля. Аудит `CrawlRun` хранит источник, запрос, границы периода, счётчики, состояние возобновления, время и статус. Ограниченные CLI-обходы отмечаются `exhaustive=false`: отсутствие результата тематической выборки не доказывает отсутствие технологии в источнике.
+
+`build-training-set` добавляет `horizon_end`, `future_*`, `label_realized` и причину отсутствия метки. Метка оценивает реализацию после T: независимые подтверждения плюс патент, код, пакет, пользователь либо подтверждение коммерциализации. Ранее коммерческая технология не является новым слабым сигналом. Количество будущих публикаций само по себе не является положительной меткой. Незавершённый горизонт, неизвестная исходная зрелость или недостаточное покрытие источников оставляют метку неизвестной. Поля `future_*`, метки, горизонт и разбиение исключаются из списка входных признаков в соседнем `<output>.manifest.json`.
+
+Для отрицательной метки по умолчанию требуется полный наблюдаемый горизонт в научных, программных, пакетных, патентных и коммерческих источниках. Ограниченные CLI-обходы не удовлетворяют этому условию, а полного обхода коммерческих источников пока нет; отсутствие реализации часто остаётся неизвестным.
+
+Разбиение строится по времени: последние размеченные срезы — `test`; для `valid` выбираются последние более ранние срезы с горизонтом, завершённым до начала теста. Строки предыдущей части, у которых `horizon_end` достигает начала следующей части, помечаются `purged`, чтобы интервалы результатов не перекрывались. Строки без метки получают `unlabeled`. Для обучения используются `train`; для оценки — `valid`/`test`. Недостаточная размеченная история может оставить часть пустой.
+
+Подграф каждого образца строится из того же среза T, ограничен количеством переходов, соседей и узлов, хранит типы, даты и маски пропусков (1 — неизвестное, 0 — наблюдаемое). JSONL и соседний manifest со схемой узлов и рёбер работают без библиотек глубокого обучения. `to_pyg(sample, feature_schema=manifest)` лениво импортирует `torch` и `torch-geometric` и создаёт `HeteroData` с общим порядком признаков; сама модель пока не обучается. Параметры датасета, меток, разбиений и лимитов находятся в `resources/dataset.json`.
 
 ## 7. Порядок запуска
 
@@ -271,8 +288,8 @@ flowchart LR
 lctrend init-graph                                   # ограничения и индексы Neo4j
 lctrend crawl-openalex "edge ai" --limit 500         # или веб-интерфейс / crawl-pypi / ingest
 lctrend build-taxonomy --snapshot 2026-01-01         # дерево в Neo4j + artifacts/taxonomy/2026-01-01.json
-lctrend export-features --snapshot 2026-01-01        # CSV признаков (с таксономией; --no-taxonomy без неё)
-lctrend build-training-set                           # строки с меткой роста за 3 года
+lctrend export-features --snapshot 2026-01-01        # CSV + manifest; --no-taxonomy отключает новизну
+lctrend build-training-set --end-date 2025-01-01 --subgraphs-output artifacts/subgraphs.jsonl
 ```
 
 Эмбеддинги концептов появляются, только если во время загрузки работал смысловой слой: `resolver.json → semantic.use_in_llm = true` и заданы ключи GigaChat. Без них таксономия пустая.
@@ -282,6 +299,5 @@ lctrend build-training-set                           # строки с метк�
 - Источники: вакансии, гранты, стандарты, регуляторика, новости (типы документов уже есть в `DocumentType`).
 - Поиск контекста по другим документам (RAG) и передача известных концептов в запрос к LLM.
 - Склейка организаций из метаданных и из текста.
-- Признаки таксономии в `build-training-set` (сейчас только в `export-features`).
-- Хайп и шум: нет доли пресс-релизов, поиска дублей, оценки рекламного языка.
+- Хайп и шум: нет полноценной оценки рекламного языка; надёжность и концентрация источников уже входят в датасет.
 - Отбор кандидатов, Graph Transformer, классификатор с SHAP, объяснения, TOP-15.

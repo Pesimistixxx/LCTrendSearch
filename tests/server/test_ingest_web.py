@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from frontend.server.app import create_app
+from frontend.server.app import _source_status, create_app
 from frontend.server.jobs import default_workers
 
 
@@ -394,3 +394,134 @@ def test_container_ui_writes_settings_to_persistent_directory(
     load_environment(tmp_path / "missing.env")
     assert os.environ["LLM_MODEL"] == "saved-model"
     assert os.environ["LLM_API_KEY"] == "saved-secret"
+
+
+def test_openalex_source_settings_preserve_keys_and_return_readiness_only(
+    api, monkeypatch
+):
+    import os
+
+    client, _, root = api
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENALEX_MAILTO", raising=False)
+    (root / ".env").write_text("OTHER_SETTING=preserve\n", encoding="utf-8")
+    response = client.post(
+        "/api/ingest/sources/settings",
+        json={
+            "openalex_api_key": "  openalex-private-key  ",
+            "openalex_mailto": "  researcher@example.org  ",
+        },
+    )
+    assert response.status_code == 200
+    source = response.json()["sources"]["openalex"]
+    assert source["configured"] and source["has_key"]
+    assert source["mailto"] == "researcher@example.org"
+    assert "openalex-private-key" not in response.text
+    assert "openalex-private-key" not in str(_source_status())
+    saved = (root / ".env").read_text(encoding="utf-8")
+    assert "openalex-private-key" in saved
+    assert "OTHER_SETTING=preserve" in saved
+    for blank in ("", None):
+        response = client.post(
+            "/api/ingest/sources/settings",
+            json={"openalex_api_key": blank, "openalex_mailto": ""},
+        )
+        assert response.status_code == 200
+        assert os.getenv("OPENALEX_API_KEY") == "openalex-private-key"
+        assert response.json()["sources"]["openalex"]["mailto"] == ""
+
+
+@pytest.mark.parametrize("active_kind", ["job", "crawl"])
+def test_openalex_settings_are_locked_during_discovery(
+    api, monkeypatch, active_kind
+):
+    client, manager, root = api
+    monkeypatch.setenv("OPENALEX_API_KEY", "original-key")
+    if active_kind == "job":
+        manager.jobs.append({"status": "running"})
+    else:
+        client.post("/api/ingest/crawls", json={"topic": "robotics"})
+    response = client.post(
+        "/api/ingest/sources/settings",
+        json={"openalex_api_key": "replacement"},
+    )
+    assert response.status_code == 409
+    assert not (root / ".env").exists()
+
+
+def test_source_settings_rollback_environment_and_file_on_save_failure(
+    api, monkeypatch
+):
+    import os
+    from pathlib import Path
+
+    client, _, root = api
+    monkeypatch.setenv("OPENALEX_API_KEY", "original-key")
+    monkeypatch.setenv("OPENALEX_MAILTO", "original@example.org")
+    saved = root / ".env"
+    saved.write_text("UNCHANGED=1\n", encoding="utf-8")
+
+    def failed_replace(self, target):
+        raise OSError("mock filesystem error")
+
+    monkeypatch.setattr(Path, "replace", failed_replace)
+    response = client.post(
+        "/api/ingest/sources/settings",
+        json={
+            "openalex_api_key": "new-private-key",
+            "openalex_mailto": "new@example.org",
+        },
+    )
+    assert response.status_code == 500
+    assert "new-private-key" not in response.text
+    assert os.getenv("OPENALEX_API_KEY") == "original-key"
+    assert os.getenv("OPENALEX_MAILTO") == "original@example.org"
+    assert saved.read_text(encoding="utf-8") == "UNCHANGED=1\n"
+    assert not list(root.glob(".env-*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "route,body",
+    [
+        (
+            "/api/ingest/sources/settings",
+            {"openalex_api_key": "private-key\ninvalid"},
+        ),
+        (
+            "/api/ingest/sources/settings",
+            {"openalex_api_key": {"private-key": "invalid"}},
+        ),
+        (
+            "/api/ingest/sources/settings",
+            {"openalex_api_key": "private-key" + "x" * 20000},
+        ),
+        (
+            "/api/ingest/settings",
+            {"api_key": {"private-key": "invalid"}},
+        ),
+    ],
+)
+def test_invalid_settings_never_echo_secrets(api, route, body):
+    client, _, root = api
+    response = client.post(route, json=body)
+    assert response.status_code == 422
+    assert "private-key" not in response.text
+    assert not (root / ".env").exists()
+
+
+def test_invalid_openalex_email_does_not_save_key(api):
+    client, _, root = api
+    response = client.post(
+        "/api/ingest/sources/settings",
+        json={"openalex_api_key": "private-key", "openalex_mailto": "bad"},
+    )
+    assert response.status_code == 422
+    assert "private-key" not in response.text
+    assert not (root / ".env").exists()
+
+
+def test_openalex_status_describes_optional_anonymous_access(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    source = _source_status()["openalex"]
+    assert not source["has_key"]
+    assert "Без ключа" in source["message"]

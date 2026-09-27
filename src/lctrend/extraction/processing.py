@@ -109,6 +109,12 @@ SEMANTIC_ENV = (
     "DEDUP_COSINE_THRESHOLD",
     "DEDUP_DECISION_THRESHOLD",
     "DEDUP_DECISION_MODEL",
+    "GIGACHAT_CREDENTIALS",
+    "GIGACHAT_SCOPE",
+    "GIGACHAT_BASE_URL",
+    "GIGACHAT_CA_BUNDLE_FILE",
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
 )
 
 
@@ -125,7 +131,11 @@ def _llm_semantic() -> SemanticDeduplicator | None:
     )
     if not enabled:
         return None
-    key = tuple(os.getenv(name) for name in SEMANTIC_ENV)
+    key = stable_id(
+        "semantic-config",
+        load_catalog("resolver"),
+        *(os.getenv(name) for name in SEMANTIC_ENV),
+    )
     if key not in _SHARED_SEMANTIC:
         _SHARED_SEMANTIC.clear()
         _SHARED_SEMANTIC[key] = _semantic_deduplicator()
@@ -142,6 +152,7 @@ async def process_material(
     event=None,
     ner_runtime=None,
     semantic=None,
+    context_reader=None,
 ) -> ExtractionResult:
     """Use identical extraction semantics and contracts in CLI and web."""
     if mode not in {"hybrid", "llm", "gliner", "none"}:
@@ -172,6 +183,7 @@ async def process_material(
             ner=model if mode == "hybrid" else None,
             ner_name=name if mode == "hybrid" and model is not None else None,
             event=event,
+            context_reader=context_reader,
         )
     model = model if model is not None else NerRuntime(model_name=name)
     return await _extract(

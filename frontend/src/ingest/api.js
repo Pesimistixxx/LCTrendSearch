@@ -31,6 +31,7 @@ export const api = {
   materials: (id, status, offset = 0, limit = 100) => request(`/crawls/${encodeURIComponent(id)}/materials?status=${encodeURIComponent(status)}&limit=${limit}&offset=${offset}`),
   status: () => request('/status'),
   settings: body => request('/settings', { method: 'POST', body: JSON.stringify(body) }),
+  sourceSettings: body => request('/sources/settings', { method: 'POST', body: JSON.stringify(body) }),
   result: (job, document) => request(`/jobs/${encodeURIComponent(job)}/documents/${encodeURIComponent(document)}/result`),
   downloadUrl: (job, document) => `${BASE}/jobs/${encodeURIComponent(job)}/documents/${encodeURIComponent(document)}/download`,
 }

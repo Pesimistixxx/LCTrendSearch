@@ -1,17 +1,17 @@
 {
   "domains": [
-    {"name": "Natural language processing", "parent_name": "Artificial intelligence", "aliases": ["natural language processing", "named entity recognition", "ner"]},
-    {"name": "Computer vision", "parent_name": "Artificial intelligence", "aliases": ["computer vision", "image recognition"]},
-    {"name": "Machine learning", "parent_name": "Artificial intelligence", "aliases": ["machine learning", "deep learning"]},
-    {"name": "Bioinformatics", "parent_name": "Life sciences", "aliases": ["bioinformatics", "computational biology", "genomics"]},
-    {"name": "Edge computing", "parent_name": "Computer systems", "aliases": ["edge computing", "fog computing", "edge ai"]},
-    {"name": "Fintech", "parent_name": "Economics", "aliases": ["fintech", "financial technology", "digital payments", "digital banking"]},
-    {"name": "Artificial intelligence", "parent_name": null, "aliases": ["artificial intelligence"]},
-    {"name": "Robotics", "parent_name": "Engineering", "aliases": ["robotics", "robotic"]},
-    {"name": "Cybersecurity", "parent_name": "Computer systems", "aliases": ["cybersecurity", "computer security", "information security"]},
-    {"name": "Quantum computing", "parent_name": "Physical sciences", "aliases": ["quantum computing", "quantum information"]},
-    {"name": "Semiconductors", "parent_name": "Physical sciences", "aliases": ["semiconductor", "integrated circuit"]},
-    {"name": "Energy technology", "parent_name": "Engineering", "aliases": ["renewable energy", "energy storage", "smart grid"]}
+    {"name": "Natural language processing", "parent_name": "Artificial intelligence", "aliases": ["natural language processing", "named entity recognition", "ner", "обработка естественного языка", "распознавание именованных сущностей"], "search_aliases": ["natural language processing", "named entity recognition", "ner"]},
+    {"name": "Computer vision", "parent_name": "Artificial intelligence", "aliases": ["computer vision", "image recognition", "компьютерное зрение", "распознавание изображений"], "search_aliases": ["computer vision", "image recognition"]},
+    {"name": "Machine learning", "parent_name": "Artificial intelligence", "aliases": ["machine learning", "deep learning", "машинное обучение", "глубокое обучение"], "search_aliases": ["machine learning", "deep learning"]},
+    {"name": "Bioinformatics", "parent_name": "Life sciences", "aliases": ["bioinformatics", "computational biology", "genomics", "биоинформатика", "вычислительная биология", "геномика"], "search_aliases": ["bioinformatics", "computational biology", "genomics"]},
+    {"name": "Edge computing", "parent_name": "Computer systems", "aliases": ["edge computing", "fog computing", "edge ai", "периферийные вычисления", "туманные вычисления"], "search_aliases": ["edge computing", "fog computing", "edge ai"]},
+    {"name": "Fintech", "parent_name": "Economics", "aliases": ["fintech", "financial technology", "digital payments", "digital banking", "финтех", "финансовые технологии", "цифровые платежи", "цифровой банкинг"], "search_aliases": ["fintech", "financial technology", "digital payments", "digital banking"]},
+    {"name": "Artificial intelligence", "parent_name": null, "aliases": ["artificial intelligence", "искусственный интеллект"], "search_aliases": ["artificial intelligence"]},
+    {"name": "Robotics", "parent_name": "Engineering", "aliases": ["robotics", "robotic", "робототехника", "роботизация"], "search_aliases": ["robotics", "robotic"]},
+    {"name": "Cybersecurity", "parent_name": "Computer systems", "aliases": ["cybersecurity", "computer security", "information security", "кибербезопасность", "компьютерная безопасность", "информационная безопасность"], "search_aliases": ["cybersecurity", "computer security", "information security"]},
+    {"name": "Quantum computing", "parent_name": "Physical sciences", "aliases": ["quantum computing", "quantum information", "квантовые вычисления", "квантовая информация"], "search_aliases": ["quantum computing", "quantum information"]},
+    {"name": "Semiconductors", "parent_name": "Physical sciences", "aliases": ["semiconductor", "integrated circuit", "полупроводники", "интегральные схемы"], "search_aliases": ["semiconductor", "integrated circuit"]},
+    {"name": "Energy technology", "parent_name": "Engineering", "aliases": ["renewable energy", "energy storage", "smart grid", "возобновляемая энергетика", "накопители энергии", "умные электросети"], "search_aliases": ["renewable energy", "energy storage", "smart grid"]}
   ],
   "crawl_directions": ["Artificial intelligence", "Robotics", "Edge computing", "Fintech"],
   "platforms": {

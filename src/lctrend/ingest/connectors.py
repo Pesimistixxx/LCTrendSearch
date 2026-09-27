@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
+import re
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -67,6 +69,9 @@ def _retry_after(response: httpx.Response) -> Optional[float]:
             reset = float(response.headers["X-RateLimit-Reset"])
         except (KeyError, ValueError):
             return None
+        # OpenAlex reports seconds until reset; GitHub reports a Unix time.
+        if response.request.url.host == "api.openalex.org":
+            return max(0.0, reset) + 1.0
         return max(0.0, reset - time.time()) + 1.0
     return None
 
@@ -163,15 +168,66 @@ async def fetch_json(
     return json.loads(response.content.decode("utf-8"))
 
 
-async def fetch_openalex(
-    work_id: str, mailto: Optional[str] = None
+def normalize_openalex_work_id(work_id: str) -> str:
+    """Normalize a work key, OpenAlex URL or DOI to a singleton API ID."""
+    value = work_id.strip()
+    if value.lower().startswith(("http://", "https://")):
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.username or parsed.password or parsed.port:
+            raise ValueError("Invalid OpenAlex work URL")
+        host = (parsed.hostname or "").lower()
+        path = urllib.parse.unquote(parsed.path).strip("/")
+        if host in {"openalex.org", "www.openalex.org", "api.openalex.org"}:
+            value = path.removeprefix("works/")
+        elif host in {"doi.org", "dx.doi.org"}:
+            value = "doi:" + path
+        else:
+            raise ValueError("Work URL must use OpenAlex or doi.org")
+    value = value.removeprefix("works/")
+    if re.fullmatch(r"W\d+", value, re.I):
+        return value.upper()
+    if value.lower().startswith("doi:"):
+        value = value[4:]
+    if re.fullmatch(r"10\.\d+/\S+", value):
+        return "doi:" + value.casefold()
+    if re.fullmatch(r"pmid:\d+", value, re.I):
+        return value.lower()
+    raise ValueError("Expected an OpenAlex work ID (W...), DOI or work URL")
+
+
+def _openalex_headers(api_key: Optional[str]) -> Optional[Dict[str, str]]:
+    key = os.getenv("OPENALEX_API_KEY") if api_key is None else api_key
+    key = (key or "").strip()
+    return {"Authorization": f"Bearer {key}"} if key else None
+
+
+async def _fetch_openalex_json(
+    url: str, api_key: Optional[str]
 ) -> Dict[str, Any]:
-    identifier = urllib.parse.quote(work_id, safe=":/")
+    headers = _openalex_headers(api_key)
+    # Keep unauthenticated calls compatible with simple injected fetchers.
+    if headers:
+        return await resolve(fetch_json(url, headers))
+    return await resolve(fetch_json(url))
+
+
+async def fetch_openalex(
+    work_id: str,
+    mailto: Optional[str] = None,
+    *,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    identifier = urllib.parse.quote(
+        normalize_openalex_work_id(work_id), safe=":/"
+    )
     api_base = load_catalog("sources")["platforms"]["openalex"]["api_base"]
     url = f"{api_base}/{identifier}"
     if mailto:
         url += "?" + urllib.parse.urlencode({"mailto": mailto})
-    return _observed(await resolve(fetch_json(url)))
+    payload = await _fetch_openalex_json(url, api_key)
+    if not isinstance(payload, dict):
+        raise ValueError("OpenAlex response must contain a work object")
+    return _observed(payload)
 
 
 async def fetch_openalex_page(
@@ -180,7 +236,13 @@ async def fetch_openalex_page(
     per_page: int = 100,
     mailto: Optional[str] = None,
     filter: Optional[str] = None,
+    *,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
+    if isinstance(per_page, bool) or not isinstance(per_page, int):
+        raise ValueError("OpenAlex per_page must be an integer from 1 to 100")
+    if not 1 <= per_page <= 100:
+        raise ValueError("OpenAlex per_page must be from 1 to 100")
     params = {"search": search, "cursor": cursor, "per-page": per_page}
     if filter:
         # OpenAlex filter syntax, e.g.
@@ -188,13 +250,18 @@ async def fetch_openalex_page(
         params["filter"] = filter
     if mailto:
         params["mailto"] = mailto
-    payload = await resolve(
-        fetch_json(
-            load_catalog("sources")["platforms"]["openalex"]["api_base"]
-            + "?"
-            + urllib.parse.urlencode(params)
-        )
+    payload = await _fetch_openalex_json(
+        load_catalog("sources")["platforms"]["openalex"]["api_base"]
+        + "?"
+        + urllib.parse.urlencode(params),
+        api_key,
     )
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("results"), list)
+        or any(not isinstance(item, dict) for item in payload["results"])
+    ):
+        raise ValueError("OpenAlex response must contain a list of works")
     observed_at = datetime.now(timezone.utc).isoformat()
     return {
         **payload,
@@ -271,9 +338,15 @@ async def fetch_github(
     releases_url = f"{base}/releases?" + urllib.parse.urlencode(
         {"per_page": settings["releases_per_page"]}
     )
-    readme, releases = await asyncio.gather(
+    # Weekly statistics are dated history (commit cadence, first commit of
+    # each contributor), so snapshot features stay point-in-time. GitHub
+    # answers 202 with an empty body while it computes them; the repository
+    # is still usable without them.
+    readme, releases, activity, contributors = await asyncio.gather(
         resolve(fetch_json(readme_url, headers)),
         resolve(fetch_json(releases_url, headers)),
+        resolve(fetch_json(f"{base}/stats/commit_activity", headers)),
+        resolve(fetch_json(f"{base}/stats/contributors", headers)),
         return_exceptions=True,
     )
     if isinstance(readme, BaseException):
@@ -285,6 +358,20 @@ async def fetch_github(
         logger.warning(
             "GitHub %s: releases unavailable (%s)", repository, releases
         )
-        releases = []
+        releases = None
+    for name, value in (
+        ("commit activity", activity),
+        ("contributors", contributors),
+    ):
+        if isinstance(value, BaseException):
+            logger.warning(
+                "GitHub %s: %s unavailable (%s)", repository, name, value
+            )
     result["readme"], result["releases"] = readme, releases
+    result["commit_activity"] = (
+        activity if isinstance(activity, list) else None
+    )
+    result["contributor_stats"] = (
+        contributors if isinstance(contributors, list) else None
+    )
     return _observed(result)
