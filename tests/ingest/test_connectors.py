@@ -1,11 +1,69 @@
 import asyncio
+import gzip
+import json
 import logging
+import zlib
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 
 from lctrend.ingest import connectors
+
+
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [("gzip", gzip.compress), ("deflate", zlib.compress)],
+)
+def test_request_decodes_compressed_stream_once(
+    monkeypatch, encoding, compress
+):
+    payload = {"results": [{"title": "Машинное обучение"}]}
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    compressed = compress(body)
+
+    def fetch(request):
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Encoding": encoding,
+                "Content-Length": str(len(compressed)),
+                "Content-Type": "application/json",
+                "X-RateLimit-Remaining": "10",
+            },
+            stream=httpx.ByteStream(compressed),
+        )
+
+    monkeypatch.setattr(connectors, "TRANSPORT", httpx.MockTransport(fetch))
+    response = asyncio.run(connectors.request("https://api.openalex.org/works"))
+    assert response.content == body
+    assert response.json() == payload
+    assert "Content-Encoding" not in response.headers
+    assert int(response.headers["Content-Length"]) == len(body)
+    assert response.headers["Content-Type"] == "application/json"
+    assert response.headers["X-RateLimit-Remaining"] == "10"
+
+
+def test_compressed_response_limit_applies_to_decoded_body(monkeypatch):
+    body = b"x" * 1000
+    compressed = gzip.compress(body)
+    assert len(compressed) < 100
+
+    monkeypatch.setattr(
+        connectors,
+        "TRANSPORT",
+        httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=httpx.ByteStream(compressed),
+            )
+        ),
+    )
+    with pytest.raises(ValueError, match="size limit"):
+        asyncio.run(
+            connectors.request("https://example.org/data", max_bytes=100)
+        )
 
 
 def test_openalex_page_includes_search_and_cursor(monkeypatch):

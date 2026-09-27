@@ -1,7 +1,7 @@
 """Bounded document processing: packets, extraction, review, resolution.
 
-This coordinator has no trend selection, network context tools or graph
-writes. Only the caller publishes its validated result to Neo4j.
+The coordinator reads bounded original context through an injected reader.
+The caller publishes its validated result to Neo4j.
 """
 
 from __future__ import annotations

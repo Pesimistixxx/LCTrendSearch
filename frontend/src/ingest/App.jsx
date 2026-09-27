@@ -94,7 +94,7 @@ export default function Ingestion() {
       <p className="hint">Лимит: {crawl.limit ? `${crawl.limit} на направление и источник` : 'нет, вся выдача'}</p>
       {crawl.directions?.length > 0 && <table className="directions"><thead><tr><th>Направление</th><th>OpenAlex</th><th>GitHub</th><th>PyPI</th></tr></thead><tbody>{crawl.directions.map(direction => <tr key={direction.name}><td>{direction.name}</td>{['openalex', 'github', 'pypi'].map(source => { const value = direction.sources?.[source] || {}; return <td key={source}>{(value.parsed || 0) + (value.partial || 0)} / {value.discovered || 0}{value.failed ? <small className="error"> · ошибок {value.failed}</small> : null}</td> })}</tr>)}</tbody></table>}
       {crawl.directions?.length > 0 && <p className="hint">В ячейке: обработано / найдено. Уже обработанные ранее материалы учитываются, но LLM повторно не вызывается.</p>}
-      {sources.map(item => <div key={item.source}><p>{label(item.source)}: обработано {item.parsed || 0}, ожидают {item.pending || 0} · {item.complete ? 'обход завершён' : label(item.status)} · всего {item.total ?? 'неизвестно'}</p>{item.limitations?.length > 0 && <p className="hint">{item.limitations.map(message).join(' ')}</p>}</div>)}
+      {sources.map(item => <div key={item.source}><p>{label(item.source)}: обработано {item.parsed || 0}, ожидают {item.pending || 0} · {item.complete ? 'обход завершён' : label(item.status)} · всего {item.total ?? 'неизвестно'}</p>{item.error && <p className="error">{message(item.error)}</p>}{item.limitations?.length > 0 && <p className="hint">{item.limitations.map(message).join(' ')}</p>}</div>)}
       {crawl.error && <p className="error">{message(crawl.error)}</p>}
       <Materials crawlId={crawlId} status="parsed" title="Обработанные материалы" refresh={crawl.updated_at || JSON.stringify(counts)} />
       <Materials crawlId={crawlId} status="pending" title="Ожидают обработки" refresh={crawl.updated_at || JSON.stringify(counts)} />
@@ -197,7 +197,7 @@ function Document({ jobId, document }) {
   </summary>
     {document.error && <p className="error">{message(document.error)}</p>}
     {error && <p className="error">{error}</p>}
-    {!document.result_ready ? <p className="hint">Результат ещё не готов.</p> : !result ? <p className="hint">Загружаем результат…</p> : <>
+    {!document.result_ready ? <p className="hint">Результат ещё не готов.</p> : !result ? !error && <p className="hint">Загружаем результат…</p> : <>
       <p><a href={api.downloadUrl(jobId, document.doc_id)} download>Скачать результат JSON</a></p>
       <p className="hint">LLM: {label(extraction?.run?.status)} · GLiNER: {label(extraction?.run?.metadata?.ner?.status)}</p>
       <Received document={result.document} run={extraction?.run} />

@@ -118,9 +118,14 @@ async def request(
                                     "Response exceeds the configured size "
                                     "limit"
                                 )
+                        # aiter_bytes() already decoded the wire body. Drop
+                        # its encoding and length before rebuilding a response.
+                        decoded_headers = httpx.Headers(response.headers)
+                        decoded_headers.pop("Content-Encoding", None)
+                        decoded_headers.pop("Content-Length", None)
                         return httpx.Response(
                             response.status_code,
-                            headers=response.headers,
+                            headers=decoded_headers,
                             content=bytes(body),
                             request=response.request,
                         )

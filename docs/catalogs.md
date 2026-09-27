@@ -25,7 +25,7 @@ Enums, состояния моделей, обработчики команд и
 
 ## Участники, страны, зрелость и таксономия
 
-`llm_schema.json` (v2) добавляет предикаты с ролями `organization`, `country`, `parent`:
+`llm_schema.json` задаёт предикаты с ролями `organization`, `country`, `parent`:
 
 | Предикат | Роли | Ребро в графе (только принятое, affirmed, reported/observed) |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ Enums, состояния моделей, обработчики команд и
 | developed_in | subject → country | `DEVELOPED_IN` |
 | located_in | organization → country | `LOCATED_IN` (с `document_version_id`) |
 | subtechnology_of | subject → parent | `SUBTECHNOLOGY_OF` |
-| reports_maturity_stage | subject; `qualifiers.stage` обязателен, `qualifiers.trl` только если число написано в цитате | `(Technology)-[:HAS_MATURITY_EVIDENCE {stage, stage_rank, trl}]->(Chunk)` |
+| reports_maturity_stage | subject; `qualifiers.stage` обязателен, `qualifiers.trl` только если число стоит после маркера TRL/УГТ/уровня готовности в цитате | `(Technology)-[:HAS_MATURITY_EVIDENCE {stage, stage_rank, trl}]->(Chunk)` |
 
 Каждое такое ребро несёт `chunk_id`, `quote`, `start`/`end`, `assertion_id`, `run_id`, `observed_at`. Проекции задаются в `graph.json → projections`. Сущность Country из текста получает `country_code` (ISO 3166-1 alpha-2): код становится именем концепта и связывается `SAME_AS` с узлом `Country` из метаданных.
 
