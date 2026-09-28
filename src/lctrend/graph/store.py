@@ -74,6 +74,11 @@ async def _records(session: Any, query: str, **parameters: Any) -> list:
     return list(result)
 
 
+def _lucene_phrase(text: str) -> str:
+    """A literal phrase query: the model's text is never Lucene syntax."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _data(record: Any) -> Dict[str, Any]:
     return record.data() if hasattr(record, "data") else dict(record)
 
@@ -1457,10 +1462,23 @@ class GraphStore:
         max_chars = min(200000, max(0, int(max_chars)))
         if not limit_documents or not limit_chunks or not max_chars:
             return []
+        # Full-text indexes find candidates (D-7: CONTAINS alone scanned
+        # every chunk); the literal CONTAINS check keeps the old meaning.
         statement = """
-            MATCH (run:ProcessingRun)-[:PROCESSED]->(v:DocumentVersion)
-                  <-[:HAS_VERSION]-(d:Document)
-            MATCH (v)-[:HAS_CHUNK]->(c:Chunk)
+            CALL {
+                CALL db.index.fulltext.queryNodes('chunk_text', $phrase)
+                YIELD node
+                MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
+                      -[:HAS_CHUNK]->(node)
+                RETURN node AS c, v, d
+                UNION
+                CALL db.index.fulltext.queryNodes('document_title', $phrase)
+                YIELD node
+                MATCH (node)-[:HAS_VERSION]->(v:DocumentVersion)
+                      -[:HAS_CHUNK]->(c:Chunk)
+                RETURN c, v, node AS d
+            }
+            MATCH (run:ProcessingRun)-[:PROCESSED]->(v)
             WHERE run.status = 'succeeded'
               AND (run.published = true OR run.published IS NULL)
               AND run.parser <> 'metadata'
@@ -1481,6 +1499,7 @@ class GraphStore:
                 session,
                 statement,
                 search_text=query,
+                phrase=_lucene_phrase(query),
                 exclude_version_id=exclude_version_id,
                 candidate_limit=min(2000, limit_documents * limit_chunks * 4),
             )

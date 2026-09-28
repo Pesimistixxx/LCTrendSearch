@@ -40,3 +40,5 @@ CREATE INDEX tested_in_version IF NOT EXISTS FOR ()-[r:TESTED_IN]-() ON (r.docum
 CREATE INDEX deployed_in_version IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.document_version_id);
 CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.node_id IS UNIQUE;
 CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);
+CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (n:Chunk) ON EACH [n.text];
+CREATE FULLTEXT INDEX document_title IF NOT EXISTS FOR (n:Document) ON EACH [n.title];
