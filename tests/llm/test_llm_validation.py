@@ -512,3 +512,27 @@ def test_review_decision_needs_a_reason_and_cannot_add_fields():
                 ]
             }
         )
+
+
+def test_grouped_thousands_read_as_the_economics_parser_reads_them():
+    # B-8: "1,000,000" accepted value 1 and rejected 1000000.
+    from lctrend.core.numbers import parse_number
+    from lctrend.extraction.economics import amount_value
+
+    for raw, right, wrong in [
+        ("1,000,000 mW", 1000000, 1),
+        ("12 345,67 mW", 12345.67, 12),
+        ("1.000.000 mW", 1000000, 1),
+    ]:
+        doc = document("Sensor S consumes " + raw + " for monitoring.")
+        for value, ok in ((right, True), (wrong, False)):
+            candidate = extraction(doc)
+            candidate.claims[0].values[0].update(value=value, raw=raw)
+            _, issues = validate_local_extraction(doc, candidate, ["c1"])
+            if ok:
+                assert issues == {}, raw
+            else:
+                assert "number_not_in_raw_value" in issues["claim:a"], raw
+        number = raw.removesuffix(" mW")
+        assert float(parse_number(number)) == right
+        assert amount_value(number, {}) == right

@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope
+from ..core.numbers import parse_number
 from .contracts import Extraction, Review, SourceSpan
 
 
@@ -363,8 +364,9 @@ def validate_local_extraction(
                     if not number.is_finite():
                         add(key, "nonfinite_numeric_value")
                     elif grounded:
+                        # The same reading as the economics parser (B-8).
                         reported = [
-                            Decimal(token.replace(",", "."))
+                            parse_number(token)
                             for token in re.findall(
                                 schema["number_pattern"], raw
                             )
