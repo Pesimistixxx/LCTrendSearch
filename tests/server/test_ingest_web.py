@@ -625,3 +625,34 @@ def test_openalex_status_describes_optional_anonymous_access(monkeypatch):
     source = _source_status()["openalex"]
     assert not source["has_key"]
     assert "Без ключа" in source["message"]
+
+
+def test_oversized_upload_is_rejected_before_its_body(api, monkeypatch):
+    # G-5: 413 came only after the whole body was received and spooled.
+    from frontend.server import app as app_module
+
+    client, manager, root = api
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_FILES", 0)
+    monkeypatch.setattr(app_module, "UPLOAD_OVERHEAD_BYTES", 10)
+    response = client.post(
+        "/api/ingest/uploads",
+        files={"files": ("paper.txt", b"x" * 100, "text/plain")},
+    )
+    assert response.status_code == 413
+    assert not manager.uploads
+
+
+def test_old_upload_folders_are_swept_unless_a_job_reads_them(tmp_path):
+    import os
+
+    from frontend.server.app import _sweep_uploads
+
+    old, busy, fresh = (tmp_path / name for name in ("old", "busy", "new"))
+    for folder in (old, busy, fresh):
+        folder.mkdir()
+        (folder / "paper.txt").write_text("x", encoding="utf-8")
+    for folder in (old, busy):
+        os.utime(folder, (0, 0))
+    active = {str((busy / "paper.txt").resolve())}
+    assert _sweep_uploads(tmp_path, active, 3600) == 1
+    assert not old.exists() and busy.exists() and fresh.exists()

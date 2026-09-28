@@ -620,6 +620,16 @@ class JobManager:
             on_created,
         )
 
+    def active_inputs(self) -> set[str]:
+        """Input files of jobs that may still read them."""
+        with self._lock:
+            return {
+                path
+                for job_id, job in self._jobs.items()
+                if job["status"] in ACTIVE_STATUSES
+                for path in self._tasks.get(job_id, {}).get("paths", [])
+            }
+
     def list_jobs(self) -> list[dict]:
         with self._lock:
             return deepcopy(
