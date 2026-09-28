@@ -216,7 +216,7 @@ LLM-провайдер использует endpoint `/chat/completions`. Зад
 | `LCTREND_WORKERS` / `runtime.json` → `ingestion.workers` | 4 | Документов одного задания или пачки обхода одновременно, 1–16 |
 | `crawl-openalex --workers N` | как выше | То же для CLI |
 | `LLM_MAX_CONCURRENCY` / `llm.json` → `max_concurrent_requests` | GigaChat: 1, OpenAI-совместимый: 4 | Одновременных запросов к LLM на процесс |
-| `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 3 и 120 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела |
+| `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 5 и 200 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела. 5 на пакет: извлечение, повтор после раунда контекста, две группы рецензии полного пакета и запас на повтор |
 | `pipeline.json` → `max_retries`, `retry_delay_seconds`, `max_retry_delay_seconds` | 4, 2 с, 60 с | Повторы LLM при 429/5xx/таймауте с экспоненциальной паузой или по `Retry-After` |
 | `sources.json` → `http` | 5 попыток, пауза 1–60 с | Повторы OpenAlex/GitHub/PyPI/PDF при 408/429/5xx; лимит GitHub ждёт `X-RateLimit-Reset` до 15 минут |
 | `pipeline.json` → `file_limits.pdf_max_pages`, `pdf_timeout_seconds` | 200 страниц, 900 с | Один конвертер Docling на процесс; слишком длинный или зависший PDF не останавливает задание |

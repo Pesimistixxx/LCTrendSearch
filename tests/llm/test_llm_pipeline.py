@@ -997,3 +997,41 @@ def test_claim_too_large_for_review_is_reported_as_budget_not_contract():
     assert "review_contract" not in codes(result)
     assert [item["stage"] for item in provider.payloads] == ["extract"]
     assert result.assertions[0].status == "needs_review"
+
+
+class ContextRoundProvider(FullPacketProvider):
+    """Ask for context once per packet before answering, as models do."""
+
+    def generate(self, schema, system, payload, *, stage="extract"):
+        if stage == "extract" and not payload["feedback"]:
+            self.calls.append({"stage": stage})
+            first = payload["packet"]["focus_chunk_ids"][0]
+            return schema.model_validate(
+                {
+                    "entities": [],
+                    "claims": [],
+                    "context_requests": [
+                        {
+                            "tool": "search_chunks",
+                            "argument": f"array #{first[1:].zfill(2)}",
+                            "reason": "Need the definition.",
+                        }
+                    ],
+                }
+            )
+        return super().generate(schema, system, payload, stage=stage)
+
+
+def test_shipped_budget_covers_a_context_round_and_split_review():
+    doc = full_text()
+    provider = ContextRoundProvider()
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=PipelineSettings.from_catalog()
+        )
+    )
+    assert provider.review_sizes
+    assert "call_budget" not in codes(result)
+    assert len(result.assertions) == 2 * len(doc.chunks)
+    assert {a.status for a in result.assertions} == {"accepted"}
+    assert result.run.status == "succeeded"
