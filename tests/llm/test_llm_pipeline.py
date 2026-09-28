@@ -1081,3 +1081,85 @@ def test_store_reports_what_each_processed_run_read():
     assert found == {
         "version": [{"coverage": "full_text", "fulltext_sha256": "pdf-sha"}]
     }
+
+
+def test_unanswered_context_request_leaves_only_its_claims_unclear():
+    # B-4: one open request used to downgrade every claim of the packet.
+    doc = document(["Sensor S solves monitoring. Sensor S solves sorting."])
+    response = extracted(doc, claim_id="a")
+    response["claims"][0]["evidence"][0]["quote"] = (
+        "Sensor S solves monitoring."
+    )
+    response["entities"].append(
+        {
+            "local_id": "sorting",
+            "label": "sorting",
+            "kind": "Task",
+            "evidence": [{"chunk_id": "c1", "quote": "sorting"}],
+        }
+    )
+    sorting = deepcopy(response["claims"][0])
+    sorting.update(
+        claim_id="b",
+        roles={"subject": "sensor", "task": "sorting"},
+        evidence=[{"chunk_id": "c1", "quote": "Sensor S solves sorting."}],
+    )
+    response["claims"].append(sorting)
+    response["context_requests"] = [
+        {
+            "tool": "read_chunk",
+            "argument": "c9",
+            "reason": "Which sorting?",
+            "claim_ids": ["b"],
+        }
+    ]
+    review = {
+        "items": reviewed(claim_id="a")["items"]
+        + reviewed(claim_id="b")["items"]
+    }
+    provider = RecordingReplay([response, review])
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_context_rounds=0)
+        )
+    )
+    assert "unresolved_context" in codes(result)
+    by_quote = {
+        item.evidence[0].quote: item.status for item in result.assertions
+    }
+    assert by_quote["Sensor S solves monitoring."] == "accepted"
+    assert by_quote["Sensor S solves sorting."] != "accepted"
+
+
+def test_context_rounds_of_an_early_packet_leave_calls_for_later_ones():
+    # B-4: 3 packets, budget of exactly extraction + review for each.
+    doc = document(
+        [
+            "Sensor S solves monitoring.",
+            "Sensor S solves monitoring.",
+            "Sensor S solves monitoring.",
+        ]
+    )
+    first = extracted(doc, "c1")
+    first["context_requests"] = [
+        {"tool": "read_chunk", "argument": "c2", "reason": "More detail."}
+    ]
+    provider = RecordingReplay(
+        [
+            first,
+            reviewed(),
+            extracted(doc, "c2"),
+            reviewed(),
+            extracted(doc, "c3"),
+            reviewed(),
+        ]
+    )
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=6))
+    )
+    assert [item["stage"] for item in provider.payloads] == [
+        "extract",
+        "review",
+    ] * 3
+    assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
+    assert "call_budget" not in codes(result)

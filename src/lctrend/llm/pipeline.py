@@ -173,6 +173,21 @@ async def _concept_embeddings(
     }, model
 
 
+def _pending_claims(requests) -> Any:
+    """Claims an unanswered context request leaves unclear.
+
+    ``True`` when a request names no claims (the whole packet waits),
+    otherwise the named claim IDs; other claims keep their review.
+    """
+    if not requests:
+        return frozenset()
+    if any(not request.claim_ids for request in requests):
+        return True
+    return frozenset(
+        claim_id for request in requests for claim_id in request.claim_ids
+    )
+
+
 class _Budget:
     def __init__(
         self,
@@ -547,10 +562,18 @@ async def _process_document(
                     "response": extraction.model_dump(mode="python"),
                 }
             )
+            # Every later packet keeps its extraction and review calls: an
+            # early packet's context rounds must not starve the rest. A
+            # budget below that minimum cannot cover all packets anyway.
+            reserved = (
+                2 * (len(plan.packets) - packet_number)
+                if budget.limit >= 2 * len(plan.packets)
+                else 0
+            )
             for context_round in range(settings.max_context_rounds):
                 if (
                     not extraction.context_requests
-                    or budget.used + 2 > budget.limit
+                    or budget.used + 2 + reserved > budget.limit
                 ):
                     break
                 _emit(
@@ -713,8 +736,8 @@ async def _process_document(
                 }
             )
             decisions = {}
-            context_pending = bool(extraction.context_requests)
-            if context_pending:
+            context_pending = _pending_claims(extraction.context_requests)
+            if extraction.context_requests:
                 metadata["issues"].append(
                     {
                         "packet_id": packet.packet_id,
@@ -827,8 +850,9 @@ async def _process_document(
             data["qualifiers"] = _refs(claim.qualifiers, mapping)
             data["values"] = _refs(claim.values, mapping)
             decision = decisions.get(claim.claim_id)
+            waiting = pending is True or claim.claim_id in pending
             state = (
-                decision.decision if decision and not pending else "unclear"
+                decision.decision if decision and not waiting else "unclear"
             )
             claims.append(
                 (

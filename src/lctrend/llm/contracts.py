@@ -51,6 +51,8 @@ class ContextRequest(LocalModel):
     tool: Literal["read_chunk", "search_chunks", "search_graph"]
     argument: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+    # Claims that wait for this context; empty means the whole packet.
+    claim_ids: List[str] = Field(default_factory=list)
 
 
 class Extraction(LocalModel):
