@@ -446,3 +446,50 @@ def test_section_headings_get_a_rhetorical_role():
     assert fulltext.section_role("Limitations") == "limitations"
     assert fulltext.section_role("Заключение") == "conclusion"
     assert fulltext.section_role(None) is None
+
+
+def test_already_read_pdf_bytes_are_not_parsed_again(monkeypatch, tmp_path):
+    # A-2: the PDF sha identifies the input of an earlier run.
+    import hashlib
+
+    monkeypatch.setattr(fulltext, "require_pdf_support", lambda: None)
+
+    def parse(*args):
+        pytest.fail("Known PDF bytes must not reach Docling")
+
+    monkeypatch.setattr(fulltext, "_body_chunks", parse)
+    raw = b"%PDF-1.7 fixture"
+    document = asyncio.run(
+        fulltext.attach_openalex_fulltext(
+            parse_openalex(WORK),
+            WORK,
+            fetch=lambda url: raw,
+            known_sha256=[hashlib.sha256(raw).hexdigest()],
+        )
+    )
+    status = document.metadata["fulltext"]
+    assert status["status"] == "already_processed"
+    assert status["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert document.coverage == "abstract_only"
+
+
+def test_prior_run_covers_only_the_input_it_read():
+    from lctrend.ingest.processed import covers, run_input
+
+    abstract_run = run_input({"input_coverage": "abstract_only"})
+    pdf_run = run_input(
+        '{"input_coverage": "abstract_and_full_text",'
+        ' "input_fulltext_sha256": "aaa"}'
+    )
+    abstract = parse_openalex(WORK)
+    assert covers([abstract_run], abstract)
+    assert covers([pdf_run], abstract)
+    with_pdf = parse_openalex(WORK)
+    with_pdf.coverage = "abstract_and_full_text"
+    with_pdf.metadata["fulltext"] = {"status": "parsed", "sha256": "aaa"}
+    assert not covers([abstract_run], with_pdf)
+    assert covers([pdf_run], with_pdf)
+    with_pdf.metadata["fulltext"]["sha256"] = "bbb"
+    assert not covers([pdf_run], with_pdf)
+    # A run from before inputs were recorded is not paid for again.
+    assert covers([run_input({})], with_pdf)

@@ -74,7 +74,10 @@ def test_refetching_an_unchanged_record_keeps_its_version():
     first = parse_openalex({**work, "_retrieved_at": "2026-01-01T00:00:00Z"})
     second = parse_openalex({**work, "_retrieved_at": "2026-02-01T00:00:00Z"})
     assert first.document_version_id == second.document_version_id
-    changed = parse_openalex({**work, "cited_by_count": 5})
+    # A new citation count is a metric observation, not new content (A-1).
+    cited = parse_openalex({**work, "cited_by_count": 5})
+    assert cited.document_version_id == first.document_version_id
+    changed = parse_openalex({**work, "title": "Revised work"})
     assert changed.document_version_id != first.document_version_id
     package = {"info": {"name": "pkg", "version": "1.0"}, "releases": {}}
     assert (
@@ -204,3 +207,115 @@ def test_provider_concurrency_limit_bounds_in_flight_requests(monkeypatch):
     asyncio.run(many())
     assert peak == 2
     assert len(provider.calls) == 6
+
+
+def test_late_full_text_of_a_processed_version_is_extracted(tmp_path):
+    # A-2: the version was processed from its abstract; a PDF appeared.
+    processed = []
+
+    def process(doc, **kwargs):
+        processed.append(doc.metadata["fulltext"]["sha256"])
+        return extraction(doc)
+
+    def attach(doc, payload, **kwargs):
+        doc.coverage = "abstract_and_full_text"
+        doc.metadata["fulltext"] = {"status": "parsed", "sha256": "pdf-1"}
+        return doc
+
+    instance = manager(
+        tmp_path,
+        document_processor=process,
+        source_fetcher=lambda *args: {
+            "results": [{"id": "https://openalex.org/W1", "title": "One"}],
+            "meta": {"next_cursor": None},
+        },
+        fulltext_attacher=attach,
+    )
+    store = instance.fixture_store
+    runs = [{"coverage": "abstract_only", "fulltext_sha256": None}]
+    store.processed_inputs = lambda ids: {ids[0]: list(runs)}
+    try:
+        final = finish(instance, instance.create_openalex("sensors", 1))
+        assert processed == ["pdf-1"]
+        assert final["documents"][0]["stage"] != "already_processed"
+        runs.append({"coverage": "full_text", "fulltext_sha256": "pdf-1"})
+        final = finish(instance, instance.create_openalex("sensors", 1))
+        assert processed == ["pdf-1"]
+        assert final["documents"][0]["stage"] == "already_processed"
+    finally:
+        instance.close(wait=True)
+
+
+def test_document_without_calls_does_not_take_a_neighbours_calls():
+    # B-9: `call_log or provider.calls[offset:]` gave an empty document
+    # the calls another document made meanwhile, and all model events.
+    provider = InterleavingProvider()
+    provider.model_events = [{"model": "old", "event": "retired"}]
+    empty = document(["   "])
+    busy = document(["Beta sensor.", "Gamma sensor.", "Delta sensor."])
+
+    async def both():
+        return await asyncio.gather(
+            process_document(busy, provider, settings=settings()),
+            process_document(empty, provider, settings=settings()),
+        )
+
+    loaded, quiet = asyncio.run(both())
+    assert len(loaded.run.metadata["provider_calls"]) == 3
+    assert quiet.run.metadata["provider_calls"] == []
+    assert quiet.run.metadata["model_events"] == []
+    assert loaded.run.metadata["model_events"] == []
+
+
+def test_concurrency_limit_is_shared_by_clients_and_loops(monkeypatch):
+    # B-10: each client and each event loop had its own semaphore, so a
+    # limit of 1 still let the job loop and the resolver's client overlap.
+    import threading
+    import time
+
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "1")
+    guard = threading.Lock()
+    active, peak = 0, 0
+
+    def respond(request):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with guard:
+            active -= 1
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": '{"entities": []}'},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    from lctrend.llm.contracts import Extraction
+
+    def job():
+        provider = JsonLLM(
+            "model",
+            base_url="http://127.0.0.1:2/v1",
+            transport=httpx.MockTransport(respond),
+        )
+
+        async def many():
+            await asyncio.gather(
+                *(provider.generate(Extraction, "s", {}) for _ in range(3))
+            )
+
+        asyncio.run(many())
+
+    threads = [threading.Thread(target=job) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert peak == 1

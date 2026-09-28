@@ -234,7 +234,7 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
     assert ":Concept" not in queries
     assert "MERGE (chunk)-[r:MENTIONS" in queries
     assert "MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE" in queries
-    assert "c.name = $preferred_label" in queries
+    assert "c.name = row.preferred_label" in queries
     assert "c.first_seen_at" in queries
     assert "r.observed_at" in queries
     assert ":Mention" not in queries
@@ -460,3 +460,249 @@ def test_temporal_read_uses_first_retrieval_with_legacy_fallback():
         in versions
     )
     assert "AS last_retrieved_at" in versions
+
+
+def test_metrics_are_a_dated_observation_of_the_unchanged_version():
+    work = {"id": "https://openalex.org/W1", "title": "Example"}
+    early = parse_openalex(
+        {**work, "cited_by_count": 17, "_retrieved_at": "2024-01-01"}
+    )
+    late = parse_openalex(
+        {**work, "cited_by_count": 40, "_retrieved_at": "2026-01-01"}
+    )
+    assert early.document_version_id == late.document_version_id
+    observations = []
+    for document in (early, late):
+        tx = Transaction()
+        asyncio.run(GraphStore._write_document(tx, document))
+        observations.extend(
+            parameters
+            for query, parameters in tx.queries
+            if "MERGE (m:MetricsObservation" in query
+        )
+    assert [item["observed_at"] for item in observations] == [
+        "2024-01-01",
+        "2026-01-01",
+    ]
+    assert len({item["observation_id"] for item in observations}) == 2
+    assert json.loads(observations[0]["metrics_json"])["citation_count"] == 17
+    # The version keeps only a newer observation as its current metrics.
+    query = " ".join(
+        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
+        .split()
+    )
+    current = re.search(r"v\.metrics_json = CASE (.*?) END", query)
+    assert current and ">= v.metrics_observed_at" in current.group(1)
+
+
+def test_temporal_read_returns_the_metric_history():
+    queries = []
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: ReadSession(queries)}
+    )()
+    store._database = "neo4j"
+    asyncio.run(store.read_temporal_data())
+    versions = next(q for q in queries if "MATCH (d:Document)" in q)
+    assert "HAS_METRICS" in versions
+    assert "metric_observations" in versions.split("RETURN", 1)[1]
+
+
+def _work_with_parties(size):
+    return parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "Crowded paper",
+            "publication_date": "2024-01-01",
+            "abstract_inverted_index": {"Sensor": [0], "study": [1]},
+            "authorships": [
+                {
+                    "author": {
+                        "id": f"https://openalex.org/A{index}",
+                        "display_name": f"Author {index}",
+                    },
+                    "institutions": [
+                        {
+                            "id": f"https://openalex.org/I{index}",
+                            "display_name": f"University {index}"
+                            if index % 2
+                            else f"Company {index} Inc",
+                            "type": "education" if index % 2 else "company",
+                            "country_code": ["DE", "FR", "US"][index % 3],
+                        }
+                    ],
+                }
+                for index in range(size)
+            ],
+            "topics": [
+                {
+                    "display_name": f"Topic {index}",
+                    "subfield": {
+                        "id": f"https://openalex.org/subfields/{index}",
+                        "display_name": f"Subfield {index}",
+                    },
+                    "field": {"display_name": "Engineering"},
+                }
+                for index in range(size)
+            ],
+        }
+    )
+
+
+def test_document_write_cost_does_not_grow_with_its_parties():
+    # D-1: every statement is a network round trip.
+    counts = []
+    for size in (3, 30):
+        document = _work_with_parties(size)
+        assert len(document.contributors) == size
+        tx = Transaction()
+        asyncio.run(GraphStore._write_document(tx, document))
+        counts.append(len(tx.queries))
+    assert counts[0] == counts[1]
+    assert counts[1] <= 15
+
+
+def test_extraction_write_cost_does_not_grow_with_its_concepts():
+    document = parse_openalex(
+        {"id": "https://openalex.org/W1", "title": "Example"}
+    )
+
+    def result(size):
+        return ExtractionResult(
+            document_version_id=document.document_version_id,
+            run=ProcessingRun(
+                run_id="run1", parser="test", config_hash="x", started_at="t"
+            ),
+            concepts=[
+                Concept(
+                    concept_id=f"c{index}",
+                    kind=ConceptKind.TECHNOLOGY
+                    if index % 2
+                    else ConceptKind.TASK,
+                    preferred_label=f"Concept {index}",
+                )
+                for index in range(size)
+            ],
+        )
+
+    counts = []
+    for size in (2, 40):
+        tx = Transaction()
+        asyncio.run(GraphStore._write_extraction(tx, document, result(size)))
+        counts.append(len(tx.queries))
+    assert counts[0] == counts[1]
+
+
+class SchemaSession:
+    def __init__(self, statements):
+        self.statements = statements
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def run(self, query, **parameters):
+        self.statements.append(query)
+        return Result()
+
+
+def test_schema_is_ensured_once_per_process_and_graph(monkeypatch):
+    from lctrend.graph import store as store_module
+
+    monkeypatch.setattr(store_module, "_SCHEMA_READY", set())
+    statements = []
+
+    def open_store(uri):
+        store = GraphStore.__new__(GraphStore)
+        store._driver = type(
+            "Driver",
+            (),
+            {"session": lambda self, **_: SchemaSession(statements)},
+        )()
+        store._database = "neo4j"
+        store._schema_key = (uri, "neo4j")
+        return store
+
+    asyncio.run(open_store("bolt://a").ensure_schema())
+    once = len(statements)
+    assert once > 10
+    asyncio.run(open_store("bolt://a").ensure_schema())
+    assert len(statements) == once
+    asyncio.run(open_store("bolt://b").ensure_schema())
+    assert len(statements) == 2 * once
+
+
+def test_published_run_clears_evidence_of_chunks_leaving_the_version():
+    # D-2: HAS_CHUNK was cut before extraction cleanup, which only sees the
+    # chunks still linked, so evidence of dropped chunks outlived its run.
+    document = parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "Example",
+            "abstract_inverted_index": {"Sensor": [0], "study": [1]},
+        }
+    )
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document, publishing=True))
+    statements = [" ".join(query.split()) for query, _ in tx.queries]
+    stale = [
+        index
+        for index, query in enumerate(statements)
+        if "WHERE NOT c.chunk_id IN $chunk_ids" in query
+    ]
+    kinds = [statements[index] for index in stale]
+    assert "MATCH (c)-[r:MENTIONS]->() DELETE r" in kinds[0]
+    assert "HAS_MATURITY_EVIDENCE" in kinds[1]
+    assert "DELETE active" in kinds[2]
+    assert tx.queries[stale[2]][1]["publishing"] is True
+
+
+def test_import_without_extraction_keeps_chunks_of_a_published_run():
+    # D-2: a re-import without the PDF unlinked the PDF chunks and hid the
+    # published run's mentions (50 visible mentions became 2).
+    document = parse_openalex({"id": "https://openalex.org/W1", "title": "X"})
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document))
+    statements = [" ".join(query.split()) for query, _ in tx.queries]
+    assert not any("[r:MENTIONS]" in query for query in statements)
+    unlink = next(
+        (query, parameters)
+        for query, parameters in zip(statements, (p for _, p in tx.queries))
+        if "DELETE active" in query
+    )
+    assert "WHERE $publishing OR NOT EXISTS" in unlink[0]
+    assert "run.published = true OR run.status = 'succeeded'" in unlink[0]
+    assert unlink[1]["publishing"] is False
+
+
+def test_registry_read_does_not_transfer_embeddings():
+    # D-6: properties(c) pulled every stored vector at each job start.
+    queries = []
+
+    class Session(ReadSession):
+        async def run(self, query, **parameters):
+            queries.append(query)
+            return [
+                {
+                    "properties": {
+                        "concept_id": "c1",
+                        "kind": "Technology",
+                        "preferred_label": "Sparse attention",
+                    }
+                }
+            ]
+
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: Session(queries)}
+    )()
+    store._database = "neo4j"
+    concepts = asyncio.run(store.read_concepts())
+    assert concepts and concepts[0].preferred_label == "Sparse attention"
+    assert "properties(c)" not in queries[0]
+    assert "embedding" not in queries[0]
+    assert ".names_json" in queries[0]
+    assert ".identity_key" in queries[0]
+    assert ".label_counts_json" in queries[0]

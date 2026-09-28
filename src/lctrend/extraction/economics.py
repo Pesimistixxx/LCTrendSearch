@@ -16,6 +16,7 @@ from ..core.models import (
     ResolutionDecision,
     stable_id,
 )
+from ..core.numbers import parse_number
 from .assertions import claim_context, resolved_ids
 from .resolver import normalize_name
 
@@ -35,23 +36,10 @@ def amount_value(amount: str, scales: dict[str, float]) -> Optional[float]:
     match = re.search(r"\d[\d\s.,]*", amount)
     if not match:
         return None
-    digits = re.sub(r"\s", "", match.group()).rstrip(".,")
-    if "," in digits and "." in digits:
-        digits = digits.replace(",", "")
-    elif "," in digits:
-        digits = (
-            digits.replace(",", "")
-            if re.fullmatch(r"\d{1,3}(?:,\d{3})+", digits)
-            else digits.replace(",", ".")
-        )
-    if digits.count(".") > 1:
-        if not re.fullmatch(r"\d{1,3}(?:\.\d{3})+", digits):
-            return None
-        digits = digits.replace(".", "")
-    try:
-        value = float(digits)
-    except ValueError:
+    number = parse_number(match.group())
+    if number is None:
         return None
+    value = float(number)
     lowered = amount.casefold()
     for word, factor in scales.items():
         if re.search(r"\b" + re.escape(word), lowered):

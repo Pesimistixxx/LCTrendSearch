@@ -89,3 +89,46 @@ def test_russian_domains_do_not_expand_search_queries_implicitly():
 )
 def test_section_roles_support_russian_navigation(heading, role):
     assert section_role(heading) == role
+
+
+@pytest.mark.parametrize(
+    "heading,role",
+    [
+        ("Economic evaluation", "economics"),
+        ("Cost analysis", "economics"),
+        ("Results and discussion", "results"),
+        ("Conclusions and future work", "conclusion"),
+        ("Limitations and future work", "limitations"),
+        ("Model evaluation", "results"),
+        ("Proposed model", "method"),
+    ],
+)
+def test_specific_section_roles_win_over_generic_words(heading, role):
+    # A-11: "Economic evaluation" was "results" (evaluation came first).
+    assert section_role(heading) == role
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "References:",
+        "7. References",
+        "References and Notes",
+        "Works cited",
+        "Список использованных источников",
+        "Список использованной литературы",
+        "Библиографический список",
+        "Литература:",
+    ],
+)
+def test_bibliography_headings_are_recognized(heading):
+    # A-11: "References:" and GOST headings sent the bibliography to the LLM.
+    import re
+
+    from lctrend.core.config import load_catalog
+
+    pattern = load_catalog("pipeline")["openalex_fulltext"][
+        "bibliography_heading"
+    ]
+    assert re.match(pattern, heading, re.IGNORECASE)
+    assert not re.match(pattern, "Referenced datasets", re.IGNORECASE)

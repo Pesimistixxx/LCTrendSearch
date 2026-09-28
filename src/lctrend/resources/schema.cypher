@@ -8,6 +8,7 @@ CREATE CONSTRAINT country_id IF NOT EXISTS FOR (n:Country) REQUIRE n.country_id 
 CREATE CONSTRAINT domain_id IF NOT EXISTS FOR (n:Domain) REQUIRE n.domain_id IS UNIQUE;
 CREATE CONSTRAINT assertion_id IF NOT EXISTS FOR (n:Assertion) REQUIRE n.assertion_id IS UNIQUE;
 CREATE CONSTRAINT run_id IF NOT EXISTS FOR (n:ProcessingRun) REQUIRE n.run_id IS UNIQUE;
+CREATE CONSTRAINT metrics_observation_id IF NOT EXISTS FOR (n:MetricsObservation) REQUIRE n.observation_id IS UNIQUE;
 CREATE CONSTRAINT claim_group_id IF NOT EXISTS FOR (n:ClaimGroup) REQUIRE n.claim_group_id IS UNIQUE;
 CREATE CONSTRAINT evidence_family_id IF NOT EXISTS FOR (n:EvidenceFamily) REQUIRE n.family_id IS UNIQUE;
 CREATE CONSTRAINT technology_concept_id IF NOT EXISTS FOR (n:Technology) REQUIRE n.concept_id IS UNIQUE;
@@ -39,3 +40,5 @@ CREATE INDEX tested_in_version IF NOT EXISTS FOR ()-[r:TESTED_IN]-() ON (r.docum
 CREATE INDEX deployed_in_version IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.document_version_id);
 CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.node_id IS UNIQUE;
 CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);
+CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (n:Chunk) ON EACH [n.text];
+CREATE FULLTEXT INDEX document_title IF NOT EXISTS FOR (n:Document) ON EACH [n.title];

@@ -120,6 +120,17 @@ class Version:
     as_known: bool = False
     # No publication date: visible from collection, never dated by it.
     undated: bool = False
+    # Dated metric observations of this unchanged content, oldest first.
+    metric_history: Tuple[Tuple[date, Dict[str, float]], ...] = ()
+
+    def metrics_known_at(
+        self, cutoff: date
+    ) -> Optional[Tuple[date, Dict[str, float]]]:
+        """The latest metrics observed by ``cutoff``, with their date."""
+        known = [item for item in self.metric_history if item[0] <= cutoff]
+        if not known:
+            return None
+        return max(known, key=lambda item: item[0])
 
     @property
     def available_date(self) -> date:
@@ -298,6 +309,35 @@ class TechnologyView:
         return max(dates, default=None)
 
 
+def _metric_values(value: Any) -> Dict[str, float]:
+    return {
+        key: float(item)
+        for key, item in _json(value).items()
+        if isinstance(item, (int, float))
+    }
+
+
+def _metric_history(
+    row: Dict[str, Any],
+) -> Tuple[Tuple[date, Dict[str, float]], ...]:
+    """Dated metric observations of a version.
+
+    Graphs written before observations existed keep only the latest
+    metrics on the version itself.
+    """
+    history: Dict[date, Dict[str, float]] = {}
+    for item in row.get("metric_observations") or []:
+        observed = parse_date((item or {}).get("observed_at"))
+        metrics = _metric_values((item or {}).get("metrics_json"))
+        if observed is not None and metrics:
+            history[observed] = metrics
+    latest = parse_date(row.get("metrics_observed_at"))
+    metrics = _metric_values(row.get("metrics_json"))
+    if latest is not None and metrics:
+        history.setdefault(latest, metrics)
+    return tuple(sorted(history.items(), key=lambda item: item[0]))
+
+
 def _history(
     metadata: Dict[str, Any], cutoff: date, metrics_known: bool = True
 ) -> Dict[str, Any]:
@@ -395,6 +435,7 @@ class TemporalCorpus:
                 extracted_date=parse_date(row.get("extracted_at")),
                 as_known=as_known,
                 undated=version_date is None,
+                metric_history=_metric_history(row),
             )
             self.versions[version.version_id] = version
             self.document_versions.setdefault(version.document_id, []).append(
@@ -585,14 +626,13 @@ class TemporalCorpus:
     def metrics_at(
         self, document_id: str, cutoff: date
     ) -> Optional[Dict[str, float]]:
+        """Latest metrics observed by ``cutoff`` for a visible version."""
         for version in reversed(self.document_versions.get(document_id, [])):
-            if (
-                version.available_date <= cutoff
-                and version.metrics_date is not None
-                and version.metrics_date <= cutoff
-                and version.metrics
-            ):
-                return version.metrics
+            if version.available_date > cutoff:
+                continue
+            known = version.metrics_known_at(cutoff)
+            if known is not None:
+                return known[1]
         return None
 
     def covered_families(
@@ -815,10 +855,7 @@ class SnapshotView:
             history=_history(
                 visible.metadata,
                 cutoff,
-                metrics_known=(
-                    visible.metrics_date is not None
-                    and visible.metrics_date <= cutoff
-                ),
+                metrics_known=visible.metrics_known_at(cutoff) is not None,
             ),
         )
 

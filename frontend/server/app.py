@@ -6,6 +6,7 @@ only serves them.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 import os
@@ -29,6 +30,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -98,6 +100,81 @@ class CrawlRequest(BaseModel):
     @classmethod
     def clean_topic(cls, value: str) -> str:
         return value.strip()
+
+
+# The UI is local: a request naming another host is a DNS-rebinding or
+# proxy trick. Origin checks compare with the Host header, so the Host
+# itself must be trusted first.
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
+
+
+def _allowed_hosts(configured=None) -> list:
+    if configured is None:
+        configured = [
+            item.strip()
+            for item in os.getenv("LCTREND_ALLOWED_HOSTS", "").split(",")
+            if item.strip()
+        ]
+    return list(dict.fromkeys([*DEFAULT_ALLOWED_HOSTS, *configured]))
+
+
+def _llm_endpoint(provider: str, base_url: str = "") -> tuple:
+    """Provider and API host a stored key would be sent to."""
+    catalog = load_catalog("llm")
+    profile = catalog.get("gigachat", {}) if provider == "gigachat" else {}
+    url = base_url or profile.get("base_url") or catalog.get("base_url", "")
+    return provider, (urlsplit(url).hostname or "").casefold()
+
+
+# At most this many files per upload request; the body limit follows.
+MAX_UPLOAD_FILES = 100
+# Multipart headers and form fields on top of the files themselves.
+UPLOAD_OVERHEAD_BYTES = 1024 * 1024
+
+
+def _upload_ttl_seconds() -> float:
+    try:
+        hours = float(os.getenv("LCTREND_UPLOAD_TTL_HOURS", 24))
+    except ValueError:
+        hours = 24.0
+    return max(0.0, hours) * 3600
+
+
+def _sweep_uploads(root: Path, active: set, ttl: float) -> int:
+    """Delete upload folders older than ``ttl`` that no active job reads.
+
+    Parsed files keep a content-addressed raw snapshot, so a finished
+    upload folder is only a second copy (G-5).
+    """
+    import shutil
+    import time
+
+    if not root.is_dir():
+        return 0
+    removed = 0
+    cutoff = time.time() - ttl
+    for folder in root.iterdir():
+        try:
+            if not folder.is_dir() or folder.stat().st_mtime > cutoff:
+                continue
+            if any(str(path.resolve()) in active for path in folder.iterdir()):
+                continue
+            shutil.rmtree(folder)
+            removed += 1
+        except OSError as exc:
+            logger.warning("Cannot remove old upload %s: %s", folder, exc)
+    return removed
+
+
+def _shutdown_grace() -> float:
+    """Seconds a stopping server waits for running documents.
+
+    Docker stops a container after 10 s by default, so the default fits.
+    """
+    try:
+        return max(0.0, float(os.getenv("LCTREND_SHUTDOWN_GRACE_SECONDS", 8)))
+    except ValueError:
+        return 8.0
 
 
 def _installed(name: str) -> bool:
@@ -223,6 +300,7 @@ def create_app(
     status_reader=None,
     environment_path=None,
     search_service=None,
+    allowed_hosts=None,
 ) -> FastAPI:
     root = Path(__file__).resolve().parents[2]
     frontend = (
@@ -260,10 +338,18 @@ def create_app(
         if crawl_manager is None and app.state.crawls is not None:
             app.state.crawls.close(wait=False)
         if manager is None:
-            logger.info("Stopping job manager")
-            app.state.manager.close(wait=False)
+            # Documents in flight may finish (their model calls are paid);
+            # past the grace period their jobs are recorded as interrupted.
+            grace = _shutdown_grace()
+            logger.info("Stopping job manager (grace %.0f s)", grace)
+            await asyncio.to_thread(
+                app.state.manager.close, wait=True, timeout=grace
+            )
 
     app = FastAPI(title="LCTrend: загрузка материалов", lifespan=lifespan)
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=_allowed_hosts(allowed_hosts)
+    )
     app.state.manager = manager
     app.state.crawls = crawl_manager
     app.state.search = search_service
@@ -284,6 +370,33 @@ def create_app(
         )
 
         return await request_validation_exception_handler(request, exc)
+
+    @app.middleware("http")
+    async def upload_size(request: Request, call_next):
+        # Reject an oversized upload before its body is received and spooled
+        # to disk; per-file limits still apply while it is written (G-5).
+        if request.method == "POST" and request.url.path == (
+            "/api/ingest/uploads"
+        ):
+            limit = (
+                MAX_UPLOAD_FILES
+                * load_catalog("pipeline")["file_limits"]["max_file_bytes"]
+                + UPLOAD_OVERHEAD_BYTES
+            )
+            try:
+                length = int(request.headers.get("content-length", ""))
+            except ValueError:
+                length = None
+            if length is None:
+                return JSONResponse(
+                    {"detail": "Не указан размер загрузки"}, status_code=411
+                )
+            if length > limit:
+                return JSONResponse(
+                    {"detail": "Загрузка превышает допустимый размер"},
+                    status_code=413,
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def local_mutations(request: Request, call_next):
@@ -513,7 +626,7 @@ def create_app(
         if (
             mode not in ("llm", "none")
             or not 1 <= (workers or default_workers()) <= MAX_WORKERS
-            or not 1 <= len(files) <= 100
+            or not 1 <= len(files) <= MAX_UPLOAD_FILES
             or len(direction) > 1000
         ):
             raise HTTPException(
@@ -521,6 +634,10 @@ def create_app(
             )
         catalog = load_catalog("pipeline")
         max_bytes = catalog["file_limits"]["max_file_bytes"]
+        active = getattr(get_manager(), "active_inputs", set)
+        await asyncio.to_thread(
+            _sweep_uploads, uploads, active(), _upload_ttl_seconds()
+        )
         folder = uploads / uuid4().hex
         paths = []
         try:
@@ -601,12 +718,42 @@ def create_app(
                 if body.provider == "gigachat"
                 else "LLM_BASE_URL": body.base_url.strip(),
             }
+            key_name = (
+                "GIGACHAT_CREDENTIALS"
+                if body.provider == "gigachat"
+                else "LLM_API_KEY"
+            )
             if body.api_key is not None and body.api_key.strip():
-                values[
-                    "GIGACHAT_CREDENTIALS"
-                    if body.provider == "gigachat"
-                    else "LLM_API_KEY"
-                ] = body.api_key.strip()
+                values[key_name] = body.api_key.strip()
+            else:
+                # A blank key field keeps the stored key, which must never
+                # follow the settings to another provider or host.
+                current_provider = os.getenv(
+                    "LLM_PROVIDER",
+                    load_catalog("llm").get("provider", "openai_compatible"),
+                )
+                current = _llm_endpoint(
+                    current_provider,
+                    os.getenv(
+                        "GIGACHAT_BASE_URL"
+                        if current_provider == "gigachat"
+                        else "LLM_BASE_URL",
+                        "",
+                    ),
+                )
+                target = _llm_endpoint(body.provider, body.base_url.strip())
+                if target != current and os.getenv(key_name, "").strip():
+                    logger.warning(
+                        "Model settings rejected: stored key not reused "
+                        "for provider=%s host=%s",
+                        target[0],
+                        target[1] or "<default>",
+                    )
+                    raise HTTPException(
+                        400,
+                        "Введите ключ заново: адрес или провайдер модели "
+                        "изменился",
+                    )
             try:
                 # Configuration check, no request/payment.
                 save_environment(values, JsonLLM.from_environment)

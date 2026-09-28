@@ -68,6 +68,23 @@ def _catalog_domain(rule: Mapping[str, Any]) -> Domain:
     )
 
 
+def _without_parents(domains: Iterable[Domain]) -> List[Domain]:
+    """Drop a domain whose subdomain is also present.
+
+    "NLP" already implies "Artificial intelligence"; keeping both invents
+    a cross-domain pair (A-9).
+    """
+    domains = list(domains)
+    parents = {
+        domain.parent_name.casefold()
+        for domain in domains
+        if domain.parent_name
+    }
+    return [
+        domain for domain in domains if domain.name.casefold() not in parents
+    ]
+
+
 def _domains_from_values(values: Iterable[Any]) -> List[Domain]:
     """Every catalog domain the text names; several domains are what makes
     a cross-domain signal visible.
@@ -81,7 +98,7 @@ def _domains_from_values(values: Iterable[Any]) -> List[Domain]:
         ):
             domain = _catalog_domain(rule)
             found.setdefault(domain.domain_id, domain)
-    return list(found.values())
+    return _without_parents(found.values())
 
 
 def _domains_from_topics(
@@ -105,11 +122,19 @@ def _domains_from_topics(
         matched = _domains_from_values(values)
         subfield = topic.get(fallback["name_field"]) or {}
         name = subfield.get("display_name")
-        if not matched and name:
+        # The subfield is kept when the catalog does not cover it: "ML in
+        # Materials Science" is ML *and* materials, not ML alone (A-9).
+        covered = {
+            value.casefold()
+            for domain in matched
+            for value in (domain.name, domain.parent_name or "")
+        }
+        if name and name.casefold() not in covered:
             if name.casefold() in catalog:
-                matched = [_catalog_domain(catalog[name.casefold()])]
+                if not matched:
+                    matched = [_catalog_domain(catalog[name.casefold()])]
             else:
-                matched = [
+                matched = matched + [
                     Domain(
                         domain_id=stable_id("domain", name),
                         name=name,
@@ -127,16 +152,37 @@ def _domains_from_topics(
                 ]
         for domain in matched:
             found.setdefault(domain.domain_id, domain)
-    return list(found.values())
+    return _without_parents(found.values())
 
 
 def _organization_type(name: str, default: str = "other") -> str:
-    """Type an organization the source left untyped by its name."""
+    """Type an organization the source left untyped by its name.
+
+    An explicit university marker wins; then known names (MIT, IBM, Сбер)
+    that carry no legal form or university marker; then the legal form.
+    GitHub logins ("sberbank-ai") are split into words.
+    """
+    catalog = load_catalog("sources")
     lowered = name.casefold()
-    for kind, pattern in load_catalog("sources")[
-        "organization_type_patterns"
-    ].items():
-        if re.search(pattern, lowered):
+    words = " " + " ".join(re.findall(r"\w+", lowered)) + " "
+    patterns = catalog["organization_type_patterns"]
+
+    def marked(kind: str) -> bool:
+        pattern = patterns.get(kind)
+        return bool(
+            pattern
+            and (re.search(pattern, lowered) or re.search(pattern, words))
+        )
+
+    if marked("university"):
+        return "university"
+    for kind, names in catalog.get("known_organizations", {}).items():
+        for known in names:
+            alias = " ".join(re.findall(r"\w+", known.casefold()))
+            if alias and f" {alias} " in words:
+                return kind
+    for kind in patterns:
+        if marked(kind):
             return kind
     return default
 
@@ -145,15 +191,74 @@ def _bytes_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _observation_hash(payload: Mapping[str, Any]) -> str:
-    """Hash of the source record without its fetch time.
+# Fields that change between fetches of unchanged content: fetch time,
+# search rank and counters. They are observations of the version (stored as
+# metrics with their own date), never a new version: a new version means a
+# new paid extraction.
+VOLATILE_FIELDS = {
+    "common": frozenset({"_retrieved_at"}),
+    "openalex": frozenset(
+        {
+            "relevance_score",
+            "cited_by_count",
+            "counts_by_year",
+            "updated_date",
+            "fwci",
+            "citation_normalized_percentile",
+            "cited_by_percentile_year",
+            "summary_stats",
+            "is_authors_truncated",
+        }
+    ),
+    "github": frozenset(
+        {
+            "stargazers_count",
+            "watchers_count",
+            "watchers",
+            "subscribers_count",
+            "forks_count",
+            "forks",
+            "network_count",
+            "open_issues_count",
+            "open_issues",
+            "size",
+            "score",
+            "pushed_at",
+            "updated_at",
+            # Weekly activity windows slide with the fetch date.
+            "commit_activity",
+            "contributor_stats",
+        }
+    ),
+    "pypi": frozenset(
+        {"downloads", "last_serial", "releases", "vulnerabilities"}
+    ),
+}
 
-    Fetch time alone is not a version: re-fetching an unchanged record must
-    map to the already processed version instead of a new one.
+
+def _without(value: Any, volatile: frozenset) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _without(item, volatile)
+            for key, item in value.items()
+            if key not in volatile
+        }
+    if isinstance(value, list):
+        return [_without(item, volatile) for item in value]
+    return value
+
+
+def _observation_hash(payload: Mapping[str, Any], source: str = "") -> str:
+    """Hash of the source record's content.
+
+    Fetch time, search rank and counters are not a version: re-fetching an
+    unchanged record must map to the already processed version instead of
+    a new one.
     """
-    observation = {
-        key: value for key, value in payload.items() if key != "_retrieved_at"
-    }
+    volatile = VOLATILE_FIELDS["common"] | VOLATILE_FIELDS.get(
+        source, frozenset()
+    )
+    observation = _without(dict(payload), volatile)
     return _bytes_hash(
         json.dumps(observation, sort_keys=True, default=str).encode("utf-8")
     )
@@ -302,7 +407,9 @@ def parse_openalex(
         doi = doi_id.removeprefix("doi:")
     identity = doi or openalex_id
     document_id = stable_id("document", "openalex", identity)
-    version_id = stable_id("version", document_id, _observation_hash(payload))
+    version_id = stable_id(
+        "version", document_id, _observation_hash(payload, "openalex")
+    )
     abstract = _abstract_from_inverted_index(
         payload.get("abstract_inverted_index")
     )
@@ -576,11 +683,13 @@ def parse_github(
             content = base64.b64decode(readme["content"]).decode(
                 "utf-8", errors="replace"
             )
-    # Mutable counters need their own snapshot so later collection cannot
-    # overwrite the metrics attached to a previous version. Fetch time alone
-    # is not a version.
+    # Counters are dated metric observations of the version, not content:
+    # a new star must not pay for a new extraction.
     version_id = stable_id(
-        "version", document_id, commit_sha, _observation_hash(payload)
+        "version",
+        document_id,
+        commit_sha,
+        _observation_hash(payload, "github"),
     )
     canonical_url = (
         repo.get("html_url")
@@ -724,7 +833,7 @@ def parse_pypi(
     version = info.get("version") or "unknown"
     document_id = stable_id("document", "pypi", name.lower())
     version_id = stable_id(
-        "version", document_id, version, _observation_hash(payload)
+        "version", document_id, version, _observation_hash(payload, "pypi")
     )
     canonical_url = (
         info.get("package_url")
@@ -985,7 +1094,10 @@ def parse_epo(
     ]
     organizations = []
     countries: Dict[str, Country] = {}
-    if country:
+    iso = set(load_catalog("countries")["iso_alpha2"])
+    # EP, WO, EA... are patent offices, not countries (A-7).
+    office = country.upper() if country.upper() not in iso else None
+    if country and not office:
         countries[country.upper()] = Country(
             country_id=stable_id("country", country.upper()),
             code=country.upper(),
@@ -1010,11 +1122,11 @@ def parse_epo(
                 organization_id=stable_id("organization", "epo", name),
                 name=name,
                 organization_type=_organization_type(name),
-                country_code=residence,
+                country_code=residence if residence in iso else None,
                 role="applicant",
             )
         )
-        if residence:
+        if residence in iso:
             countries.setdefault(
                 residence,
                 Country(
@@ -1047,6 +1159,7 @@ def parse_epo(
         chunks=chunks,
         metadata={
             "country": country or None,
+            "patent_office": office,
             "kind": kind or None,
             "classifications": [
                 " ".join("".join(item.itertext()).split())

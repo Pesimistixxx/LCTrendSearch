@@ -19,7 +19,8 @@ import logging
 import os
 import re
 import tempfile
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
+from concurrent.futures import TimeoutError as FutureTimeout
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ from uuid import uuid4
 
 from lctrend.core import aio
 from lctrend.core.models import DocumentEnvelope, ExtractionResult
+from lctrend.ingest.processed import covers, known_fulltexts, prior_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,19 @@ def _write_json(path: Path, value: Any) -> None:
                     raise
     finally:
         temporary.unlink(missing_ok=True)
+
+
+async def _settle(tasks) -> None:
+    """Wait for every document task; one failure never cancels the rest."""
+    if not tasks:
+        return
+    for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(outcome, BaseException) and not isinstance(
+            outcome, asyncio.CancelledError
+        ):
+            logger.error(
+                "Document task ended with %s", type(outcome).__name__
+            )
 
 
 def _error(exc: Exception, stage: str) -> dict[str, str]:
@@ -605,6 +620,16 @@ class JobManager:
             on_created,
         )
 
+    def active_inputs(self) -> set[str]:
+        """Input files of jobs that may still read them."""
+        with self._lock:
+            return {
+                path
+                for job_id, job in self._jobs.items()
+                if job["status"] in ACTIVE_STATUSES
+                for path in self._tasks.get(job_id, {}).get("paths", [])
+            }
+
     def list_jobs(self) -> list[dict]:
         with self._lock:
             return deepcopy(
@@ -667,19 +692,48 @@ class JobManager:
                 self._save(job)
             return deepcopy(job)
 
-    def close(self, wait: bool = False) -> None:
+    def close(self, wait: bool = False, timeout: float | None = None) -> None:
+        """Stop new documents; with ``wait`` or ``timeout``, settle the rest.
+
+        Running documents may finish within ``timeout`` seconds; after that
+        their jobs are interrupted and recorded as such, so a server stop
+        never leaves a paid document silently "running" (G-4).
+        """
         with self._lock:
             self._closed = True
             for job_id, job in self._jobs.items():
                 if job["status"] in ACTIVE_STATUSES:
                     self.cancel_job(job_id)
             futures = list(self._futures.values())
-        if wait:
+        if timeout is not None:
+            wait = True
+            deadline = monotonic() + max(0.0, timeout)
+            for future in futures:
+                try:
+                    future.result(max(0.0, deadline - monotonic()))
+                except FutureTimeout:
+                    logger.warning("Interrupting a job still running at stop")
+                    future.cancel()
+                except (Exception, CancelledError):
+                    logger.debug("Job ended with an error", exc_info=True)
+            # A cancelled job records "interrupted" on the loop; give that
+            # bookkeeping a moment before the loop stops.
+            settle = monotonic() + 5
+            while monotonic() < settle:
+                with self._lock:
+                    if not any(
+                        job["status"] in ACTIVE_STATUSES
+                        for job in self._jobs.values()
+                    ):
+                        break
+                sleep(0.05)
+        elif wait:
             for future in futures:
                 try:
                     future.result()
                 except Exception:
                     logger.debug("Job ended with an error", exc_info=True)
+        if wait:
             self._stopping = True
             if self._wake is not None:
                 self._loop.loop.call_soon_threadsafe(self._wake.set)
@@ -696,6 +750,8 @@ class JobManager:
         self, job: dict, status: str, error: dict | None = None
     ) -> None:
         finished = _now()
+        # A finished job has only terminal documents: nothing stays
+        # "running" forever after a page failure or a shutdown.
         for document in job["documents"]:
             if document["status"] == "queued":
                 document.update(
@@ -703,6 +759,24 @@ class JobManager:
                 )
                 if document["llm_status"] == "queued":
                     document["llm_status"] = "cancelled"
+            elif document["status"] == "running":
+                document.update(
+                    # The crawl reuses a result interrupted at publication.
+                    interrupted_stage=document.get("stage"),
+                    status="failed",
+                    stage="interrupted",
+                    finished_at=finished,
+                    error={
+                        "code": "interrupted",
+                        "message": "Обработка документа была прервана.",
+                    },
+                )
+                if document["llm_status"] in {"queued", "running"}:
+                    document["llm_status"] = (
+                        "not_started"
+                        if document["llm_status"] == "queued"
+                        else "failed"
+                    )
         job.update(
             status=status, stage=status, finished_at=finished, error=error
         )
@@ -879,6 +953,20 @@ class JobManager:
                     )
                 else:
                     self._finish(job, "completed")
+        except asyncio.CancelledError:
+            # Shutdown cancelled the job task: record it, never leave it
+            # "running" on disk.
+            logger.warning("Job %s interrupted at stage %s", job_id, stage)
+            with self._lock:
+                self._finish(
+                    self._jobs[job_id],
+                    "interrupted",
+                    {
+                        "code": "interrupted",
+                        "message": "Задание прервано остановкой сервера.",
+                    },
+                )
+            raise
         except Exception as exc:
             if self._cancel[job_id].is_set():
                 logger.debug(
@@ -994,12 +1082,16 @@ class JobManager:
                 pending |= self._schedule(job_id, batch, context)
                 pending = {task for task in pending if not task.done()}
                 cursor = next_cursor
-            if pending:
-                await asyncio.gather(*pending)
-        except BaseException:
+        except asyncio.CancelledError:
             for waiting in pending:
                 waiting.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
             raise
+        except Exception:
+            # A failed page stops discovery, not documents already paid for.
+            await _settle(pending)
+            raise
+        await _settle(pending)
         with self._lock:
             job["discovery_finished"] = not self._cancel[job_id].is_set()
             self._save(job)
@@ -1014,7 +1106,37 @@ class JobManager:
                 with self._lock:
                     if self._cancel[job_id].is_set():
                         return
-                await self._process_document(job_id, doc_id, source, context)
+                try:
+                    await self._process_document(
+                        job_id, doc_id, source, context
+                    )
+                except Exception as exc:
+                    # The document's own error handler failed (e.g. a disk
+                    # error): fail this document, never its siblings.
+                    logger.error(
+                        "Job %s document %s: error handling failed (%s)",
+                        job_id,
+                        doc_id,
+                        type(exc).__name__,
+                    )
+                    with self._lock:
+                        record = next(
+                            item
+                            for item in self._jobs[job_id]["documents"]
+                            if item["doc_id"] == doc_id
+                        )
+                        if record["status"] not in TERMINAL_DOCUMENT_STATUSES:
+                            record.update(
+                                interrupted_stage=record.get("stage"),
+                                status="failed",
+                                stage="interrupted",
+                                finished_at=_now(),
+                                error=_error(exc, "storage"),
+                            )
+                        try:
+                            self._save(self._jobs[job_id])
+                        except OSError:
+                            self._dirty.add(job_id)
 
         return {
             asyncio.create_task(one(doc_id, source))
@@ -1029,8 +1151,13 @@ class JobManager:
         Cancellation stops new starts; running documents finish.
         """
         tasks = self._schedule(job_id, batch, context)
-        if tasks:
-            await asyncio.gather(*tasks)
+        try:
+            await _settle(tasks)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _process_document(
         self, job_id: str, doc_id: str, source, context: dict
@@ -1130,7 +1257,13 @@ class JobManager:
                 else:
                     writer = self._snapshot_writer
                 document = await aio.call(writer, document, raw)
-                if await self._already_processed(job, document, store):
+                prior = await self._prior_inputs(job, document, store)
+                if (
+                    prior
+                    and not job["fulltext"]
+                    and covers(prior, document)
+                ):
+                    await self._record_metrics(document, store)
                     await self._skip(job_id, doc_id, document)
                     return
                 if job["fulltext"]:
@@ -1144,12 +1277,22 @@ class JobManager:
                         attacher = attach_openalex_fulltext
                     else:
                         attacher = self._fulltext_attacher
-                    attached = await aio.call(attacher, document, source)
+                    known = known_fulltexts(prior)
+                    attached = await aio.call(
+                        attacher,
+                        document,
+                        source,
+                        **({"known_sha256": known} if known else {}),
+                    )
                     if attached is not None:
                         document = attached
+                    if prior and covers(prior, document):
+                        await self._record_metrics(document, store)
+                        await self._skip(job_id, doc_id, document)
+                        return
             document = DocumentEnvelope.model_validate(document)
-            if job["source"] == "files" and await self._already_processed(
-                job, document, store
+            if job["source"] == "files" and covers(
+                await self._prior_inputs(job, document, store), document
             ):
                 await self._skip(job_id, doc_id, document)
                 return
@@ -1222,18 +1365,30 @@ class JobManager:
                 **branch_updates,
             )
 
-    async def _already_processed(self, job, document, store) -> bool:
-        """A complete extraction of this exact version is already in Neo4j."""
-        lookup = getattr(store, "processed_versions", None)
-        if job["mode"] == "none" or lookup is None:
-            return False
+    async def _prior_inputs(self, job, document, store) -> list:
+        """Inputs of complete extractions of this version in Neo4j."""
+        if job["mode"] == "none":
+            return []
         try:
-            found = await aio.call(lookup, [document.document_version_id])
+            return await prior_inputs(store, document.document_version_id)
         except Exception as exc:
             # The check only saves money; it never blocks processing.
             logger.debug("Processed-version lookup failed: %s", exc)
-            return False
-        return document.document_version_id in found
+            return []
+
+    async def _record_metrics(self, document, store) -> None:
+        """Counters of a skipped version are a new dated observation."""
+        recorder = getattr(store, "record_metrics", None)
+        if recorder is None:
+            return
+        try:
+            await aio.call(recorder, document)
+        except Exception as exc:
+            logger.warning(
+                "Metrics of %s not recorded: %s",
+                document.document_version_id,
+                type(exc).__name__,
+            )
 
     async def _skip(self, job_id, doc_id, document) -> None:
         await asyncio.to_thread(
@@ -1268,10 +1423,12 @@ class JobManager:
         job = self._jobs[job_id]
         store = context["store"]
         try:
-            no_text = (
-                job["mode"] == "llm"
-                and not document.chunks
-                and result.run.metadata.get("model_calls") == 0
+            no_text = job["mode"] == "llm" and (
+                result.run.status == "skipped_no_text"
+                or (
+                    not document.chunks
+                    and result.run.metadata.get("model_calls") == 0
+                )
             )
             if job["mode"] != "llm":
                 llm_status = "disabled"

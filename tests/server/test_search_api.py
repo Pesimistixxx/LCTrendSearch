@@ -25,7 +25,7 @@ class Search:
 
 def client(search):
     app = create_app(Manager(), crawl_manager=object(), search_service=search)
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost")
 
 
 def test_search_passes_query_and_snapshot_date():

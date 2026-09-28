@@ -366,6 +366,26 @@ def plan_packets(
     )
 
 
+def split_packet(
+    document: DocumentEnvelope,
+    packet: ContextPacket,
+    settings: PipelineSettings,
+) -> List[ContextPacket]:
+    """Two packets with half of the focus each (with their neighbours).
+
+    An answer cut off at the output token limit means the packet asked for
+    too much; its halves usually fit. A single chunk cannot be split.
+    """
+    focus = list(packet.focus_chunk_ids)
+    if len(focus) < 2:
+        return []
+    middle = len(focus) // 2
+    return [
+        _with_neighbors(document, _packet(document, part), settings)[0]
+        for part in (focus[:middle], focus[middle:])
+    ]
+
+
 def expand_packet(
     document: DocumentEnvelope,
     packet: ContextPacket,

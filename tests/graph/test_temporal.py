@@ -225,6 +225,40 @@ def test_metric_observation_gates_both_counters_and_yearly_histories():
     assert late.history["citations_by_year"] == {2019: 99}
 
 
+def test_each_snapshot_reads_the_metrics_observed_by_its_date():
+    # A-1: one unchanged version, counters observed twice.
+    corpus = TemporalCorpus(
+        {
+            "versions": [
+                version(
+                    document_type="article",
+                    metrics_json={"citation_count": 40},
+                    metrics_observed_at="2026-01-01",
+                    metric_observations=[
+                        {
+                            "observed_at": "2024-01-01",
+                            "metrics_json": {"citation_count": 17},
+                        },
+                        {
+                            "observed_at": "2026-01-01",
+                            "metrics_json": {"citation_count": 40},
+                        },
+                    ],
+                )
+            ],
+            "mentions": [mention()],
+        }
+    )
+
+    def metrics(when):
+        view = corpus.view(when).technologies["t1"]
+        return view.documents[0].metrics
+
+    assert metrics(date(2023, 1, 1)) is None
+    assert metrics(date(2025, 1, 1)) == {"citation_count": 17}
+    assert metrics(date(2026, 6, 1)) == {"citation_count": 40}
+
+
 def test_coverage_requires_a_completed_relevant_exhaustive_observation():
     corpus = TemporalCorpus(
         {

@@ -47,11 +47,29 @@ def test_txt_snapshot_identity_dates_and_source_offsets(
         )
         assert chunk.locator["line_start"] >= 1
         assert "page" not in chunk.locator
+    # A-6: identity is the content, not the path. Other bytes at the same
+    # path are another document; the old snapshot is untouched.
     path.write_text("Changed content", encoding="utf-8")
     third = parse_file(path)
-    assert third.document_id == first.document_id
+    assert third.document_id != first.document_id
     assert third.document_version_id != first.document_version_id
     assert snapshot.read_bytes() == raw
+
+
+def test_the_same_bytes_uploaded_twice_are_one_document(tmp_path):
+    # A-6: every web upload lands in a new folder.
+    raw = b"Sparse attention reduces memory use."
+    first_path = tmp_path / "upload-1" / "paper.txt"
+    second_path = tmp_path / "upload-2" / "renamed.txt"
+    for path in (first_path, second_path):
+        path.parent.mkdir()
+        path.write_bytes(raw)
+    first, second = parse_file(first_path), parse_file(second_path)
+    assert first.document_id == second.document_id
+    assert first.document_version_id == second.document_version_id
+    assert [chunk.chunk_id for chunk in first.chunks] == [
+        chunk.chunk_id for chunk in second.chunks
+    ]
 
 
 def test_markdown_sections_and_long_fragments_keep_literal_source(tmp_path):
@@ -151,6 +169,8 @@ def test_empty_bad_encoding_and_unsupported_input_are_explicit(tmp_path):
     document = parse_file(path)
     assert document.chunks == []
     assert "no_text_chunks" in document.metadata["parse_warnings"]
+    # A-10: an empty file used to claim coverage "full_text".
+    assert document.coverage == "metadata_only"
     path.write_bytes(b"\xff\xff")
     with pytest.raises(FileAdapterError, match="UTF-8"):
         parse_file(path)
@@ -362,3 +382,141 @@ def test_concurrent_snapshot_writers_publish_once_without_false_corruption(
     assert paths[0] == paths[1]
     assert paths[0].read_bytes() == raw
     assert list(directory.iterdir()) == [paths[0]]
+
+
+def test_local_pdf_gets_the_same_body_as_an_openalex_full_text(
+    tmp_path, monkeypatch
+):
+    # A-3: Docling labels must not split a local PDF into many packets.
+    from lctrend.llm.context import PipelineSettings, plan_packets
+
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    items = [
+        ("page_header", "Journal of Fixtures, vol. 1"),
+        ("section_header", "2 Methods"),
+        ("text", "Sparse attention reduces memory use by 40%."),
+        ("caption", "Figure 1. Memory use."),
+        ("text", "It was tested on long documents."),
+        ("page_footer", "Page 3"),
+        ("section_header", "References"),
+        ("list_item", "[1] Someone. A cited paper. 2020."),
+    ]
+    document = SimpleNamespace(
+        iterate_items=lambda: [
+            (
+                SimpleNamespace(
+                    label=SimpleNamespace(value=label),
+                    text=text,
+                    self_ref=f"#/texts/{index}",
+                    prov=[],
+                ),
+                0,
+            )
+            for index, (label, text) in enumerate(items)
+        ]
+    )
+
+    class Converter:
+        def convert(self, path, **options):
+            return SimpleNamespace(
+                document=document, status=SimpleNamespace(value="success")
+            )
+
+    module = ModuleType("docling.document_converter")
+    module.DocumentConverter = Converter
+    monkeypatch.setitem(sys.modules, "docling.document_converter", module)
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-local")
+    parsed = parse_file(path)
+    assert [chunk.text for chunk in parsed.chunks] == [
+        "2 Methods",
+        "Sparse attention reduces memory use by 40%.",
+        "Figure 1. Memory use.",
+        "It was tested on long documents.",
+    ]
+    assert {chunk.kind for chunk in parsed.chunks} == {"fulltext"}
+    assert parsed.chunks[1].locator["docling_label"] == "text"
+    assert parsed.chunks[1].locator["section_role"] == "method"
+    plan = plan_packets(
+        parsed,
+        PipelineSettings.from_catalog().model_copy(
+            update={"primary_chunks": 6}
+        ),
+    )
+    assert len(plan.packets) == 1
+
+
+FAKE_DOCLING = """
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+
+class DocumentConverter:
+    def convert(self, path, max_num_pages=None):
+        raw = Path(path).read_bytes()
+        if b"stuck" in raw:
+            time.sleep(120)
+        item = SimpleNamespace(
+            label=SimpleNamespace(value="text"),
+            text=raw.decode(),
+            self_ref="#/texts/0",
+            prov=[],
+        )
+        return SimpleNamespace(
+            document=SimpleNamespace(iterate_items=lambda: [(item, 0)]),
+            status=SimpleNamespace(value="success"),
+        )
+"""
+
+
+def test_stuck_pdf_is_killed_and_the_next_pdf_converts(tmp_path, monkeypatch):
+    # A-4: a thread timeout left Docling running with the converter held.
+    import time
+
+    from lctrend.ingest import file_adapters
+
+    package = tmp_path / "site" / "docling"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "document_converter.py").write_text(
+        FAKE_DOCLING, encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+    for name in ("docling", "docling.document_converter"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(file_adapters, "IN_PROCESS_DOCLING", False)
+    worker = file_adapters._DoclingProcess()
+    monkeypatch.setattr(file_adapters, "_DOCLING", worker)
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    catalog = file_adapters.load_catalog
+
+    def limits(timeout):
+        def load(name):
+            value = catalog(name)
+            if name == "pipeline":
+                value["file_limits"]["pdf_timeout_seconds"] = timeout
+            return value
+
+        monkeypatch.setattr(file_adapters, "load_catalog", load)
+
+    def pdf(name, text):
+        path = tmp_path / name
+        path.write_bytes(text.encode())
+        return path
+
+    try:
+        limits(60)  # the first call also starts the worker
+        first = parse_file(pdf("first.pdf", "Sparse attention works."))
+        assert first.chunks[0].text == "Sparse attention works."
+        limits(1)
+        started = time.monotonic()
+        with pytest.raises(file_adapters.DoclingTimeout):
+            parse_file(pdf("stuck.pdf", "stuck forever"))
+        assert time.monotonic() - started < 10
+        assert worker.process is None
+        limits(60)
+        after = parse_file(pdf("after.pdf", "Next paper converts."))
+        assert after.chunks[0].text == "Next paper converts."
+    finally:
+        worker.stop()

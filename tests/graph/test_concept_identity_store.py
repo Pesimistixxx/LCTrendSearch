@@ -104,8 +104,9 @@ def test_identity_key_and_form_counts_are_stored_and_read_back():
     _, parameters = next(
         item for item in queries if "c.preferred_label" in item[0]
     )
-    assert parameters["identity_key"] == "graphene"
-    assert json.loads(parameters["label_counts_json"]) == {
+    row = parameters["rows"][0]
+    assert row["identity_key"] == "graphene"
+    assert json.loads(row["label_counts_json"]) == {
         "graphene": 3,
         "Graphene": 1,
     }
@@ -115,7 +116,7 @@ def test_identity_key_and_form_counts_are_stored_and_read_back():
             "kind": "Material",
             "preferred_label": "graphene",
             "identity_key": "graphene",
-            "label_counts_json": parameters["label_counts_json"],
+            "label_counts_json": row["label_counts_json"],
         }
     )
     assert loaded.identity_key == "graphene"

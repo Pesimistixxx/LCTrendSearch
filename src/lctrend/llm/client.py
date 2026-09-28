@@ -13,6 +13,8 @@ import json
 import logging
 import math
 import os
+import re
+import threading
 import weakref
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -25,7 +27,7 @@ from hashlib import sha256
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import monotonic, perf_counter
-from typing import Any, Dict, Optional, Protocol, Type, TypeVar
+from typing import Any, Dict, Optional, Protocol, Tuple, Type, TypeVar
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -42,6 +44,41 @@ STAGES = frozenset(("extract", "review"))
 CALL_LOG: ContextVar[Optional[list]] = ContextVar("llm_call_log", default=None)
 # A long crawl keeps one provider alive; its own history stays bounded.
 MAX_RETAINED_CALLS = 2000
+
+
+# One request limit per provider endpoint for the whole process: the CLI,
+# the web job loop, the resolver's own client and embedding threads all
+# count against LLM_MAX_CONCURRENCY together (B-10).
+_PROCESS_LIMITS: Dict[Tuple[str, str, int], threading.BoundedSemaphore] = {}
+_PROCESS_LIMITS_LOCK = threading.Lock()
+
+
+def _process_limit(
+    provider: str, base_url: str, limit: int
+) -> threading.BoundedSemaphore:
+    with _PROCESS_LIMITS_LOCK:
+        key = (provider, base_url, limit)
+        if key not in _PROCESS_LIMITS:
+            _PROCESS_LIMITS[key] = threading.BoundedSemaphore(limit)
+        return _PROCESS_LIMITS[key]
+
+
+class _RequestSlot:
+    """Hold one process-wide request slot without blocking the event loop.
+
+    A thread semaphore works across loops and threads; polling it keeps a
+    cancelled waiter from ever owning a slot it cannot release.
+    """
+
+    def __init__(self, semaphore: threading.BoundedSemaphore) -> None:
+        self.semaphore = semaphore
+
+    async def __aenter__(self) -> None:
+        while not self.semaphore.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+
+    async def __aexit__(self, *_: Any) -> None:
+        self.semaphore.release()
 
 
 def _record(calls: Any, call: Dict[str, Any]) -> None:
@@ -117,13 +154,20 @@ def _finite_numbers(value: Any) -> None:
 
 
 def _validate(schema: Type[T], answer: Any) -> T:
+    from .contracts import LocalModel, validate_items
+
     try:
         if isinstance(answer, BaseModel):
             answer = answer.model_dump(mode="python")
         if isinstance(answer, str):
-            result = schema.model_validate_json(answer)
-        else:
+            answer = json.loads(answer)
+        try:
             result = schema.model_validate(answer)
+        except ValidationError:
+            if not issubclass(schema, LocalModel):
+                raise
+            # One bad element must not cost the whole packet (B-5).
+            result = validate_items(schema, answer)
         _finite_numbers(result.model_dump(mode="python"))
         return result
     except (ValidationError, ValueError, TypeError):
@@ -252,11 +296,25 @@ def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _strip_fence(content: str) -> str:
-    """Some providers wrap requested JSON in a Markdown code fence."""
+    """The JSON object of a response, without Markdown or a preamble.
+
+    Some providers wrap the requested JSON in a code fence or add a sentence
+    before it.
+    """
     text = content.strip()
     fence = "`" * 3
     if text.startswith(fence) and text.endswith(fence) and "\n" in text:
         return text[text.index("\n") + 1 : -3].strip()
+    if text.startswith("{"):
+        return text
+    block = re.search(
+        fence + r"(?:json)?[ \t]*\n(.*?)\n?" + fence, text, re.S | re.I
+    )
+    if block:
+        return block.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        return text[start : end + 1]
     return text
 
 
@@ -621,10 +679,7 @@ class JsonLLM:
         loop = asyncio.get_running_loop()
         state = self._loop_state.get(loop)
         if state is None:
-            state = {
-                "token": asyncio.Lock(),
-                "requests": asyncio.Semaphore(self.max_concurrency),
-            }
+            state = {"token": asyncio.Lock()}
             self._loop_state[loop] = state
         return state
 
@@ -845,9 +900,15 @@ class JsonLLM:
         ) / 1_000_000
 
     async def _open(self, stack: AsyncExitStack) -> httpx.AsyncClient:
-        # The semaphore bounds concurrent requests to the provider (GigaChat
-        # personal accounts allow a single stream).
-        await stack.enter_async_context(self._loop_local()["requests"])
+        # The limit bounds concurrent requests to the provider (GigaChat
+        # personal accounts allow a single stream) across the process.
+        await stack.enter_async_context(
+            _RequestSlot(
+                _process_limit(
+                    self.provider, self.base_url, self.max_concurrency
+                )
+            )
+        )
         return await stack.enter_async_context(self._client())
 
     async def generate(

@@ -274,6 +274,6 @@ def test_graph_write_uses_labels_batches_and_links_text_countries():
     same_as = next(
         parameters for query, parameters in tx.queries if "SAME_AS" in query
     )
-    assert same_as["code"] == "DE"
+    assert [row["code"] for row in same_as["rows"]] == ["DE"]
     assert any("DEVELOPED_BY" in query for query in queries)
     assert any("HAS_MATURITY_EVIDENCE" in query for query in queries)

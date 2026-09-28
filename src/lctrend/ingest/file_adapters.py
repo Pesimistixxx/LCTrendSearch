@@ -9,10 +9,10 @@ its basis in document.metadata.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import inspect
 import io
 import json
-import os
 import re
 import tempfile
 import threading
@@ -443,38 +443,176 @@ def _html(
     )
 
 
-_CONVERTER = None
-# Docling loads its layout/OCR models once per converter and is CPU-bound;
-# one shared converter, one conversion at a time.
-_CONVERTER_LOCK = threading.Lock()
+def _docling_items(converter: Any, path: str, max_pages: int) -> tuple:
+    """Plain (picklable) Docling items: label, text, reference, pages."""
+    options = {}
+    if "max_num_pages" in inspect.signature(converter.convert).parameters:
+        # A book-sized PDF would hold the converter for hours.
+        options["max_num_pages"] = max_pages
+    conversion = converter.convert(Path(path), **options)
+    document = conversion.document
+    items = []
+    for item, _level in document.iterate_items():
+        label = getattr(item.label, "value", str(item.label))
+        value = (
+            item.export_to_markdown(doc=document)
+            if label == "table"
+            else getattr(item, "text", "")
+        )
+        items.append(
+            (
+                label,
+                value,
+                item.self_ref,
+                [
+                    prov.model_dump(mode="json")
+                    for prov in getattr(item, "prov", [])
+                ],
+            )
+        )
+    status = getattr(conversion.status, "value", str(conversion.status))
+    return items, status
 
 
-def _convert(path: Path):
-    global _CONVERTER
+def _docling_worker(connection: Any) -> None:
+    """Child process: one converter (models load once), one PDF at a time."""
     from docling.document_converter import DocumentConverter
 
+    converter = None
+    while True:
+        try:
+            request = connection.recv()
+        except (EOFError, OSError):
+            return
+        if request is None:
+            return
+        path, max_pages = request
+        try:
+            if converter is None:
+                converter = DocumentConverter()
+            reply = ("ok", _docling_items(converter, path, max_pages))
+        except Exception as exc:
+            reply = ("error", type(exc).__name__, str(exc)[:500])
+        connection.send(reply)
+
+
+class DoclingTimeout(TimeoutError):
+    pass
+
+
+class _DoclingProcess:
+    """Docling in a child process that is killed on timeout.
+
+    A thread cannot be stopped: a timed-out conversion in a worker thread
+    kept running and kept the converter busy, so the next PDFs timed out
+    too. Killing the process frees it; the next PDF starts a fresh one.
+    """
+
+    def __init__(self) -> None:
+        self.process = None
+        self.connection = None
+
+    def _start(self) -> None:
+        import multiprocessing
+
+        # spawn: forking a process that runs threads (and torch) can hang.
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe()
+        self.process = context.Process(
+            target=_docling_worker,
+            args=(child,),
+            name="lctrend-docling",
+            daemon=True,
+        )
+        self.process.start()
+        child.close()
+        self.connection = parent
+
+    def stop(self) -> None:
+        if self.process is not None and self.process.is_alive():
+            self.process.kill()
+            self.process.join(5)
+        if self.connection is not None:
+            self.connection.close()
+        self.process = self.connection = None
+
+    def convert(
+        self, path: Path, max_pages: int, timeout: Optional[float]
+    ) -> tuple:
+        if self.process is None or not self.process.is_alive():
+            self.stop()
+            self._start()
+        self.connection.send((str(path), max_pages))
+        if not self.connection.poll(timeout):
+            self.stop()
+            raise DoclingTimeout(
+                f"PDF conversion exceeded {timeout} s and was stopped"
+            )
+        try:
+            reply = self.connection.recv()
+        except (EOFError, OSError):
+            self.stop()
+            raise FileAdapterError("PDF converter process exited") from None
+        if reply[0] == "error":
+            if reply[1] in ("ImportError", "ModuleNotFoundError"):
+                raise UnsupportedFileFormat(
+                    "PDF parsing requires the optional Docling PDF dependency"
+                )
+            raise FileAdapterError(f"PDF conversion failed: {reply[1]}")
+        return reply[1]
+
+
+_CONVERTER = None
+# Docling loads its layout/OCR models once per converter and is CPU-bound;
+# one converter, one conversion at a time.
+_CONVERTER_LOCK = threading.Lock()
+_DOCLING = _DoclingProcess()
+# Tests replace Docling with in-memory fakes that a child process cannot
+# import; production always isolates the conversion.
+IN_PROCESS_DOCLING = False
+
+
+def _require_docling() -> None:
+    missing = UnsupportedFileFormat(
+        "PDF parsing requires the optional Docling PDF dependency"
+    )
+    if not IN_PROCESS_DOCLING:
+        try:
+            found = importlib.util.find_spec("docling") is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            raise missing
+        return
+    try:
+        from docling.document_converter import DocumentConverter  # noqa: F401
+    except ImportError:
+        raise missing from None
+
+
+def _convert(path: Path) -> tuple:
+    """Docling items and status of a PDF, bounded by the configured time.
+
+    The timeout counts the conversion only, not the wait for the converter.
+    """
+    global _CONVERTER
     limits = load_catalog("pipeline")["file_limits"]
+    max_pages = int(limits.get("pdf_max_pages", 10**9))
+    timeout = limits.get("pdf_timeout_seconds")
     with _CONVERTER_LOCK:
+        if not IN_PROCESS_DOCLING:
+            return _DOCLING.convert(path, max_pages, timeout)
+        from docling.document_converter import DocumentConverter
+
         if not isinstance(_CONVERTER, DocumentConverter):
             _CONVERTER = DocumentConverter()
-        options = {}
-        if "max_num_pages" in inspect.signature(_CONVERTER.convert).parameters:
-            # A book-sized PDF would hold the single converter for hours.
-            options["max_num_pages"] = int(limits.get("pdf_max_pages", 10**9))
-        return _CONVERTER.convert(path, **options)
+        return _docling_items(_CONVERTER, str(path), max_pages)
 
 
 def _pdf(
     raw: bytes, version_id: str, path: Path
 ) -> Tuple[str, List[Chunk], List[str]]:
-    try:
-        from docling.document_converter import (  # noqa: F401
-            DocumentConverter,
-        )
-    except ImportError:
-        raise UnsupportedFileFormat(
-            "PDF parsing requires the optional Docling PDF dependency"
-        ) from None
+    _require_docling()
     # Convert the bytes whose hash we report, not a file that may change
     # during conversion.
     snapshot_path = None
@@ -484,31 +622,21 @@ def _pdf(
         ) as snapshot:
             snapshot.write(raw)
             snapshot_path = Path(snapshot.name)
-        conversion = _convert(snapshot_path)
+        items, status = _convert(snapshot_path)
     finally:
         if snapshot_path is not None:
             snapshot_path.unlink(missing_ok=True)
-    document = conversion.document
     chunks, warnings = (
         [],
         list(load_catalog("pipeline")["file_warnings"]["pdf"]),
     )
-    for item, _level in document.iterate_items():
-        label = getattr(item.label, "value", str(item.label))
-        value = (
-            item.export_to_markdown(doc=document)
-            if label == "table"
-            else getattr(item, "text", "")
-        )
+    for label, value, self_ref, provenance in items:
         if not value or not value.strip():
             continue
-        provenance = [
-            prov.model_dump(mode="json") for prov in getattr(item, "prov", [])
-        ]
         locator = {
             "path": str(path),
             "kind": "docling",
-            "self_ref": item.self_ref,
+            "self_ref": self_ref,
             "provenance": provenance,
             "text_basis": "docling_table_markdown"
             if label == "table"
@@ -520,17 +648,58 @@ def _pdf(
                 value,
                 label,
                 locator,
-                source_stream_id=stable_id(
-                    "stream", version_id, item.self_ref
-                ),
+                source_stream_id=stable_id("stream", version_id, self_ref),
             )
         )
-    status = getattr(conversion.status, "value", str(conversion.status))
     if status != "success":
         warnings.append("docling_conversion_status:" + status)
     if any(not chunk.locator["provenance"] for chunk in chunks):
         warnings.append("some_pdf_items_have_no_page_provenance")
     return path.stem, chunks, warnings
+
+
+def section_role(heading: Optional[str]) -> Optional[str]:
+    """Rhetorical role of a paper section (method, results, limitations...).
+
+    The packet stream stays one "fulltext" kind; the role is navigation
+    metadata, so a heading never becomes evidence.
+    """
+    if not heading:
+        return None
+    for role, pattern in load_catalog("pipeline")["section_roles"].items():
+        if re.search(pattern, heading, re.IGNORECASE):
+            return role
+    return None
+
+
+def pdf_body(chunks: List[Chunk], **locator: Any) -> List[Chunk]:
+    """Paper body of Docling chunks, shared by local and OpenAlex PDFs.
+
+    Page headers, footers and the bibliography are dropped. One kind keeps a
+    paper in one packet stream (a new Docling label must not close a
+    packet); the Docling label and section stay visible in the locator.
+    """
+    settings = load_catalog("pipeline")["openalex_fulltext"]
+    skipped = set(settings["skipped_labels"])
+    bibliography = re.compile(settings["bibliography_heading"], re.IGNORECASE)
+    kept, heading, in_bibliography = [], None, False
+    for chunk in chunks:
+        label = chunk.kind
+        if label == "section_header":
+            heading = chunk.text.strip()
+            in_bibliography = bool(bibliography.match(heading))
+        if label in skipped or in_bibliography:
+            continue
+        chunk.kind = "fulltext"
+        chunk.section_path = ["fulltext"]
+        chunk.locator.update(
+            docling_label=label,
+            section_heading=heading,
+            section_role=section_role(heading),
+            **locator,
+        )
+        kept.append(chunk)
+    return kept
 
 
 HTML_DATE_FIELDS = (
@@ -764,7 +933,9 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         )
     sha256 = hashlib.sha256(raw).hexdigest()
     snapshot_path = snapshot_bytes(raw)
-    document_id = stable_id("document", "local", os.path.normcase(str(path)))
+    # The content is the identity: the same bytes uploaded again (each web
+    # upload gets a new folder) must not become a new, paid document.
+    document_id = stable_id("document", "local", sha256)
     version_id = stable_id("version", document_id, sha256, ADAPTER_VERSION)
     adapter = spec["adapter"]
     warnings, title = [], path.stem
@@ -779,6 +950,7 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         coverage = "selected_text"
     elif adapter == "pdf":
         title, chunks, warnings = _pdf(raw, version_id, path)
+        chunks = pdf_body(chunks)
         coverage = "parsed_text"
     else:
         raise UnsupportedFileFormat(
@@ -786,6 +958,8 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         )
     if not chunks:
         warnings.append("no_text_chunks")
+        # An empty file carries no text, whatever its format promises.
+        coverage = "metadata_only"
     for order, chunk in enumerate(chunks):
         chunk.order = order
         chunk.locator.update(

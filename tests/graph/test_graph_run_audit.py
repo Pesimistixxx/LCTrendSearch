@@ -320,7 +320,7 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc: calls.append(
+            lambda transaction, doc, publishing=False: calls.append(
                 ("document", transaction, doc)
             )
         ),
@@ -342,6 +342,9 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
     assert len(tx.queries) == 1
     assert "RETURN count(v) AS count" in tx.queries[0][0]
     assert tx.queries[0][1]["version_id"] == document.document_version_id
+    # D-3: the run being published does not count as an active better one.
+    assert "r.run_id <> $run_id" in tx.queries[0][0]
+    assert tx.queries[0][1]["run_id"] == result.run.run_id
 
 
 def test_document_and_extraction_share_one_execute_write_transaction(
@@ -386,7 +389,9 @@ def test_document_and_extraction_share_one_execute_write_transaction(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc: writes.append(("document", transaction))
+            lambda transaction, doc, publishing=False: writes.append(
+                ("document", transaction)
+            )
         ),
     )
     monkeypatch.setattr(
@@ -500,14 +505,17 @@ def test_review_history_is_saved_on_each_run_creation_link():
             if "MERGE (a:Assertion" in statement
         )
         assert "MERGE (r)-[creation:CREATED]->(a)" in query
-        assert "creation.status = $status" in query
-        assert "creation.verification_status = $verification_status" in query
+        assert "creation.status = row.status" in query
+        assert (
+            "creation.verification_status = row.verification_status" in query
+        )
+        (row,) = parameters["rows"]
         records.append(
             (
                 parameters["run_id"],
-                parameters["assertion_id"],
-                parameters["status"],
-                parameters["verification_status"],
+                row["assertion_id"],
+                row["status"],
+                row["verification_status"],
             )
         )
     assert records == [

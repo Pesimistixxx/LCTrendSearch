@@ -990,3 +990,190 @@ def test_restart_preserves_interrupted_publication_stage(tmp_path):
         )
     finally:
         restored.close(wait=True)
+
+
+def test_failed_page_lets_running_documents_finish(tmp_path):
+    # G-2: a 429 on the next page must not abandon paid extractions.
+    started = Barrier(3, timeout=5)
+
+    def fetch(query, cursor, per_page, mailto, filter):
+        if cursor == "*":
+            return {
+                "results": [
+                    {"id": f"https://openalex.org/W{i}", "title": f"P{i}"}
+                    for i in (1, 2)
+                ],
+                "meta": {"next_cursor": "next"},
+            }
+        started.wait()  # both documents are being processed
+        raise RuntimeError("HTTP 429")
+
+    def process(doc, **kwargs):
+        started.wait()
+        sleep(0.1)
+        return extraction(doc)
+
+    instance = manager(
+        tmp_path,
+        source_fetcher=fetch,
+        document_processor=process,
+        fulltext_attacher=lambda doc, payload: doc,
+    )
+    try:
+        final = finish(
+            instance, instance.create_openalex("sensors", 5, workers=2)
+        )
+        assert final["status"] == "failed"
+        assert [doc["status"] for doc in final["documents"]] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert len(instance.fixture_store.writes) == 2
+    finally:
+        instance.close(wait=True)
+
+
+def test_failing_error_handler_fails_one_document_only(tmp_path):
+    # G-3: an error inside the error handler must not end the job while
+    # other documents run (the crawl would then run them twice).
+    calls = []
+
+    def process(doc, **kwargs):
+        calls.append(doc.document_id)
+        if doc.document_id == "study-0":
+            raise RuntimeError("model failed")
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    original = instance._update_document
+
+    def update(job_id, doc_id, force=None, **updates):
+        if updates.get("status") == "failed":
+            raise OSError("disk full")
+        return original(job_id, doc_id, force=force, **updates)
+
+    instance._update_document = update
+    try:
+        final = finish(
+            instance, instance.create_files(files(tmp_path, 2), workers=2)
+        )
+        statuses = {doc["title"]: doc["status"] for doc in final["documents"]}
+        assert statuses == {
+            "study-0.txt": "failed",
+            "study-1.txt": "succeeded",
+        }
+        assert final["status"] == "completed"
+        assert sorted(calls) == ["study-0", "study-1"]
+    finally:
+        instance.close(wait=True)
+
+
+def test_finished_job_has_only_terminal_documents(tmp_path):
+    instance = manager(tmp_path)
+    try:
+        job = {
+            "job_id": "a" * 32,
+            "limit": 3,
+            "status": "running",
+            "created_at": "2026-09-28T00:00:00+00:00",
+            "documents": [
+                {
+                    "doc_id": "d1",
+                    "status": "running",
+                    "stage": "publication",
+                    "llm_status": "running",
+                },
+                {
+                    "doc_id": "d2",
+                    "status": "queued",
+                    "stage": "queued",
+                    "llm_status": "queued",
+                },
+                {
+                    "doc_id": "d3",
+                    "status": "succeeded",
+                    "stage": "done",
+                    "llm_status": "succeeded",
+                },
+            ],
+        }
+        with instance._lock:
+            instance._jobs[job["job_id"]] = job
+            instance._finish(job, "interrupted")
+        assert [doc["status"] for doc in job["documents"]] == [
+            "failed",
+            "cancelled",
+            "succeeded",
+        ]
+        assert job["documents"][0]["interrupted_stage"] == "publication"
+        assert job["documents"][0]["llm_status"] == "failed"
+        assert job["counts"]["running"] == 0
+    finally:
+        instance.close(wait=True)
+
+
+def test_skipped_no_text_run_is_reported_as_no_text(tmp_path):
+    # A-10: the pipeline's own status now says why nothing was extracted.
+    instance = manager(
+        tmp_path,
+        file_parser=lambda path: document(path).model_copy(
+            update={"chunks": [], "coverage": "metadata_only"}
+        ),
+        document_processor=lambda doc, **kwargs: extraction(
+            doc, "skipped_no_text", coverage={"total_chunks": 0}
+        ),
+    )
+    try:
+        final = finish(instance, instance.create_files(files(tmp_path, 1)))
+        record = final["documents"][0]
+        assert record["llm_status"] == "no_text"
+        assert record["error"]["code"] == "no_text"
+    finally:
+        instance.close(wait=True)
+
+
+def test_stop_lets_a_running_document_finish_within_the_grace(tmp_path):
+    # G-4: the server stopped at once and the running document's (paid)
+    # result was lost.
+    started = Event()
+
+    def process(doc, **kwargs):
+        started.set()
+        sleep(0.2)
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    job = instance.create_files(files(tmp_path, 1))
+    assert started.wait(5)
+    instance.close(timeout=5)
+    final = json.loads(
+        (tmp_path / "jobs" / job["job_id"] / "job.json").read_text("utf-8")
+    )
+    assert final["documents"][0]["status"] == "succeeded"
+    assert len(instance.fixture_store.writes) == 1
+
+
+def test_stop_past_the_grace_records_the_job_as_interrupted(tmp_path):
+    started, release = Event(), Event()
+
+    def process(doc, **kwargs):
+        started.set()
+        release.wait(10)
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    job = instance.create_files(files(tmp_path, 1))
+    try:
+        assert started.wait(5)
+        instance.close(timeout=0.2)
+        final = json.loads(
+            (tmp_path / "jobs" / job["job_id"] / "job.json").read_text(
+                "utf-8"
+            )
+        )
+        assert final["status"] == "interrupted"
+        document = final["documents"][0]
+        assert document["status"] == "failed"
+        assert document["error"]["code"] == "interrupted"
+    finally:
+        release.set()

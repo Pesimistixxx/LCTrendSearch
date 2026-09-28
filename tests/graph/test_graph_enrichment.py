@@ -344,10 +344,31 @@ def test_financial_graph_evidence_keeps_review_and_source_provenance():
         for query, parameters in tx.queries
         if "MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE" in query
     )
-    assert parameters["assertion_id"] == "reviewed-claim"
-    assert parameters["unit"] == "per year"
-    assert parameters["period"] == "2026"
-    assert parameters["amount_text"] == "USD 2 million"
-    assert parameters["observed_at"] == "2026-01-01"
+    # Batched (D-1): per-evidence values are UNWIND rows.
+    (row,) = parameters["rows"]
+    assert row["assertion_id"] == "reviewed-claim"
+    assert row["unit"] == "per year"
+    assert row["period"] == "2026"
+    assert row["amount_text"] == "USD 2 million"
+    assert row["observed_at"] == "2026-01-01"
     assert parameters["recorded_at"] == result.run.started_at
-    assert "r.assertion_id = $assertion_id" in query
+    assert "r.assertion_id = row.assertion_id" in query
+
+
+def test_related_chunk_search_uses_full_text_indexes_with_literal_phrase():
+    # D-7: toLower(c.text) CONTAINS scanned every chunk of the graph.
+    from lctrend.core.config import resource_path
+
+    store, session = store_with_rows([])
+    asyncio.run(
+        store.read_related_chunks('Say "hi" \\ OR x*', "current", 1, 3, 30)
+    )
+    query, parameters = session.queries[0]
+    assert "db.index.fulltext.queryNodes('chunk_text', $phrase)" in query
+    assert "db.index.fulltext.queryNodes('document_title', $phrase)" in query
+    assert "CONTAINS $search_text" in query
+    # Model text is one quoted phrase, never Lucene operators.
+    assert parameters["phrase"] == '"say \\"hi\\" \\\\ or x*"'
+    schema = resource_path("schema", ".cypher").read_text(encoding="utf-8")
+    assert "CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS" in schema
+    assert "CREATE FULLTEXT INDEX document_title IF NOT EXISTS" in schema

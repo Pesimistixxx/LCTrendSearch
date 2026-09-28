@@ -43,6 +43,7 @@ from .ingest.connectors import (
     fetch_pypi_projects,
 )
 from .ingest.fulltext import attach_openalex_fulltext, require_pdf_support
+from .ingest.processed import covers, known_fulltexts, prior_inputs
 from .ingest.snapshots import persist_snapshot as _snapshot
 from .taxonomy import (
     TaxonomyConcept,
@@ -248,6 +249,23 @@ async def _job_registry(store, extract: bool):
     return ConceptRegistry(await resolve(store.read_concepts()))
 
 
+async def _record_metrics(store, document) -> None:
+    """Counters of a skipped version are a new observation, not lost."""
+    recorder = getattr(store, "record_metrics", None)
+    if recorder is None:
+        return
+    try:
+        await resolve(recorder(document))
+    except Exception as exc:
+        if type(exc).__module__.startswith("neo4j"):
+            raise
+        logger.warning(
+            "Metrics of %s not recorded: %s",
+            document.document_version_id,
+            type(exc).__name__,
+        )
+
+
 def _crawl_openalex(
     query: str,
     limit: int,
@@ -304,25 +322,42 @@ def _crawl_openalex(
                     payload, ensure_ascii=False, sort_keys=True
                 ).encode("utf-8")
                 document = _snapshot(parse_openalex(payload, raw=raw), raw)
-                lookup = getattr(store, "processed_versions", None)
-                if extract and lookup is not None:
-                    done = await resolve(
-                        lookup([document.document_version_id])
+                prior = (
+                    await prior_inputs(store, document.document_version_id)
+                    if extract
+                    else []
+                )
+                # Without --fulltext the input is known now; with it, a PDF
+                # read by no earlier run still has to be tried.
+                if prior and not fulltext and covers(prior, document):
+                    logger.info(
+                        "work=%s already processed; skipped",
+                        document.source.record_id,
                     )
-                    if document.document_version_id in done:
-                        logger.info(
-                            "work=%s already processed; skipped",
-                            document.source.record_id,
-                        )
-                        return True
+                    await _record_metrics(store, document)
+                    return True
                 if fulltext:
-                    await resolve(attach_openalex_fulltext(document, payload))
+                    await resolve(
+                        attach_openalex_fulltext(
+                            document,
+                            payload,
+                            known_sha256=known_fulltexts(prior),
+                        )
+                    )
                     logger.info(
                         "work=%s fulltext=%s chunks=%d",
                         document.source.record_id,
                         document.metadata["fulltext"]["status"],
                         len(document.chunks),
                     )
+                    if prior and covers(prior, document):
+                        logger.info(
+                            "work=%s already processed with this input; "
+                            "skipped",
+                            document.source.record_id,
+                        )
+                        await _record_metrics(store, document)
+                        return True
                 await _write_ingested_async(
                     document,
                     extract,

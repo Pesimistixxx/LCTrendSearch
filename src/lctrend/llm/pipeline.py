@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ from ..extraction.economics import (
     extract_economic_evidence,
 )
 from ..extraction.resolver import ConceptRegistry, resolve_mentions
+from ..ingest.processed import fulltext_sha256
 from .client import CALL_LOG, LLMError, Provider
 from .context import (
     ContextBudgetError,
@@ -45,6 +47,7 @@ from .context import (
     expand_context,
     plan_packets,
     review_batches,
+    split_packet,
 )
 from .contracts import Extraction, Review
 from .validation import validate_local_extraction, validate_review
@@ -172,6 +175,21 @@ async def _concept_embeddings(
     }, model
 
 
+def _pending_claims(requests) -> Any:
+    """Claims an unanswered context request leaves unclear.
+
+    ``True`` when a request names no claims (the whole packet waits),
+    otherwise the named claim IDs; other claims keep their review.
+    """
+    if not requests:
+        return frozenset()
+    if any(not request.claim_ids for request in requests):
+        return True
+    return frozenset(
+        claim_id for request in requests for claim_id in request.claim_ids
+    )
+
+
 class _Budget:
     def __init__(
         self,
@@ -179,11 +197,13 @@ class _Budget:
         settings: PipelineSettings,
         trace: list[dict],
         event=None,
+        issues: list | None = None,
     ):
         self.provider, self.settings, self.trace = provider, settings, trace
         self.limit = settings.max_model_calls
         self.used = 0
         self.event = event
+        self.issues = issues
 
     async def call(
         self, schema, prompt, payload, stage: str, reserve: int = 0
@@ -208,11 +228,22 @@ class _Budget:
                         schema, prompt, payload, stage=stage
                     )
                 )
+                dropped = list(getattr(result, "_dropped_items", None) or [])
                 result = schema.model_validate(
                     result.model_dump()
                     if hasattr(result, "model_dump")
                     else result
                 )
+                if dropped and self.issues is not None:
+                    # Malformed elements were dropped, the rest is kept.
+                    self.issues.append(
+                        {
+                            "code": "invalid_items",
+                            "stage": stage,
+                            "call": self.used,
+                            "items": dropped,
+                        }
+                    )
                 self.trace.append(
                     {
                         "stage": stage,
@@ -444,6 +475,8 @@ async def _process_document(
         "demo": bool(getattr(provider, "demo", False)),
         "source_snapshot": document.artifact.model_dump(),
         "input_coverage": document.coverage,
+        # The version stays when a PDF appears; the PDF identifies the input.
+        "input_fulltext_sha256": fulltext_sha256(document),
         "input_quality_status": document.quality_status,
         "parse_warnings": document.metadata.get("parse_warnings", []),
     }
@@ -471,9 +504,10 @@ async def _process_document(
     # Pydantic can copy containers on construction; use the actual run
     # containers.
     metadata, trace = run.metadata, run.trace
-    budget = _Budget(provider, settings, trace, event)
+    budget = _Budget(provider, settings, trace, event, metadata["issues"])
     # Providers that do not use CALL_LOG (test doubles) keep a plain list.
     call_offset = len(getattr(provider, "calls", []))
+    event_offset = len(getattr(provider, "model_events", []))
     _emit(event, stage="plan", status="running")
     plan = plan_packets(document, settings)
     budget.limit = settings.call_limit(len(plan.packets))
@@ -501,14 +535,18 @@ async def _process_document(
     )
     processed, failed = [], []
     batches = []
-    for packet_number, original in enumerate(plan.packets, 1):
+    queue = deque(plan.packets)
+    packet_number = 0
+    while queue:
+        original = queue.popleft()
+        packet_number += 1
         _emit(
             event,
             stage="packet",
             status="running",
             packet_id=original.packet_id,
             packet_number=packet_number,
-            total_packets=len(plan.packets),
+            total_packets=packet_number + len(queue),
         )
         if budget.used + 2 > budget.limit:
             failed.append(original.packet_id)
@@ -544,10 +582,18 @@ async def _process_document(
                     "response": extraction.model_dump(mode="python"),
                 }
             )
+            # Every later packet keeps its extraction and review calls: an
+            # early packet's context rounds must not starve the rest. A
+            # budget below that minimum cannot cover all packets anyway.
+            reserved = (
+                2 * len(queue)
+                if budget.limit >= 2 * len(plan.packets)
+                else 0
+            )
             for context_round in range(settings.max_context_rounds):
                 if (
                     not extraction.context_requests
-                    or budget.used + 2 > budget.limit
+                    or budget.used + 2 + reserved > budget.limit
                 ):
                     break
                 _emit(
@@ -626,15 +672,28 @@ async def _process_document(
                         }
                     )
                     break
+                try:
+                    extraction_with_context = await budget.call(
+                        Extraction,
+                        prompts["extract"],
+                        next_payload,
+                        "extract",
+                        reserve=1,
+                    )
+                except LLMError as exc:
+                    # The first answer is valid and anchored in the packet
+                    # it saw; its context request stays unresolved (B-7).
+                    metadata["issues"].append(
+                        {
+                            "packet_id": packet.packet_id,
+                            "code": "context_reextraction_failed",
+                            "error": exc.code,
+                        }
+                    )
+                    break
+                extraction = extraction_with_context
                 packet = expanded
                 related_context = expanded_related
-                extraction = await budget.call(
-                    Extraction,
-                    prompts["extract"],
-                    next_payload,
-                    "extract",
-                    reserve=1,
-                )
                 trace.append(
                     {
                         "stage": "extraction_response",
@@ -710,8 +769,8 @@ async def _process_document(
                 }
             )
             decisions = {}
-            context_pending = bool(extraction.context_requests)
-            if context_pending:
+            context_pending = _pending_claims(extraction.context_requests)
+            if extraction.context_requests:
                 metadata["issues"].append(
                     {
                         "packet_id": packet.packet_id,
@@ -745,9 +804,30 @@ async def _process_document(
                 status="succeeded",
                 packet_id=packet.packet_id,
                 packet_number=packet_number,
-                total_packets=len(plan.packets),
+                total_packets=packet_number + len(queue),
             )
         except Exception as exc:
+            halves = (
+                split_packet(document, original, settings)
+                if getattr(exc, "code", None) == "incomplete_response"
+                else []
+            )
+            if halves:
+                # The answer hit the output limit: retry in two halves
+                # instead of losing the whole packet (B-6).
+                queue.extendleft(reversed(halves))
+                metadata["issues"].append(
+                    {
+                        "packet_id": original.packet_id,
+                        "code": "incomplete_response",
+                        "split_into": [item.packet_id for item in halves],
+                    }
+                )
+                logger.info(
+                    "Packet %s hit the output limit; split in two",
+                    original.packet_id,
+                )
+                continue
             logger.warning(
                 "Packet %s failed: %s",
                 original.packet_id,
@@ -824,8 +904,9 @@ async def _process_document(
             data["qualifiers"] = _refs(claim.qualifiers, mapping)
             data["values"] = _refs(claim.values, mapping)
             decision = decisions.get(claim.claim_id)
+            waiting = pending is True or claim.claim_id in pending
             state = (
-                decision.decision if decision and not pending else "unclear"
+                decision.decision if decision and not waiting else "unclear"
             )
             claims.append(
                 (
@@ -974,10 +1055,18 @@ async def _process_document(
         "effective_model_calls": budget.limit,
     }
     metadata["model_calls"] = budget.used
+    # A document without calls of its own must not take the calls that a
+    # concurrent document made meanwhile (B-9); the plain-list fallback is
+    # only for providers that do not report into CALL_LOG.
     metadata["provider_calls"] = deepcopy(
-        call_log or list(getattr(provider, "calls", []))[call_offset:]
+        call_log
+        if call_log or not budget.used
+        else list(getattr(provider, "calls", []))[call_offset:]
     )
-    metadata["model_events"] = deepcopy(getattr(provider, "model_events", []))
+    # Model retirements are provider-wide; report those seen meanwhile.
+    metadata["model_events"] = deepcopy(
+        list(getattr(provider, "model_events", []))[event_offset:]
+    )
     trace.append(
         {
             "stage": "resolution",
@@ -991,11 +1080,13 @@ async def _process_document(
     # make the document's coverage incomplete. Packet-level gaps do.
     blocking = [item for item in metadata["issues"] if not _item_issue(item)]
     metadata["item_issue_count"] = len(metadata["issues"]) - len(blocking)
+    # Nothing to read is not a failed extraction: no model was called and
+    # a later text of this version must still be processed (A-10).
     run.status = (
-        "succeeded"
-        if len(covered) == len(document.chunks)
-        and document.chunks
-        and not blocking
+        "skipped_no_text"
+        if not document.chunks
+        else "succeeded"
+        if len(covered) == len(document.chunks) and not blocking
         else ("partial" if covered else "failed")
     )
     embeddings, embedding_model = await _concept_embeddings(

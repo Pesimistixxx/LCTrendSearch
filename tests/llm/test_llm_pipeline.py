@@ -626,13 +626,14 @@ def test_conflicting_reviews_for_same_source_claim_cannot_restore_acceptance():
     assert GraphStore._solution_links(doc, result) == []
 
 
-def test_empty_document_makes_no_model_calls_and_has_failed_coverage():
+def test_empty_document_makes_no_model_calls_and_is_skipped_not_failed():
     doc = document()
     doc.chunks = []
     provider = ReplayProvider([])
     result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert list(provider.calls) == []
-    assert result.run.status == "failed"
+    # A-10: "failed" claimed an extraction error where nothing was read.
+    assert result.run.status == "skipped_no_text"
     assert result.assertions == []
     assert result.run.metadata["coverage"]["total_chunks"] == 0
 
@@ -756,14 +757,29 @@ def test_failed_context_reextraction_keeps_initial_source_response_in_audit():
         }
     ]
     provider = ScriptProvider(
-        [first, LLMError("timeout", "Offline context extraction failure")]
+        [
+            first,
+            LLMError("timeout", "Offline context extraction failure"),
+            reviewed(),
+        ]
     )
     result = asyncio.run(
         process_document(doc, provider, settings=settings(max_model_calls=3))
     )
-    assert result.run.status == "failed"
-    assert result.assertions == []
-    assert len(provider.calls) == 2
+    # B-7: the failed re-extraction used to discard the valid first answer
+    # (run "failed", no assertions). The first answer is kept; its context
+    # stays unresolved, so the claim waits for review instead of acceptance.
+    assert result.run.status == "partial"
+    assert [item.status for item in result.assertions] == ["needs_review"]
+    assert result.assertions[0].evidence[0].quote == doc.chunks[0].text
+    assert {"context_reextraction_failed", "unresolved_context"} <= codes(
+        result
+    )
+    assert [call["stage"] for call in provider.calls] == [
+        "extract",
+        "extract",
+        "review",
+    ]
     responses = [
         event
         for event in result.run.trace
@@ -1035,3 +1051,212 @@ def test_shipped_budget_covers_a_context_round_and_split_review():
     assert len(result.assertions) == 2 * len(doc.chunks)
     assert {a.status for a in result.assertions} == {"accepted"}
     assert result.run.status == "succeeded"
+
+
+def test_run_records_the_pdf_it_read():
+    # A-2: "already processed" compares the PDF, not only the version.
+    doc = document()
+    doc.coverage = "full_text"
+    doc.metadata["fulltext"] = {"status": "parsed", "sha256": "pdf-sha"}
+    provider = RecordingReplay([extracted(doc), reviewed()])
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
+    assert result.run.metadata["input_coverage"] == "full_text"
+    assert result.run.metadata["input_fulltext_sha256"] == "pdf-sha"
+
+
+def test_store_reports_what_each_processed_run_read():
+    import json as json_module
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **parameters):
+            assert "metadata_json" in query
+            return [
+                {
+                    "id": "version",
+                    "metadata_json": json_module.dumps(
+                        {
+                            "input_coverage": "full_text",
+                            "input_fulltext_sha256": "pdf-sha",
+                        }
+                    ),
+                }
+            ]
+
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: Session()}
+    )()
+    store._database = "neo4j"
+    found = asyncio.run(store.processed_inputs(["version"]))
+    assert found == {
+        "version": [{"coverage": "full_text", "fulltext_sha256": "pdf-sha"}]
+    }
+
+
+def test_unanswered_context_request_leaves_only_its_claims_unclear():
+    # B-4: one open request used to downgrade every claim of the packet.
+    doc = document(["Sensor S solves monitoring. Sensor S solves sorting."])
+    response = extracted(doc, claim_id="a")
+    response["claims"][0]["evidence"][0]["quote"] = (
+        "Sensor S solves monitoring."
+    )
+    response["entities"].append(
+        {
+            "local_id": "sorting",
+            "label": "sorting",
+            "kind": "Task",
+            "evidence": [{"chunk_id": "c1", "quote": "sorting"}],
+        }
+    )
+    sorting = deepcopy(response["claims"][0])
+    sorting.update(
+        claim_id="b",
+        roles={"subject": "sensor", "task": "sorting"},
+        evidence=[{"chunk_id": "c1", "quote": "Sensor S solves sorting."}],
+    )
+    response["claims"].append(sorting)
+    response["context_requests"] = [
+        {
+            "tool": "read_chunk",
+            "argument": "c9",
+            "reason": "Which sorting?",
+            "claim_ids": ["b"],
+        }
+    ]
+    review = {
+        "items": reviewed(claim_id="a")["items"]
+        + reviewed(claim_id="b")["items"]
+    }
+    provider = RecordingReplay([response, review])
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_context_rounds=0)
+        )
+    )
+    assert "unresolved_context" in codes(result)
+    by_quote = {
+        item.evidence[0].quote: item.status for item in result.assertions
+    }
+    assert by_quote["Sensor S solves monitoring."] == "accepted"
+    assert by_quote["Sensor S solves sorting."] != "accepted"
+
+
+def test_context_rounds_of_an_early_packet_leave_calls_for_later_ones():
+    # B-4: 3 packets, budget of exactly extraction + review for each.
+    doc = document(
+        [
+            "Sensor S solves monitoring.",
+            "Sensor S solves monitoring.",
+            "Sensor S solves monitoring.",
+        ]
+    )
+    first = extracted(doc, "c1")
+    first["context_requests"] = [
+        {"tool": "read_chunk", "argument": "c2", "reason": "More detail."}
+    ]
+    provider = RecordingReplay(
+        [
+            first,
+            reviewed(),
+            extracted(doc, "c2"),
+            reviewed(),
+            extracted(doc, "c3"),
+            reviewed(),
+        ]
+    )
+    result = asyncio.run(
+        process_document(doc, provider, settings=settings(max_model_calls=6))
+    )
+    assert [item["stage"] for item in provider.payloads] == [
+        "extract",
+        "review",
+    ] * 3
+    assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
+    assert "call_budget" not in codes(result)
+
+
+def test_one_malformed_element_does_not_cost_the_packet():
+    # B-5: extra="forbid" on the whole response dropped every claim.
+    doc = document()
+    response = extracted(doc)
+    response["entities"][0]["confidence"] = 0.9  # an unknown field
+    response["entities"].append(
+        {
+            "local_id": "data",
+            "label": "Sensor",
+            "kind": "Dataset",  # not a kind of this schema
+            "evidence": [{"chunk_id": "c1", "quote": "Sensor"}],
+        }
+    )
+    response["claims"][0]["status"] = "accepted"  # never read from a model
+    provider = RecordingReplay([response, reviewed()])
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
+    assert [item.status for item in result.assertions] == ["accepted"]
+    issue = next(
+        item
+        for item in result.run.metadata["issues"]
+        if item.get("code") == "invalid_items"
+    )
+    assert issue["items"] == [
+        {"field": "entities", "index": 2, "reasons": ["enum"]}
+    ]
+    assert "invalid_schema" not in codes(result)
+
+
+def test_json_after_a_preamble_or_inside_a_fence_is_read():
+    from lctrend.llm.client import _strip_fence, _validate
+
+    body = json.dumps({"entities": [], "claims": [], "context_requests": []})
+    for content in (
+        "Here is the JSON:\n```json\n" + body + "\n```\nDone.",
+        "Ответ: " + body,
+        "```\n" + body + "\n```",
+    ):
+        assert _validate(Extraction, _strip_fence(content)).claims == []
+
+
+def test_answer_cut_at_the_output_limit_is_retried_in_halves():
+    # B-6: finish_reason=length used to lose the whole packet.
+    doc = document(
+        ["Sensor S solves monitoring.", "Sensor S solves monitoring."],
+        shared_stream=True,
+    )
+    provider = ScriptProvider(
+        [
+            LLMError("incomplete_response", "cut at max_tokens"),
+            extracted(doc, "c1"),
+            reviewed(),
+            extracted(doc, "c2"),
+            reviewed(),
+        ]
+    )
+    result = asyncio.run(
+        process_document(
+            doc,
+            provider,
+            settings=settings(primary_chunks=2, max_model_calls=8),
+        )
+    )
+    assert [call["stage"] for call in provider.calls] == [
+        "extract",
+        "extract",
+        "review",
+        "extract",
+        "review",
+    ]
+    assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
+    split = next(
+        item
+        for item in result.run.metadata["issues"]
+        if item.get("code") == "incomplete_response"
+    )
+    assert len(split["split_into"]) == 2
+    assert result.assertions and all(
+        item.status == "accepted" for item in result.assertions
+    )

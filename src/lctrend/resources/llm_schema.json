@@ -25,7 +25,7 @@
     "UAH": ["UAH", "₴", "гривен"], "BYN": ["BYN"],
     "$": ["$"], "¥": ["¥"]
   },
-  "number_pattern": "(?<![\\w.])[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)(?:[eE][+-]?\\d+)?",
+  "number_pattern": "(?<![\\w.,])[+-]?(?:\\d+(?:(?:,\\d{3}(?!\\d))+|(?:\\.\\d{3}(?!\\d)){2,}|(?:[ \u00a0\u202f]\\d{3}(?!\\d))+)?(?:[.,]\\d+)?|[.,]\\d+)(?:[eE][+-]?\\d+)?",
   "country_code_pattern": "^[A-Z]{2}$",
   "grounded_label_kinds_note": "Kinds whose label is a name the source itself writes: it must occur, up to case and inflection, in an evidence quote or chunk (label_not_grounded otherwise). Descriptive kinds (Metric, Task, Problem, ApplicationContext, ConceptCandidate) are named in the model's own words and are not checked.",
   "grounded_label_kinds": ["Technology", "Method", "Material", "Organization", "Company", "University", "Country", "Domain", "MarketSegment"],

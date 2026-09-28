@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from lctrend.ingest.adapters import parse_epo, parse_github, parse_openalex
 from lctrend.ingest.file_adapters import parse_file
 
@@ -45,7 +47,10 @@ def test_epo_types_applicants_keeps_residence_and_publication_date():
     assert ("LOVELACE ADA", "applicant") in {
         (item.name, item.role) for item in document.contributors
     }
-    assert {item.code for item in document.countries} == {"EP", "DE"}
+    # A-7: EP is the European Patent Office, not a country; the old
+    # expectation {"EP", "DE"} made it a jurisdiction country.
+    assert {item.code for item in document.countries} == {"DE"}
+    assert document.metadata["patent_office"] == "EP"
     assert [item.name for item in document.domains] == ["Robotics"]
     assert [chunk.kind for chunk in document.chunks] == ["abstract", "claims"]
     assert document.coverage == "full_text"
@@ -170,3 +175,112 @@ def test_html_publication_meta_is_a_date_but_file_creation_is_not(tmp_path):
     undated = parse_file(plain)
     assert undated.published_at is None
     assert undated.metadata["metadata_basis"]["language"] == "script_heuristic"
+
+
+def test_patent_offices_are_not_countries():
+    # A-7: WO/EP/EA publications became "countries" of the document.
+    for office in ("WO", "EA"):
+        document = parse_epo(
+            EPO.replace(
+                "<ops:country>EP</ops:country>",
+                f"<ops:country>{office}</ops:country>",
+            ).replace("[DE]", f"[{office}]", 1),
+            retrieved_at="2026-09-27T00:00:00Z",
+        )
+        assert office not in {item.code for item in document.countries}
+        assert document.metadata["patent_office"] == office
+        assert all(
+            item.country_code != office for item in document.organizations
+        )
+
+
+@pytest.mark.parametrize(
+    "name,kind",
+    [
+        ("MIT", "university"),
+        ("IBM", "company"),
+        ("OpenAI", "company"),
+        ("Sber", "company"),
+        ("МГУ имени М. В. Ломоносова", "university"),
+        ("Сколтех", "university"),
+        ("ПАО Сбербанк", "company"),
+        ("Apple Valley University", "university"),
+        ("Acme Foundation", "other"),
+        ("Community Group", "other"),
+    ],
+)
+def test_untyped_organizations_get_their_type(name, kind):
+    # A-8: 27 of 53 checked names came out "other".
+    from lctrend.ingest.adapters import _organization_type
+
+    assert _organization_type(name) == kind
+
+
+def test_github_organization_owner_is_typed_by_its_login():
+    # A-8: every GitHub owner was "other".
+    for login, kind in (("openai", "company"), ("sberbank-ai", "company")):
+        document = parse_github(
+            {
+                "repository": {
+                    "full_name": f"{login}/tool",
+                    "name": "tool",
+                    "owner": {
+                        "login": login,
+                        "type": "Organization",
+                        "node_id": login,
+                    },
+                },
+            }
+        )
+        types = [item.organization_type for item in document.organizations]
+        assert types == [kind]
+
+
+def _topic(name, subfield, field):
+    return {
+        "display_name": name,
+        "subfield": {
+            "id": f"https://openalex.org/subfields/{subfield}",
+            "display_name": subfield,
+        },
+        "field": {"display_name": field},
+        "domain": {"display_name": "Physical Sciences"},
+    }
+
+
+def test_topic_domains_drop_the_parent_and_keep_an_uncovered_subfield():
+    # A-9: "NLP Techniques" gave {AI, NLP}; "ML in Materials Science" gave
+    # only ML, so false and missing cross-domain pairs fed recombination.
+    nlp = parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "x",
+            "topics": [
+                _topic(
+                    "Natural Language Processing Techniques",
+                    "Artificial Intelligence",
+                    "Computer Science",
+                )
+            ],
+        }
+    )
+    assert [item.name for item in nlp.domains] == [
+        "Natural language processing"
+    ]
+    materials = parse_openalex(
+        {
+            "id": "https://openalex.org/W2",
+            "title": "y",
+            "topics": [
+                _topic(
+                    "Machine Learning in Materials Science",
+                    "Materials Chemistry",
+                    "Materials Science",
+                )
+            ],
+        }
+    )
+    assert sorted(item.name for item in materials.domains) == [
+        "Machine learning",
+        "Materials Chemistry",
+    ]
