@@ -496,14 +496,17 @@ def test_review_history_is_saved_on_each_run_creation_link():
             if "MERGE (a:Assertion" in statement
         )
         assert "MERGE (r)-[creation:CREATED]->(a)" in query
-        assert "creation.status = $status" in query
-        assert "creation.verification_status = $verification_status" in query
+        assert "creation.status = row.status" in query
+        assert (
+            "creation.verification_status = row.verification_status" in query
+        )
+        (row,) = parameters["rows"]
         records.append(
             (
                 parameters["run_id"],
-                parameters["assertion_id"],
-                parameters["status"],
-                parameters["verification_status"],
+                row["assertion_id"],
+                row["status"],
+                row["verification_status"],
             )
         )
     assert records == [

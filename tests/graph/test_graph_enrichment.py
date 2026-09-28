@@ -344,10 +344,12 @@ def test_financial_graph_evidence_keeps_review_and_source_provenance():
         for query, parameters in tx.queries
         if "MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE" in query
     )
-    assert parameters["assertion_id"] == "reviewed-claim"
-    assert parameters["unit"] == "per year"
-    assert parameters["period"] == "2026"
-    assert parameters["amount_text"] == "USD 2 million"
-    assert parameters["observed_at"] == "2026-01-01"
+    # Batched (D-1): per-evidence values are UNWIND rows.
+    (row,) = parameters["rows"]
+    assert row["assertion_id"] == "reviewed-claim"
+    assert row["unit"] == "per year"
+    assert row["period"] == "2026"
+    assert row["amount_text"] == "USD 2 million"
+    assert row["observed_at"] == "2026-01-01"
     assert parameters["recorded_at"] == result.run.started_at
-    assert "r.assertion_id = $assertion_id" in query
+    assert "r.assertion_id = row.assertion_id" in query

@@ -45,6 +45,9 @@ def _chunk_date(document: DocumentEnvelope, chunk_id: str) -> Any:
 
 
 BATCH_SIZE = 500
+# Graphs whose constraints and indexes this process already ensured: the
+# schema is idempotent, but ~40 statements per job cost ~40 round trips.
+_SCHEMA_READY: set = set()
 COUNTRY_CODE = re.compile(r"[A-Z]{2}")
 
 
@@ -122,6 +125,7 @@ class GraphStore:
             ) from exc
         self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
         self._database = database
+        self._schema_key = (uri, database)
         self._vector_indexes: set = set()
         logger.debug("Neo4j driver for %s, database %s", uri, database)
 
@@ -138,6 +142,10 @@ class GraphStore:
         await self.close()
 
     async def ensure_schema(self) -> None:
+        """Create constraints and indexes once per process and graph."""
+        key = getattr(self, "_schema_key", None)
+        if key is not None and key in _SCHEMA_READY:
+            return
         async with self._driver.session(database=self._database) as session:
             for query in (
                 resource_path("schema", ".cypher")
@@ -147,6 +155,8 @@ class GraphStore:
                 if not query.strip():
                     continue
                 await _run(session, query)
+        if key is not None:
+            _SCHEMA_READY.add(key)
         logger.debug("Neo4j schema ensured")
 
     async def processed_materials(self):
@@ -287,6 +297,415 @@ class GraphStore:
         async with self._driver.session(database=self._database) as session:
             await session.execute_write(write)
 
+    @staticmethod
+    async def _write_parties(tx: Any, document: DocumentEnvelope) -> None:
+        """Countries, domains, organizations and people of a document.
+
+        One UNWIND statement per relationship type and label, not one per
+        item: each statement costs a network round trip (D-1).
+        """
+        schema = load_catalog("graph")
+        organization_relationships = sorted(
+            {
+                "ASSOCIATED_WITH_ORGANIZATION",
+                "HAS_AFFILIATION",
+                *schema["organization_relationships"].values(),
+            }
+        )
+        replaced = "|".join(
+            [
+                "ASSOCIATED_WITH_COUNTRY",
+                "WRITTEN_IN",
+                "JURISDICTION",
+                "ABOUT_DOMAIN",
+                "CONTRIBUTED_BY",
+                *map(cypher_identifier, organization_relationships),
+            ]
+        )
+        await _run(
+            tx,
+            f"""
+            MATCH (d:Document {{document_id: $document_id}})-[r:{replaced}]->()
+            DELETE r
+            """,
+            document_id=document.document_id,
+        )
+        observed_at = document.published_at
+
+        countries: Dict[str, List[Dict[str, Any]]] = {}
+        for country in document.countries:
+            relationship = (
+                "JURISDICTION"
+                if country.role == "jurisdiction"
+                else "WRITTEN_IN"
+            )
+            countries.setdefault(relationship, []).append(
+                country.model_dump()
+            )
+        for relationship, rows in countries.items():
+            await _run(
+                tx,
+                f"""
+                MATCH (d:Document {{document_id: $document_id}})
+                UNWIND $rows AS row
+                MERGE (c:Country {{country_id: row.country_id}})
+                SET c.code = row.code, c.name = row.code,
+                    c.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN c.first_seen_at
+                        WHEN c.first_seen_at IS NULL
+                            OR $observed_at < c.first_seen_at
+                        THEN $observed_at
+                        ELSE c.first_seen_at END
+                MERGE (d)-[r:{relationship}]->(c)
+                SET r.source_role = row.role, r.country_code = row.code,
+                    r.observed_at = $observed_at
+                """,
+                document_id=document.document_id,
+                observed_at=observed_at,
+                rows=rows,
+            )
+
+        if document.domains:
+            await _run(
+                tx,
+                """
+                MATCH (d:Document {document_id: $document_id})
+                UNWIND $rows AS row
+                MERGE (x:Domain {domain_id: row.domain_id})
+                SET x.name = row.name, x.external_ids = row.external_ids,
+                    x.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN x.first_seen_at
+                        WHEN x.first_seen_at IS NULL
+                            OR $observed_at < x.first_seen_at
+                        THEN $observed_at
+                        ELSE x.first_seen_at END
+                MERGE (d)-[r:ABOUT_DOMAIN]->(x)
+                SET r.observed_at = $observed_at
+                """,
+                document_id=document.document_id,
+                observed_at=observed_at,
+                rows=[
+                    {
+                        "domain_id": domain.domain_id,
+                        "name": domain.name,
+                        "external_ids": [
+                            item.external_id for item in domain.external_ids
+                        ],
+                    }
+                    for domain in document.domains
+                ],
+            )
+        parents = [
+            {
+                "domain_id": domain.domain_id,
+                "parent_id": stable_id("domain", domain.parent_name),
+                "parent_name": domain.parent_name,
+            }
+            for domain in document.domains
+            if domain.parent_name
+        ]
+        if parents:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (child:Domain {domain_id: row.domain_id})
+                MERGE (parent:Domain {domain_id: row.parent_id})
+                SET parent.name = row.parent_name
+                MERGE (child)-[:SUBDOMAIN_OF]->(parent)
+                """,
+                rows=parents,
+            )
+
+        organizations: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for organization in document.organizations:
+            relationship = cypher_identifier(
+                schema["organization_relationships"].get(
+                    organization.role, "HAS_AFFILIATION"
+                )
+            )
+            organization_label = schema["organization_labels"].get(
+                organization.organization_type
+            )
+            organizations.setdefault(
+                (
+                    relationship,
+                    cypher_identifier(organization_label)
+                    if organization_label
+                    else "",
+                ),
+                [],
+            ).append(
+                {
+                    "organization_id": organization.organization_id,
+                    "name": organization.name,
+                    "organization_type": organization.organization_type,
+                    "role": organization.role,
+                    "external_ids": [
+                        item.external_id for item in organization.external_ids
+                    ],
+                }
+            )
+        for (relationship, label), rows in organizations.items():
+            await _run(
+                tx,
+                f"""
+                MATCH (d:Document {{document_id: $document_id}})
+                UNWIND $rows AS row
+                MERGE (o:Organization {{organization_id: row.organization_id}})
+                SET o.name = row.name,
+                    o.organization_type = row.organization_type,
+                    o.external_ids = row.external_ids,
+                    o.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN o.first_seen_at
+                        WHEN o.first_seen_at IS NULL
+                            OR $observed_at < o.first_seen_at
+                        THEN $observed_at
+                        ELSE o.first_seen_at END
+                {f"SET o:{label}" if label else ""}
+                MERGE (d)-[r:{relationship}]->(o)
+                SET r.source_role = row.role, r.observed_at = $observed_at
+                """,
+                document_id=document.document_id,
+                observed_at=observed_at,
+                rows=rows,
+            )
+        located = [
+            {
+                "organization_id": organization.organization_id,
+                "country_id": stable_id("country", organization.country_code),
+                "country_code": organization.country_code,
+            }
+            for organization in document.organizations
+            if organization.country_code
+        ]
+        if located:
+            # The country need not be one of the document's countries.
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (o:Organization {organization_id: row.organization_id})
+                MERGE (c:Country {country_id: row.country_id})
+                ON CREATE SET c.code = row.country_code,
+                    c.name = row.country_code
+                MERGE (o)-[:LOCATED_IN]->(c)
+                """,
+                rows=located,
+            )
+
+        if document.contributors:
+            await _run(
+                tx,
+                """
+                MATCH (d:Document {document_id: $document_id})
+                UNWIND $rows AS row
+                MERGE (c:Contributor {contributor_id: row.contributor_id})
+                SET c.name = row.name, c.kind = row.kind,
+                    c.external_ids = row.external_ids,
+                    c.first_seen_at = CASE
+                        WHEN $observed_at IS NULL THEN c.first_seen_at
+                        WHEN c.first_seen_at IS NULL
+                            OR $observed_at < c.first_seen_at
+                        THEN $observed_at
+                        ELSE c.first_seen_at END
+                MERGE (d)-[r:CONTRIBUTED_BY]->(c)
+                SET r.roles = CASE
+                    WHEN row.role IN coalesce(r.roles, []) THEN r.roles
+                    ELSE coalesce(r.roles, []) + row.role END,
+                    r.observed_at = $observed_at
+                """,
+                document_id=document.document_id,
+                observed_at=observed_at,
+                rows=[
+                    {
+                        "external_ids": [
+                            item.external_id
+                            for item in contributor.external_ids
+                        ],
+                        **contributor.model_dump(
+                            exclude={"external_ids", "affiliation_ids"}
+                        ),
+                    }
+                    for contributor in document.contributors
+                ],
+            )
+        affiliations = [
+            {
+                "contributor_id": contributor.contributor_id,
+                "organization_id": organization_id,
+            }
+            for contributor in document.contributors
+            for organization_id in contributor.affiliation_ids
+        ]
+        if affiliations:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (c:Contributor {contributor_id: row.contributor_id})
+                MATCH (o:Organization {organization_id: row.organization_id})
+                MERGE (c)-[r:AFFILIATED_WITH]->(o)
+                SET r.observed_at = $observed_at
+                """,
+                observed_at=observed_at,
+                rows=affiliations,
+            )
+
+    @staticmethod
+    async def _write_assertions(
+        tx: Any,
+        document: DocumentEnvelope,
+        result: ExtractionResult,
+        labels: Dict[str, str],
+    ) -> None:
+        """Assertions with their roles, evidence and groups, batched."""
+        if not result.assertions:
+            return
+        run = result.run
+        graph = load_catalog("graph")
+        rows = [
+            {
+                "observed_at": _chunk_date(
+                    document, assertion.evidence[0].chunk_id
+                )
+                if assertion.evidence
+                else _version_date(document),
+                "qualifiers_json": json_value(assertion.qualifiers),
+                "values_json": json_value(assertion.values),
+                **assertion.model_dump(
+                    mode="json",
+                    exclude={
+                        "roles",
+                        "evidence",
+                        "qualifiers",
+                        "values",
+                        "claim_group_id",
+                        "evidence_family_id",
+                    },
+                ),
+            }
+            for assertion in result.assertions
+        ]
+        for batch in _batches(rows):
+            await _run(
+                tx,
+                """
+                MATCH (v:DocumentVersion {document_version_id: $version_id})
+                MATCH (r:ProcessingRun {run_id: $run_id})
+                UNWIND $rows AS row
+                MERGE (a:Assertion {assertion_id: row.assertion_id})
+                SET a.predicate = row.predicate,
+                    a.qualifiers_json = row.qualifiers_json,
+                    a.values_json = row.values_json,
+                    a.polarity = row.polarity,
+                    a.modality = row.modality,
+                    a.attribution_kind = row.attribution_kind,
+                    a.evidence_kind = row.evidence_kind,
+                    a.extraction_confidence = row.extraction_confidence,
+                    a.verification_status = row.verification_status,
+                    a.status = row.status,
+                    a.observed_at = row.observed_at,
+                    a.recorded_at = $recorded_at
+                MERGE (v)-[:HAS_ASSERTION]->(a)
+                MERGE (r)-[creation:CREATED]->(a)
+                SET creation.status = row.status,
+                    creation.verification_status = row.verification_status
+                """,
+                version_id=document.document_version_id,
+                run_id=run.run_id,
+                recorded_at=run.started_at,
+                rows=batch,
+            )
+
+        roles: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for assertion in result.assertions:
+            for role, concept_id in assertion.roles.items():
+                relation = graph["assertion_roles"].get(role)
+                if relation is None:
+                    raise ValueError(f"unsupported assertion role: {role}")
+                roles.setdefault(
+                    (cypher_identifier(relation), labels[concept_id]), []
+                ).append(
+                    {
+                        "assertion_id": assertion.assertion_id,
+                        "concept_id": concept_id,
+                    }
+                )
+        for (relation, label), rows in roles.items():
+            await _run(
+                tx,
+                f"""
+                UNWIND $rows AS row
+                MATCH (a:Assertion {{assertion_id: row.assertion_id}})
+                MATCH (c:{label} {{concept_id: row.concept_id}})
+                MERGE (a)-[:{relation}]->(c)
+                """,
+                rows=rows,
+            )
+
+        evidence = [
+            {
+                "assertion_id": assertion.assertion_id,
+                **span.model_dump(mode="json"),
+            }
+            for assertion in result.assertions
+            for span in assertion.evidence
+        ]
+        for batch in _batches(evidence):
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (a:Assertion {assertion_id: row.assertion_id})
+                MATCH (c:Chunk {chunk_id: row.chunk_id})
+                MERGE (a)-[e:SUPPORTED_BY
+                      {start: row.start, end: row.end}]->(c)
+                SET e.quote = row.quote,
+                    e.supports_fields = row.supports_fields
+                """,
+                rows=batch,
+            )
+
+        groups = [
+            {
+                "assertion_id": assertion.assertion_id,
+                "group_id": assertion.claim_group_id,
+            }
+            for assertion in result.assertions
+            if assertion.claim_group_id
+        ]
+        if groups:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (a:Assertion {assertion_id: row.assertion_id})
+                MERGE (g:ClaimGroup {claim_group_id: row.group_id})
+                MERGE (a)-[:IN_CLAIM_GROUP]->(g)
+                """,
+                rows=groups,
+            )
+        families = [
+            {
+                "assertion_id": assertion.assertion_id,
+                "family_id": assertion.evidence_family_id,
+            }
+            for assertion in result.assertions
+            if assertion.evidence_family_id
+        ]
+        if families:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (a:Assertion {assertion_id: row.assertion_id})
+                MERGE (f:EvidenceFamily {family_id: row.family_id})
+                MERGE (a)-[:FROM_EVIDENCE_FAMILY]->(f)
+                """,
+                rows=families,
+            )
+
     async def write_document(self, document: DocumentEnvelope) -> None:
         async with self._driver.session(database=self._database) as session:
             await session.execute_write(self._write_document, document)
@@ -414,216 +833,7 @@ class GraphStore:
         )
         await GraphStore._write_metrics(tx, document, observed)
 
-        await _run(
-            tx,
-            """
-            MATCH (d:Document {document_id: $document_id})
-                  -[r:ASSOCIATED_WITH_COUNTRY|WRITTEN_IN|JURISDICTION]->()
-            DELETE r
-            """,
-            document_id=document.document_id,
-        )
-        await _run(
-            tx,
-            """
-            MATCH (d:Document {document_id: $document_id})-[r:ABOUT_DOMAIN]->()
-            DELETE r
-            """,
-            document_id=document.document_id,
-        )
-        await _run(
-            tx,
-            """
-            MATCH (d:Document {document_id: $document_id})
-                  -[r:ASSOCIATED_WITH_ORGANIZATION|HAS_AFFILIATION
-                      |OWNED_BY|APPLIED_BY|FUNDED_BY]->()
-            DELETE r
-            """,
-            document_id=document.document_id,
-        )
-
-        for country in document.countries:
-            relationship = (
-                "JURISDICTION"
-                if country.role == "jurisdiction"
-                else "WRITTEN_IN"
-            )
-            await _run(
-                tx,
-                f"""
-                MATCH (d:Document {{document_id: $document_id}})
-                MERGE (c:Country {{country_id: $country_id}})
-                SET c.code = $code, c.name = $code,
-                    c.first_seen_at = CASE
-                        WHEN $observed_at IS NULL THEN c.first_seen_at
-                        WHEN c.first_seen_at IS NULL
-                            OR $observed_at < c.first_seen_at
-                        THEN $observed_at
-                        ELSE c.first_seen_at END
-                MERGE (d)-[r:{relationship}]->(c)
-                SET r.source_role = $role, r.country_code = $code,
-                    r.observed_at = $observed_at
-                """,
-                document_id=document.document_id,
-                observed_at=document.published_at,
-                **country.model_dump(),
-            )
-
-        for domain in document.domains:
-            await _run(
-                tx,
-                """
-                MATCH (d:Document {document_id: $document_id})
-                MERGE (x:Domain {domain_id: $domain_id})
-                SET x.name = $name, x.external_ids = $external_ids,
-                    x.first_seen_at = CASE
-                        WHEN $observed_at IS NULL THEN x.first_seen_at
-                        WHEN x.first_seen_at IS NULL
-                            OR $observed_at < x.first_seen_at
-                        THEN $observed_at
-                        ELSE x.first_seen_at END
-                MERGE (d)-[r:ABOUT_DOMAIN]->(x)
-                SET r.observed_at = $observed_at
-                """,
-                document_id=document.document_id,
-                observed_at=document.published_at,
-                domain_id=domain.domain_id,
-                name=domain.name,
-                external_ids=[
-                    item.external_id for item in domain.external_ids
-                ],
-            )
-            if domain.parent_name:
-                await _run(
-                    tx,
-                    """
-                    MATCH (child:Domain {domain_id: $domain_id})
-                    MERGE (parent:Domain {domain_id: $parent_id})
-                    SET parent.name = $parent_name
-                    MERGE (child)-[:SUBDOMAIN_OF]->(parent)
-                    """,
-                    domain_id=domain.domain_id,
-                    parent_id=stable_id("domain", domain.parent_name),
-                    parent_name=domain.parent_name,
-                )
-
-        schema = load_catalog("graph")
-        for organization in document.organizations:
-            relationship = cypher_identifier(
-                schema["organization_relationships"].get(
-                    organization.role, "HAS_AFFILIATION"
-                )
-            )
-            organization_label = schema["organization_labels"].get(
-                organization.organization_type
-            )
-            if organization_label:
-                organization_label = cypher_identifier(organization_label)
-            await _run(
-                tx,
-                f"""
-                MATCH (d:Document {{document_id: $document_id}})
-                MERGE (o:Organization {{organization_id: $organization_id}})
-                SET o.name = $name, o.organization_type = $organization_type,
-                    o.external_ids = $external_ids,
-                    o.first_seen_at = CASE
-                        WHEN $observed_at IS NULL THEN o.first_seen_at
-                        WHEN o.first_seen_at IS NULL
-                            OR $observed_at < o.first_seen_at
-                        THEN $observed_at
-                        ELSE o.first_seen_at END
-                MERGE (d)-[r:{relationship}]->(o)
-                SET r.source_role = $role, r.observed_at = $observed_at
-                """,
-                document_id=document.document_id,
-                observed_at=document.published_at,
-                organization_id=organization.organization_id,
-                name=organization.name,
-                organization_type=organization.organization_type,
-                role=organization.role,
-                external_ids=[
-                    item.external_id for item in organization.external_ids
-                ],
-            )
-            if organization_label:
-                await _run(
-                    tx,
-                    f"""
-                    MATCH (o:Organization
-                           {{organization_id: $organization_id}})
-                    SET o:{organization_label}
-                    """,
-                    organization_id=organization.organization_id,
-                )
-            if organization.country_code:
-                # The country need not be one of the document's countries.
-                await _run(
-                    tx,
-                    """
-                    MATCH (o:Organization {organization_id: $organization_id})
-                    MERGE (c:Country {country_id: $country_id})
-                    ON CREATE SET c.code = $country_code,
-                        c.name = $country_code
-                    MERGE (o)-[:LOCATED_IN]->(c)
-                    """,
-                    organization_id=organization.organization_id,
-                    country_id=stable_id("country", organization.country_code),
-                    country_code=organization.country_code,
-                )
-
-        await _run(
-            tx,
-            """
-            MATCH (d:Document {document_id: $document_id})
-                  -[r:CONTRIBUTED_BY]->()
-            DELETE r
-            """,
-            document_id=document.document_id,
-        )
-
-        for contributor in document.contributors:
-            query = """
-                MATCH (d:Document {document_id: $document_id})
-                MERGE (c:Contributor {contributor_id: $contributor_id})
-                SET c.name = $name, c.kind = $kind,
-                    c.external_ids = $external_ids,
-                    c.first_seen_at = CASE
-                        WHEN $observed_at IS NULL THEN c.first_seen_at
-                        WHEN c.first_seen_at IS NULL
-                            OR $observed_at < c.first_seen_at
-                        THEN $observed_at
-                        ELSE c.first_seen_at END
-                MERGE (d)-[r:CONTRIBUTED_BY]->(c)
-                SET r.roles = CASE
-                    WHEN $role IN coalesce(r.roles, []) THEN r.roles
-                    ELSE coalesce(r.roles, []) + $role END,
-                    r.observed_at = $observed_at
-                """
-            await _run(
-                tx,
-                query,
-                document_id=document.document_id,
-                observed_at=document.published_at,
-                external_ids=[
-                    item.external_id for item in contributor.external_ids
-                ],
-                **contributor.model_dump(
-                    exclude={"external_ids", "affiliation_ids"}
-                ),
-            )
-            for organization_id in contributor.affiliation_ids:
-                await _run(
-                    tx,
-                    """
-                    MATCH (c:Contributor {contributor_id: $contributor_id})
-                    MATCH (o:Organization {organization_id: $organization_id})
-                    MERGE (c)-[r:AFFILIATED_WITH]->(o)
-                    SET r.observed_at = $observed_at
-                    """,
-                    contributor_id=contributor.contributor_id,
-                    organization_id=organization_id,
-                    observed_at=document.published_at,
-                )
+        await GraphStore._write_parties(tx, document)
 
         # One statement per batch: a full text has hundreds of chunks.
         for batch in _batches(
@@ -1643,51 +1853,63 @@ class GraphStore:
             run_id=run.run_id,
         )
 
+        concept_rows: Dict[str, List[Dict[str, Any]]] = {}
         for concept in result.concepts:
-            label = concept.kind.value
-            await _run(
-                tx,
-                """
-                MERGE (c:__LABEL__ {concept_id: $concept_id})
-                SET c.kind = $kind, c.preferred_label = $preferred_label,
-                    c.name = $preferred_label,
-                    c.definition = $definition, c.language = $language,
-                    c.status = $status,
-                    c.aliases = $aliases,
-                    c.normalized_aliases = $normalized_aliases,
-                    c.names_json = $names_json,
-                    c.first_seen_at = CASE
-                        WHEN $observed_at IS NULL THEN c.first_seen_at
-                        WHEN c.first_seen_at IS NULL
-                            OR $observed_at < c.first_seen_at
-                        THEN $observed_at
-                        ELSE c.first_seen_at END
-                """.replace("__LABEL__", label),
-                aliases=list(
-                    dict.fromkeys(
-                        [
-                            concept.preferred_label,
-                            *(
-                                name.text
-                                for name in concept.names
-                                if name.status == "accepted"
-                            ),
-                        ]
-                    )
-                ),
-                normalized_aliases=list(
-                    dict.fromkeys(
-                        name.normalized_text
-                        for name in concept.names
-                        if name.status == "accepted"
-                    )
-                ),
-                names_json=json_value(
-                    [name.model_dump() for name in concept.names]
-                ),
-                observed_at=_version_date(document),
-                **concept.model_dump(exclude={"names"}, mode="json"),
+            concept_rows.setdefault(
+                cypher_identifier(concept.kind.value), []
+            ).append(
+                {
+                    "aliases": list(
+                        dict.fromkeys(
+                            [
+                                concept.preferred_label,
+                                *(
+                                    name.text
+                                    for name in concept.names
+                                    if name.status == "accepted"
+                                ),
+                            ]
+                        )
+                    ),
+                    "normalized_aliases": list(
+                        dict.fromkeys(
+                            name.normalized_text
+                            for name in concept.names
+                            if name.status == "accepted"
+                        )
+                    ),
+                    "names_json": json_value(
+                        [name.model_dump() for name in concept.names]
+                    ),
+                    **concept.model_dump(exclude={"names"}, mode="json"),
+                }
             )
+        for label, rows in concept_rows.items():
+            for batch in _batches(rows):
+                await _run(
+                    tx,
+                    f"""
+                    UNWIND $rows AS row
+                    MERGE (c:{label} {{concept_id: row.concept_id}})
+                    SET c.kind = row.kind,
+                        c.preferred_label = row.preferred_label,
+                        c.name = row.preferred_label,
+                        c.definition = row.definition,
+                        c.language = row.language,
+                        c.status = row.status,
+                        c.aliases = row.aliases,
+                        c.normalized_aliases = row.normalized_aliases,
+                        c.names_json = row.names_json,
+                        c.first_seen_at = CASE
+                            WHEN $observed_at IS NULL THEN c.first_seen_at
+                            WHEN c.first_seen_at IS NULL
+                                OR $observed_at < c.first_seen_at
+                            THEN $observed_at
+                            ELSE c.first_seen_at END
+                    """,
+                    rows=batch,
+                    observed_at=_version_date(document),
+                )
 
         # Every concept a mention, role or projection points to is in
         # result.concepts (validate_extraction), so matches can use a label
@@ -1698,44 +1920,57 @@ class GraphStore:
         }
         graph = load_catalog("graph")
 
-        for concept in result.concepts:
-            if concept.kind == ConceptKind.COUNTRY and COUNTRY_CODE.fullmatch(
-                concept.preferred_label
-            ):
-                # An ISO-coded country from text is the same country as the
-                # metadata-level one.
-                await _run(
-                    tx,
-                    """
-                    MATCH (c:Country {concept_id: $concept_id})
-                    MERGE (x:Country {country_id: $country_id})
-                    ON CREATE SET x.code = $code, x.name = $code
-                    MERGE (c)-[:SAME_AS]->(x)
-                    """,
-                    concept_id=concept.concept_id,
-                    country_id=stable_id("country", concept.preferred_label),
-                    code=concept.preferred_label,
-                )
-
-        for link in GraphStore._domain_identity_links(document, result):
+        # An ISO-coded country from text is the same country as the
+        # metadata-level one.
+        same_countries = [
+            {
+                "concept_id": concept.concept_id,
+                "country_id": stable_id("country", concept.preferred_label),
+                "code": concept.preferred_label,
+            }
+            for concept in result.concepts
+            if concept.kind == ConceptKind.COUNTRY
+            and COUNTRY_CODE.fullmatch(concept.preferred_label)
+        ]
+        if same_countries:
             await _run(
                 tx,
                 """
-                MATCH (c:Domain {concept_id: $concept_id})
-                MATCH (x:Domain {domain_id: $domain_id})
-                MERGE (c)-[r:SAME_AS {document_version_id: $version_id}]->(x)
-                SET r.status = 'accepted', r.method = $method,
-                    r.assertion_ids = $assertion_ids,
-                    r.observed_at = $observed_at
+                UNWIND $rows AS row
+                MATCH (c:Country {concept_id: row.concept_id})
+                MERGE (x:Country {country_id: row.country_id})
+                ON CREATE SET x.code = row.code, x.name = row.code
+                MERGE (c)-[:SAME_AS]->(x)
                 """,
-                version_id=document.document_version_id,
-                observed_at=_version_date(document),
-                method=link.get("method", "exact_canonical_label"),
+                rows=same_countries,
+            )
+
+        domain_links = [
+            {
+                "method": link.get("method", "exact_canonical_label"),
                 **{
                     key: value
                     for key, value in link.items()
                     if key != "method"
                 },
+            }
+            for link in GraphStore._domain_identity_links(document, result)
+        ]
+        if domain_links:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (c:Domain {concept_id: row.concept_id})
+                MATCH (x:Domain {domain_id: row.domain_id})
+                MERGE (c)-[r:SAME_AS {document_version_id: $version_id}]->(x)
+                SET r.status = 'accepted', r.method = row.method,
+                    r.assertion_ids = row.assertion_ids,
+                    r.observed_at = $observed_at
+                """,
+                version_id=document.document_version_id,
+                observed_at=_version_date(document),
+                rows=domain_links,
             )
 
         embedded: Dict[str, List[Dict[str, Any]]] = {}
@@ -1761,6 +1996,8 @@ class GraphStore:
                 )
 
         # A semantic match is a review candidate, never an identity.
+        candidates: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        kinds = {item.value for item in ConceptKind}
         for decision in result.resolutions:
             if (
                 decision.method != SEMANTIC_CANDIDATE_METHOD
@@ -1769,26 +2006,34 @@ class GraphStore:
                 continue
             for candidate in decision.candidates:
                 kind = candidate.get("kind")
-                if kind not in {item.value for item in ConceptKind}:
+                if kind not in kinds:
                     continue
-                await _run(
-                    tx,
-                    f"""
-                    MATCH (a:{labels[decision.concept_id]}
-                           {{concept_id: $source}})
-                    MATCH (b:{cypher_identifier(kind)} {{concept_id: $target}})
-                    MERGE (a)-[r:POSSIBLY_SAME_AS]->(b)
-                    SET r.score = $score, r.cosine = $cosine,
-                        r.method = $method, r.run_id = $run_id,
-                        r.review_status = 'pending'
-                    """,
-                    source=decision.concept_id,
-                    target=candidate["concept_id"],
-                    score=candidate.get("score"),
-                    cosine=candidate.get("cosine"),
-                    method=decision.method,
-                    run_id=run.run_id,
+                candidates.setdefault(
+                    (labels[decision.concept_id], cypher_identifier(kind)), []
+                ).append(
+                    {
+                        "source": decision.concept_id,
+                        "target": candidate["concept_id"],
+                        "score": candidate.get("score"),
+                        "cosine": candidate.get("cosine"),
+                        "method": decision.method,
+                    }
                 )
+        for (source_label, target_label), rows in candidates.items():
+            await _run(
+                tx,
+                f"""
+                UNWIND $rows AS row
+                MATCH (a:{source_label} {{concept_id: row.source}})
+                MATCH (b:{target_label} {{concept_id: row.target}})
+                MERGE (a)-[r:POSSIBLY_SAME_AS]->(b)
+                SET r.score = row.score, r.cosine = row.cosine,
+                    r.method = row.method, r.run_id = $run_id,
+                    r.review_status = 'pending'
+                """,
+                rows=rows,
+                run_id=run.run_id,
+            )
 
         await _run(
             tx,
@@ -1801,17 +2046,23 @@ class GraphStore:
             version_id=document.document_version_id,
         )
 
-        for projection in graph["projections"].values():
-            relationship = cypher_identifier(projection["relationship"])
-            await _run(
-                tx,
-                f"""
-                MATCH ()-[r:{relationship}]->()
-                WHERE r.document_version_id = $version_id
-                DELETE r
-                """,
-                version_id=document.document_version_id,
+        relationships = "|".join(
+            sorted(
+                {
+                    cypher_identifier(projection["relationship"])
+                    for projection in graph["projections"].values()
+                }
             )
+        )
+        await _run(
+            tx,
+            f"""
+            MATCH ()-[r:{relationships}]->()
+            WHERE r.document_version_id = $version_id
+            DELETE r
+            """,
+            version_id=document.document_version_id,
+        )
 
         await _run(
             tx,
@@ -1885,184 +2136,118 @@ class GraphStore:
                     recorded_at=run.started_at,
                 )
 
+        projections: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
         for link in GraphStore._projection_links(document, result):
-            await _run(
-                tx,
-                f"""
-                MATCH (source:{cypher_identifier(link["source_label"])}
-                       {{concept_id: $source}})
-                MATCH (target:{cypher_identifier(link["target_label"])}
-                       {{concept_id: $target}})
-                MERGE (source)-[r:{cypher_identifier(link["relationship"])}
-                      {{document_version_id: $version_id}}]->(target)
-                SET r.chunk_id = $chunk_id, r.quote = $quote,
-                    r.start = $start, r.end = $end,
-                    r.assertion_id = $assertion_id,
-                    r.method = 'reviewed_assertion', r.run_id = $run_id,
-                    r.observed_at = $observed_at,
-                    r.recorded_at = $recorded_at
-                """,
-                source=link["source"],
-                target=link["target"],
-                chunk_id=link["chunk_id"],
-                quote=link["quote"],
-                start=link["start"],
-                end=link["end"],
-                assertion_id=link["assertion_id"],
-                version_id=document.document_version_id,
-                run_id=run.run_id,
-                recorded_at=run.started_at,
-                observed_at=_chunk_date(document, link["chunk_id"]),
-            )
-
-        for row in GraphStore._maturity_evidence(result):
-            await _run(
-                tx,
-                f"""
-                MATCH (subject:{cypher_identifier(row["label"])}
-                       {{concept_id: $subject}})
-                MATCH (chunk:Chunk {{chunk_id: $chunk_id}})
-                MERGE (subject)-[r:HAS_MATURITY_EVIDENCE
-                      {{assertion_id: $assertion_id, start: $start}}]->(chunk)
-                SET r.stage = $stage, r.stage_rank = $stage_rank,
-                    r.trl = $trl, r.quote = $quote, r.end = $end,
-                    r.run_id = $run_id, r.observed_at = $observed_at,
-                    r.recorded_at = $recorded_at
-                """,
-                subject=row["subject"],
-                chunk_id=row["chunk_id"],
-                assertion_id=row["assertion_id"],
-                start=row["start"],
-                end=row["end"],
-                quote=row["quote"],
-                stage=row["stage"],
-                stage_rank=row["stage_rank"],
-                trl=row["trl"],
-                run_id=run.run_id,
-                recorded_at=run.started_at,
-                observed_at=_chunk_date(document, row["chunk_id"]),
-            )
-
-        for evidence in result.economic_evidence:
-            await _run(
-                tx,
-                """
-                MATCH (technology:Technology
-                       {concept_id: $technology_concept_id})
-                MATCH (chunk:Chunk {chunk_id: $chunk_id})
-                MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE
-                      {evidence_id: $evidence_id}]->(chunk)
-                SET r.category = $category, r.quote = $quote,
-                    r.start = $start, r.end = $end,
-                    r.amount_text = $amount_text,
-                    r.amount_value = $amount_value, r.currency = $currency,
-                    r.unit = $unit, r.period = $period,
-                    r.assertion_id = $assertion_id,
-                    r.confidence = $confidence, r.status = $status,
-                    r.run_id = $run_id,
-                    r.polarity = $polarity, r.modality = $modality,
-                    r.observed_at = $observed_at,
-                    r.recorded_at = $recorded_at
-                """,
-                run_id=run.run_id,
-                recorded_at=run.started_at,
-                observed_at=_chunk_date(document, evidence.chunk_id),
-                **evidence.model_dump(),
-            )
-
-        for assertion in result.assertions:
-            await _run(
-                tx,
-                """
-                MATCH (v:DocumentVersion {document_version_id: $version_id})
-                MATCH (r:ProcessingRun {run_id: $run_id})
-                MERGE (a:Assertion {assertion_id: $assertion_id})
-                SET a.predicate = $predicate,
-                    a.qualifiers_json = $qualifiers_json,
-                    a.values_json = $values_json, a.polarity = $polarity,
-                    a.modality = $modality,
-                    a.attribution_kind = $attribution_kind,
-                    a.evidence_kind = $evidence_kind,
-                    a.extraction_confidence = $extraction_confidence,
-                    a.verification_status = $verification_status,
-                    a.status = $status,
-                    a.observed_at = $observed_at,
-                    a.recorded_at = $recorded_at
-                MERGE (v)-[:HAS_ASSERTION]->(a)
-                MERGE (r)-[creation:CREATED]->(a)
-                SET creation.status = $status,
-                    creation.verification_status = $verification_status
-                """,
-                version_id=document.document_version_id,
-                run_id=run.run_id,
-                recorded_at=run.started_at,
-                observed_at=_chunk_date(
-                    document, assertion.evidence[0].chunk_id
-                )
-                if assertion.evidence
-                else _version_date(document),
-                qualifiers_json=json_value(assertion.qualifiers),
-                values_json=json_value(assertion.values),
-                **assertion.model_dump(
-                    exclude={
-                        "roles",
-                        "evidence",
-                        "qualifiers",
-                        "values",
-                        "claim_group_id",
-                        "evidence_family_id",
-                    }
+            projections.setdefault(
+                (
+                    cypher_identifier(link["source_label"]),
+                    cypher_identifier(link["target_label"]),
+                    cypher_identifier(link["relationship"]),
                 ),
+                [],
+            ).append(
+                {
+                    key: link[key]
+                    for key in (
+                        "source",
+                        "target",
+                        "chunk_id",
+                        "quote",
+                        "start",
+                        "end",
+                        "assertion_id",
+                    )
+                }
+                | {"observed_at": _chunk_date(document, link["chunk_id"])}
+            )
+        for (source, target, relationship), rows in projections.items():
+            await _run(
+                tx,
+                f"""
+                UNWIND $rows AS row
+                MATCH (source:{source} {{concept_id: row.source}})
+                MATCH (target:{target} {{concept_id: row.target}})
+                MERGE (source)-[r:{relationship}
+                      {{document_version_id: $version_id}}]->(target)
+                SET r.chunk_id = row.chunk_id, r.quote = row.quote,
+                    r.start = row.start, r.end = row.end,
+                    r.assertion_id = row.assertion_id,
+                    r.method = 'reviewed_assertion', r.run_id = $run_id,
+                    r.observed_at = row.observed_at,
+                    r.recorded_at = $recorded_at
+                """,
+                rows=rows,
+                version_id=document.document_version_id,
+                run_id=run.run_id,
+                recorded_at=run.started_at,
             )
 
-            for role, concept_id in assertion.roles.items():
-                relation = graph["assertion_roles"].get(role)
-                if relation is None:
-                    raise ValueError(f"unsupported assertion role: {role}")
-                relation = cypher_identifier(relation)
-                await _run(
-                    tx,
-                    f"""
-                    MATCH (a:Assertion {{assertion_id: $assertion_id}})
-                    MATCH (c:{labels[concept_id]} {{concept_id: $concept_id}})
-                    MERGE (a)-[:{relation}]->(c)
-                    """,
-                    assertion_id=assertion.assertion_id,
-                    concept_id=concept_id,
-                )
+        maturity: Dict[str, List[Dict[str, Any]]] = {}
+        for row in GraphStore._maturity_evidence(result):
+            maturity.setdefault(cypher_identifier(row["label"]), []).append(
+                {
+                    **{
+                        key: value
+                        for key, value in row.items()
+                        if key != "label"
+                    },
+                    "observed_at": _chunk_date(document, row["chunk_id"]),
+                }
+            )
+        for label, rows in maturity.items():
+            await _run(
+                tx,
+                f"""
+                UNWIND $rows AS row
+                MATCH (subject:{label} {{concept_id: row.subject}})
+                MATCH (chunk:Chunk {{chunk_id: row.chunk_id}})
+                MERGE (subject)-[r:HAS_MATURITY_EVIDENCE
+                      {{assertion_id: row.assertion_id, start: row.start}}
+                      ]->(chunk)
+                SET r.stage = row.stage, r.stage_rank = row.stage_rank,
+                    r.trl = row.trl, r.quote = row.quote, r.end = row.end,
+                    r.run_id = $run_id, r.observed_at = row.observed_at,
+                    r.recorded_at = $recorded_at
+                """,
+                rows=rows,
+                run_id=run.run_id,
+                recorded_at=run.started_at,
+            )
 
-            for evidence in assertion.evidence:
-                await _run(
-                    tx,
-                    """
-                    MATCH (a:Assertion {assertion_id: $assertion_id})
-                    MATCH (c:Chunk {chunk_id: $chunk_id})
-                    MERGE (a)-[e:SUPPORTED_BY {start: $start, end: $end}]->(c)
-                    SET e.quote = $quote, e.supports_fields = $supports_fields
-                    """,
-                    assertion_id=assertion.assertion_id,
-                    **evidence.model_dump(),
-                )
+        if result.economic_evidence:
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (technology:Technology
+                       {concept_id: row.technology_concept_id})
+                MATCH (chunk:Chunk {chunk_id: row.chunk_id})
+                MERGE (technology)-[r:HAS_ECONOMIC_EVIDENCE
+                      {evidence_id: row.evidence_id}]->(chunk)
+                SET r.category = row.category, r.quote = row.quote,
+                    r.start = row.start, r.end = row.end,
+                    r.amount_text = row.amount_text,
+                    r.amount_value = row.amount_value,
+                    r.currency = row.currency,
+                    r.unit = row.unit, r.period = row.period,
+                    r.assertion_id = row.assertion_id,
+                    r.confidence = row.confidence, r.status = row.status,
+                    r.run_id = $run_id,
+                    r.polarity = row.polarity, r.modality = row.modality,
+                    r.observed_at = row.observed_at,
+                    r.recorded_at = $recorded_at
+                """,
+                rows=[
+                    {
+                        **evidence.model_dump(mode="json"),
+                        "observed_at": _chunk_date(
+                            document, evidence.chunk_id
+                        ),
+                    }
+                    for evidence in result.economic_evidence
+                ],
+                run_id=run.run_id,
+                recorded_at=run.started_at,
+            )
 
-            if assertion.claim_group_id:
-                await _run(
-                    tx,
-                    """
-                    MATCH (a:Assertion {assertion_id: $assertion_id})
-                    MERGE (g:ClaimGroup {claim_group_id: $group_id})
-                    MERGE (a)-[:IN_CLAIM_GROUP]->(g)
-                    """,
-                    assertion_id=assertion.assertion_id,
-                    group_id=assertion.claim_group_id,
-                )
-            if assertion.evidence_family_id:
-                await _run(
-                    tx,
-                    """
-                    MATCH (a:Assertion {assertion_id: $assertion_id})
-                    MERGE (f:EvidenceFamily {family_id: $family_id})
-                    MERGE (a)-[:FROM_EVIDENCE_FAMILY]->(f)
-                    """,
-                    assertion_id=assertion.assertion_id,
-                    family_id=assertion.evidence_family_id,
-                )
+        await GraphStore._write_assertions(tx, document, result, labels)
