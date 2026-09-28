@@ -756,14 +756,29 @@ def test_failed_context_reextraction_keeps_initial_source_response_in_audit():
         }
     ]
     provider = ScriptProvider(
-        [first, LLMError("timeout", "Offline context extraction failure")]
+        [
+            first,
+            LLMError("timeout", "Offline context extraction failure"),
+            reviewed(),
+        ]
     )
     result = asyncio.run(
         process_document(doc, provider, settings=settings(max_model_calls=3))
     )
-    assert result.run.status == "failed"
-    assert result.assertions == []
-    assert len(provider.calls) == 2
+    # B-7: the failed re-extraction used to discard the valid first answer
+    # (run "failed", no assertions). The first answer is kept; its context
+    # stays unresolved, so the claim waits for review instead of acceptance.
+    assert result.run.status == "partial"
+    assert [item.status for item in result.assertions] == ["needs_review"]
+    assert result.assertions[0].evidence[0].quote == doc.chunks[0].text
+    assert {"context_reextraction_failed", "unresolved_context"} <= codes(
+        result
+    )
+    assert [call["stage"] for call in provider.calls] == [
+        "extract",
+        "extract",
+        "review",
+    ]
     responses = [
         event
         for event in result.run.trace

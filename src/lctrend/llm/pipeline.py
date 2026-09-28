@@ -671,15 +671,28 @@ async def _process_document(
                         }
                     )
                     break
+                try:
+                    extraction_with_context = await budget.call(
+                        Extraction,
+                        prompts["extract"],
+                        next_payload,
+                        "extract",
+                        reserve=1,
+                    )
+                except LLMError as exc:
+                    # The first answer is valid and anchored in the packet
+                    # it saw; its context request stays unresolved (B-7).
+                    metadata["issues"].append(
+                        {
+                            "packet_id": packet.packet_id,
+                            "code": "context_reextraction_failed",
+                            "error": exc.code,
+                        }
+                    )
+                    break
+                extraction = extraction_with_context
                 packet = expanded
                 related_context = expanded_related
-                extraction = await budget.call(
-                    Extraction,
-                    prompts["extract"],
-                    next_payload,
-                    "extract",
-                    reserve=1,
-                )
                 trace.append(
                     {
                         "stage": "extraction_response",
