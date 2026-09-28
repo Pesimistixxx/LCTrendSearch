@@ -176,6 +176,21 @@ def country_code(value: str) -> Optional[str]:
     return None
 
 
+# One technology can be reported as a Technology, a Method or a Material;
+# identity must not depend on which one a document chose.
+_FAMILIES = {
+    "Technology": "technology",
+    "Method": "technology",
+    "Material": "technology",
+}
+
+
+def kind_family(kind: object) -> str:
+    """The identity family of a concept kind; other kinds are their own."""
+    value = str(getattr(kind, "value", kind))
+    return _FAMILIES.get(value, value)
+
+
 def identity_key(value: str, kind: object = None) -> str:
     """The deterministic identity key of a name of a concept kind."""
     if getattr(kind, "value", kind) == "Country":

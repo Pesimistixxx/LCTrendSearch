@@ -174,3 +174,32 @@ def test_synonym_groups_match_by_key(left, right, kind):
 @pytest.mark.parametrize("left,right,kind", FALSE_MERGES_C6)
 def test_synonym_groups_do_not_ignore_acronym_case(left, right, kind):
     assert not same_concept(left, right, kind)
+
+
+MATERIAL = ConceptKind.MATERIAL
+TASK = ConceptKind.TASK
+
+# C-5: one name split into a Technology and a Method concept.
+SAME_FAMILY_C5 = [
+    ("federated learning", T, "federated learning", METHOD),
+    ("обучение с подкреплением", T, "reinforcement learning", METHOD),
+    ("graphene", MATERIAL, "graphene", T),
+    ("Graphene", METHOD, "graphene", MATERIAL),
+]
+
+OTHER_FAMILY_C5 = [
+    ("image segmentation", T, "image segmentation", TASK),
+    ("IS", T, "IS", COUNTRY),
+]
+
+
+@pytest.mark.parametrize("left,kind,right,right_kind", SAME_FAMILY_C5)
+def test_technology_method_material_share_identity(
+    left, kind, right, right_kind
+):
+    assert same_concept(left, right, kind, right_kind)
+
+
+@pytest.mark.parametrize("left,kind,right,right_kind", OTHER_FAMILY_C5)
+def test_other_kinds_keep_separate_identity(left, kind, right, right_kind):
+    assert not same_concept(left, right, kind, right_kind)

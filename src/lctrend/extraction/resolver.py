@@ -27,7 +27,7 @@ from ..core.models import (
     ResolutionDecision,
     stable_id,
 )
-from .lexical import identity_key, lexical_key
+from .lexical import identity_key, kind_family, lexical_key
 
 
 # Names repeat across documents; the caches keep resolution linear in the
@@ -376,7 +376,8 @@ class ConceptIndex:
                 found |= {
                     concept_id
                     for concept_id in self._keys.get(key, ())
-                    if self._concepts[concept_id].kind.value == group.kind
+                    if kind_family(self._concepts[concept_id].kind)
+                    == kind_family(group.kind)
                 }
         return [
             self._concepts[concept_id]
@@ -393,10 +394,9 @@ def _mention_kind(mention: Mention) -> ConceptKind:
 
 
 def _compatible(mention: Mention, concept: Concept) -> bool:
-    return (
-        concept.kind in mention.type_candidates
-        or ConceptKind.CANDIDATE in mention.type_candidates
-    )
+    return ConceptKind.CANDIDATE in mention.type_candidates or kind_family(
+        concept.kind
+    ) in {kind_family(kind) for kind in mention.type_candidates}
 
 
 def _add_alias(concept: Concept, text: str) -> None:
