@@ -18,7 +18,12 @@ from typing import Any, Callable, Collection, Dict, List, Mapping
 from ..core.aio import resolve
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope, stable_id
-from .file_adapters import UnsupportedFileFormat, _pdf
+from .file_adapters import (
+    UnsupportedFileFormat,
+    _pdf,
+    pdf_body,
+    section_role,  # noqa: F401 (public name kept here)
+)
 from .snapshots import snapshot_bytes
 
 logger = logging.getLogger(__name__)
@@ -58,46 +63,10 @@ def openalex_pdf_urls(payload: Mapping[str, Any]) -> List[str]:
     ]
 
 
-def section_role(heading: str | None) -> str | None:
-    """Rhetorical role of a paper section (method, results, limitations...).
-
-    The packet stream stays one "fulltext" kind; the role is navigation
-    metadata, so a heading never becomes evidence.
-    """
-    if not heading:
-        return None
-    for role, pattern in load_catalog("pipeline")["section_roles"].items():
-        if re.search(pattern, heading, re.IGNORECASE):
-            return role
-    return None
-
-
 def _body_chunks(raw: bytes, document: DocumentEnvelope, url: str) -> tuple:
-    settings = load_catalog("pipeline")["openalex_fulltext"]
     snapshot = snapshot_bytes(raw)
     _, chunks, warnings = _pdf(raw, document.document_version_id, snapshot)
-    skipped = set(settings["skipped_labels"])
-    bibliography = re.compile(settings["bibliography_heading"], re.IGNORECASE)
-    kept, heading, in_bibliography = [], None, False
-    for chunk in chunks:
-        label = chunk.kind
-        if label == "section_header":
-            heading = chunk.text.strip()
-            in_bibliography = bool(bibliography.match(heading))
-        if label in skipped or in_bibliography:
-            continue
-        # One kind keeps a paper in one packet stream; the Docling label
-        # stays visible.
-        chunk.kind = "fulltext"
-        chunk.section_path = ["fulltext"]
-        chunk.locator.update(
-            docling_label=label,
-            section_heading=heading,
-            section_role=section_role(heading),
-            pdf_url=url,
-        )
-        kept.append(chunk)
-    return snapshot, kept, warnings
+    return snapshot, pdf_body(chunks, pdf_url=url), warnings
 
 
 def _numeric_pmid(value: Any) -> str | None:

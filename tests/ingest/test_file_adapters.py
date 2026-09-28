@@ -362,3 +362,65 @@ def test_concurrent_snapshot_writers_publish_once_without_false_corruption(
     assert paths[0] == paths[1]
     assert paths[0].read_bytes() == raw
     assert list(directory.iterdir()) == [paths[0]]
+
+
+def test_local_pdf_gets_the_same_body_as_an_openalex_full_text(
+    tmp_path, monkeypatch
+):
+    # A-3: Docling labels must not split a local PDF into many packets.
+    from lctrend.llm.context import PipelineSettings, plan_packets
+
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    items = [
+        ("page_header", "Journal of Fixtures, vol. 1"),
+        ("section_header", "2 Methods"),
+        ("text", "Sparse attention reduces memory use by 40%."),
+        ("caption", "Figure 1. Memory use."),
+        ("text", "It was tested on long documents."),
+        ("page_footer", "Page 3"),
+        ("section_header", "References"),
+        ("list_item", "[1] Someone. A cited paper. 2020."),
+    ]
+    document = SimpleNamespace(
+        iterate_items=lambda: [
+            (
+                SimpleNamespace(
+                    label=SimpleNamespace(value=label),
+                    text=text,
+                    self_ref=f"#/texts/{index}",
+                    prov=[],
+                ),
+                0,
+            )
+            for index, (label, text) in enumerate(items)
+        ]
+    )
+
+    class Converter:
+        def convert(self, path, **options):
+            return SimpleNamespace(
+                document=document, status=SimpleNamespace(value="success")
+            )
+
+    module = ModuleType("docling.document_converter")
+    module.DocumentConverter = Converter
+    monkeypatch.setitem(sys.modules, "docling.document_converter", module)
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-local")
+    parsed = parse_file(path)
+    assert [chunk.text for chunk in parsed.chunks] == [
+        "2 Methods",
+        "Sparse attention reduces memory use by 40%.",
+        "Figure 1. Memory use.",
+        "It was tested on long documents.",
+    ]
+    assert {chunk.kind for chunk in parsed.chunks} == {"fulltext"}
+    assert parsed.chunks[1].locator["docling_label"] == "text"
+    assert parsed.chunks[1].locator["section_role"] == "method"
+    plan = plan_packets(
+        parsed,
+        PipelineSettings.from_catalog().model_copy(
+            update={"primary_chunks": 6}
+        ),
+    )
+    assert len(plan.packets) == 1

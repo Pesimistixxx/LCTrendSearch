@@ -533,6 +533,50 @@ def _pdf(
     return path.stem, chunks, warnings
 
 
+def section_role(heading: Optional[str]) -> Optional[str]:
+    """Rhetorical role of a paper section (method, results, limitations...).
+
+    The packet stream stays one "fulltext" kind; the role is navigation
+    metadata, so a heading never becomes evidence.
+    """
+    if not heading:
+        return None
+    for role, pattern in load_catalog("pipeline")["section_roles"].items():
+        if re.search(pattern, heading, re.IGNORECASE):
+            return role
+    return None
+
+
+def pdf_body(chunks: List[Chunk], **locator: Any) -> List[Chunk]:
+    """Paper body of Docling chunks, shared by local and OpenAlex PDFs.
+
+    Page headers, footers and the bibliography are dropped. One kind keeps a
+    paper in one packet stream (a new Docling label must not close a
+    packet); the Docling label and section stay visible in the locator.
+    """
+    settings = load_catalog("pipeline")["openalex_fulltext"]
+    skipped = set(settings["skipped_labels"])
+    bibliography = re.compile(settings["bibliography_heading"], re.IGNORECASE)
+    kept, heading, in_bibliography = [], None, False
+    for chunk in chunks:
+        label = chunk.kind
+        if label == "section_header":
+            heading = chunk.text.strip()
+            in_bibliography = bool(bibliography.match(heading))
+        if label in skipped or in_bibliography:
+            continue
+        chunk.kind = "fulltext"
+        chunk.section_path = ["fulltext"]
+        chunk.locator.update(
+            docling_label=label,
+            section_heading=heading,
+            section_role=section_role(heading),
+            **locator,
+        )
+        kept.append(chunk)
+    return kept
+
+
 HTML_DATE_FIELDS = (
     "citation_publication_date",
     "citation_date",
@@ -779,6 +823,7 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         coverage = "selected_text"
     elif adapter == "pdf":
         title, chunks, warnings = _pdf(raw, version_id, path)
+        chunks = pdf_body(chunks)
         coverage = "parsed_text"
     else:
         raise UnsupportedFileFormat(
