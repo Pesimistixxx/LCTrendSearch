@@ -68,6 +68,23 @@ def _catalog_domain(rule: Mapping[str, Any]) -> Domain:
     )
 
 
+def _without_parents(domains: Iterable[Domain]) -> List[Domain]:
+    """Drop a domain whose subdomain is also present.
+
+    "NLP" already implies "Artificial intelligence"; keeping both invents
+    a cross-domain pair (A-9).
+    """
+    domains = list(domains)
+    parents = {
+        domain.parent_name.casefold()
+        for domain in domains
+        if domain.parent_name
+    }
+    return [
+        domain for domain in domains if domain.name.casefold() not in parents
+    ]
+
+
 def _domains_from_values(values: Iterable[Any]) -> List[Domain]:
     """Every catalog domain the text names; several domains are what makes
     a cross-domain signal visible.
@@ -81,7 +98,7 @@ def _domains_from_values(values: Iterable[Any]) -> List[Domain]:
         ):
             domain = _catalog_domain(rule)
             found.setdefault(domain.domain_id, domain)
-    return list(found.values())
+    return _without_parents(found.values())
 
 
 def _domains_from_topics(
@@ -105,11 +122,19 @@ def _domains_from_topics(
         matched = _domains_from_values(values)
         subfield = topic.get(fallback["name_field"]) or {}
         name = subfield.get("display_name")
-        if not matched and name:
+        # The subfield is kept when the catalog does not cover it: "ML in
+        # Materials Science" is ML *and* materials, not ML alone (A-9).
+        covered = {
+            value.casefold()
+            for domain in matched
+            for value in (domain.name, domain.parent_name or "")
+        }
+        if name and name.casefold() not in covered:
             if name.casefold() in catalog:
-                matched = [_catalog_domain(catalog[name.casefold()])]
+                if not matched:
+                    matched = [_catalog_domain(catalog[name.casefold()])]
             else:
-                matched = [
+                matched = matched + [
                     Domain(
                         domain_id=stable_id("domain", name),
                         name=name,
@@ -127,7 +152,7 @@ def _domains_from_topics(
                 ]
         for domain in matched:
             found.setdefault(domain.domain_id, domain)
-    return list(found.values())
+    return _without_parents(found.values())
 
 
 def _organization_type(name: str, default: str = "other") -> str:

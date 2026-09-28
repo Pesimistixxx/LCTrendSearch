@@ -234,3 +234,53 @@ def test_github_organization_owner_is_typed_by_its_login():
         )
         types = [item.organization_type for item in document.organizations]
         assert types == [kind]
+
+
+def _topic(name, subfield, field):
+    return {
+        "display_name": name,
+        "subfield": {
+            "id": f"https://openalex.org/subfields/{subfield}",
+            "display_name": subfield,
+        },
+        "field": {"display_name": field},
+        "domain": {"display_name": "Physical Sciences"},
+    }
+
+
+def test_topic_domains_drop_the_parent_and_keep_an_uncovered_subfield():
+    # A-9: "NLP Techniques" gave {AI, NLP}; "ML in Materials Science" gave
+    # only ML, so false and missing cross-domain pairs fed recombination.
+    nlp = parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "x",
+            "topics": [
+                _topic(
+                    "Natural Language Processing Techniques",
+                    "Artificial Intelligence",
+                    "Computer Science",
+                )
+            ],
+        }
+    )
+    assert [item.name for item in nlp.domains] == [
+        "Natural language processing"
+    ]
+    materials = parse_openalex(
+        {
+            "id": "https://openalex.org/W2",
+            "title": "y",
+            "topics": [
+                _topic(
+                    "Machine Learning in Materials Science",
+                    "Materials Chemistry",
+                    "Materials Science",
+                )
+            ],
+        }
+    )
+    assert sorted(item.name for item in materials.domains) == [
+        "Machine learning",
+        "Materials Chemistry",
+    ]
