@@ -238,3 +238,48 @@ def test_pypi_crawl_persists_success_and_failure_counts(
     assert run["records_seen"] == 2
     assert run["records_ingested"] == 1 and run["failures"] == 1
     assert run["status"] == "completed" and run["exhaustive"] is False
+
+
+@pytest.fixture
+def collected_store(monkeypatch, tmp_path, temporal_store):
+    """The same corpus, collected and processed in 2026-09."""
+    for row in temporal_store.data["versions"]:
+        row.update(
+            retrieved_at="2026-09-20", metrics_observed_at="2026-09-20",
+            extracted_at="2026-09-21",
+        )
+    for row in temporal_store.data["mentions"]:
+        row["recorded_at"] = "2026-09-21"
+    return temporal_store
+
+
+def test_dataset_cli_dates_content_by_publication(
+    monkeypatch, tmp_path, collected_store
+):
+    output = tmp_path / "dataset.csv"
+    invoke(monkeypatch, "build-training-set", "--start-year", "2020",
+           "--output", output, "--no-taxonomy")
+    rows = read_csv(output)
+    first = next(row for row in rows if row["snapshot_date"] == "2020-01-01")
+    assert first["first_seen_date"] == "2018-01-01"
+    assert first["document_count"] == "2"
+    assert first["citation_count"] == ""
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    assert manifest["as_known"] is False
+
+
+def test_as_known_flag_keeps_the_strict_collection_gate(
+    monkeypatch, tmp_path, collected_store
+):
+    output = tmp_path / "dataset.csv"
+    invoke(monkeypatch, "build-training-set", "--start-year", "2020",
+           "--output", output, "--no-taxonomy", "--as-known")
+    assert [row for row in read_csv(output)
+            if row["snapshot_date"] < "2026"] == []
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    assert manifest["as_known"] is True
+    features = tmp_path / "features.csv"
+    for flag, expected in ((), 1), (("--as-known",), 0):
+        invoke(monkeypatch, "export-features", "--snapshot", "2020-01-01",
+               "--output", features, "--no-taxonomy", *flag)
+        assert len(read_csv(features)) == expected

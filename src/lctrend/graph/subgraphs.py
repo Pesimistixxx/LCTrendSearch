@@ -81,8 +81,13 @@ def _snapshot_graph(snapshot):
                     for i, value in enumerate(embedding)
                 }
             )
+        # A technology seen only in undated documents has no first_seen.
         technology_node = node(
-            "Technology", key, technology.first_seen, features
+            "Technology",
+            key,
+            technology.first_seen
+            or min(trace.first_visible for trace in technology.documents),
+            features,
         )
         for trace in technology.documents:
             version = trace.version

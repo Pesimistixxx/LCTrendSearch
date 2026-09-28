@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { search, graph } from './api.js'
+import { search, graph, DEMO_DATA } from './api.js'
 import Graph from './Graph.jsx'
 import Ingestion from './ingest/App.jsx'
 import './ingest/styles.css'
@@ -159,6 +159,17 @@ function CountUp({ to }) {
   return v.toLocaleString('ru-RU')
 }
 
+// Синтетика не должна выглядеть анализом: плашка не скрывается и печатается.
+function DemoBanner() {
+  if (!DEMO_DATA) return null
+  return (
+    <div className="demo-banner" role="note">
+      <b>ДЕМО: синтетические данные</b>
+      <span>Технологии, оценки, числа, источники и цитаты сгенерированы для проверки интерфейса и не являются результатом анализа.</span>
+    </div>
+  )
+}
+
 function Results({ res }) {
   const [onlyConfident, setOnly] = useState(false)
   const [g, setG] = useState(null)
@@ -167,6 +178,7 @@ function Results({ res }) {
 
   return (
     <section className="results">
+      <DemoBanner />
       <div className="res-head">
         <p className="eyebrow">Результаты открытого поиска</p>
         <h1 className="res-title">«{res.query}»</h1>
@@ -287,6 +299,7 @@ function Insight({ s, q }) {
         <a href={`#${new URLSearchParams({ q })}`}>← К результатам «{q}»</a>
         <button className="ghost" onClick={() => print()}>Экспорт в PDF</button>
       </nav>
+      <DemoBanner />
 
       <header className="doc-head card">
         <div>

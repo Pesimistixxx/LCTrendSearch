@@ -296,7 +296,7 @@ def test_malformed_or_overlapping_source_mapping_is_not_trusted(segments):
         ("invented", None, None, "quote_not_found"),
         ("Sensor S", -1, 7, "invalid_offsets"),
         ("Sensor S", 0, 99, "invalid_offsets"),
-        ("Sensor S", 1, 9, "quote_offset_mismatch"),
+        ("Sensor X", 1, 9, "quote_offset_mismatch"),
         ("Sensor S", 0, None, "invalid_offsets"),
         (" ", None, None, "empty_quote"),
     ],
@@ -313,16 +313,58 @@ def test_invalid_quotes_and_offsets_have_explicit_gates(
     assert "invalid_entity:sensor" in issues["claim:a"]
 
 
-def test_repeated_and_overlapping_quotes_need_explicit_offsets():
+def test_repeated_entity_quote_anchors_to_first_occurrence_with_a_note():
     doc = document("aaa Sensor S consumes 8 mW for monitoring.")
     candidate = extraction(doc)
     candidate.entities[0].evidence = [SourceSpan(chunk_id="c1", quote="aa")]
+    notes = []
+    result, issues = validate_local_extraction(
+        doc, candidate, ["c1"], notes=notes
+    )
+    assert issues == {}
+    assert (result.entities[0].evidence[0].start, notes) == (
+        0,
+        [
+            {
+                "item": "entity:sensor",
+                "chunk_id": "c1",
+                "code": "ambiguous_quote_first_occurrence",
+                "occurrences": 2,
+                "start": 0,
+            }
+        ],
+    )
+
+
+def test_repeated_claim_quote_still_needs_explicit_offsets():
+    doc = document("Sensor S consumes 8 mW. Sensor S consumes 8 mW.")
+    candidate = extraction(doc)
+    candidate.claims[0].evidence = [
+        SourceSpan(chunk_id="c1", quote="Sensor S consumes 8 mW.")
+    ]
     _, issues = validate_local_extraction(doc, candidate, ["c1"])
-    assert "ambiguous_quote" in issues["entity:sensor"]
-    candidate.entities[0].evidence[0].start = 0
-    candidate.entities[0].evidence[0].end = 2
+    assert "ambiguous_quote" in issues["claim:a"]
+    candidate.claims[0].evidence[0].start = 24
+    candidate.claims[0].evidence[0].end = 47
     _, issues = validate_local_extraction(doc, candidate, ["c1"])
     assert issues == {}
+
+
+def test_wrong_offsets_fall_back_to_the_nearest_literal_occurrence():
+    doc = document("Sensor S consumes 8 mW. Sensor S consumes 8 mW.")
+    candidate = extraction(doc)
+    candidate.entities[0].evidence = [
+        SourceSpan(chunk_id="c1", quote="Sensor S", start=22, end=30)
+    ]
+    notes = []
+    result, issues = validate_local_extraction(
+        doc, candidate, ["c1"], notes=notes
+    )
+    assert "entity:sensor" not in issues
+    span = result.entities[0].evidence[0]
+    assert (span.start, span.end) == (24, 32)
+    assert notes[0]["code"] == "quote_offsets_corrected"
+    assert notes[0]["occurrences"] == 2
 
 
 def test_duplicate_entities_and_claims_invalidate_every_occurrence():

@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope
@@ -67,9 +67,29 @@ def _require_source_mapping(span: SourceSpan, chunk: Chunk) -> None:
         raise ValueError("quote_not_mapped_to_source")
 
 
+def _occurrences(text: str, quote: str) -> List[int]:
+    # Include overlapping occurrences. 'aa' in 'aaa' has two possible anchors.
+    starts = []
+    cursor = 0
+    while (cursor := text.find(quote, cursor)) != -1:
+        starts.append(cursor)
+        cursor += 1
+    return starts
+
+
 def _anchor(
-    span: SourceSpan, chunks: Dict[str, Chunk], visible: Set[str]
-) -> SourceSpan:
+    span: SourceSpan,
+    chunks: Dict[str, Chunk],
+    visible: Set[str],
+    first_occurrence: bool = False,
+) -> Tuple[SourceSpan, Optional[Dict[str, Any]]]:
+    """Anchor a literal quote; return the span and an optional audit note.
+
+    Wrong model offsets fall back to literal search (nearest occurrence).
+    A repeated quote without offsets is ambiguous, unless
+    ``first_occurrence`` allows the first one: an entity name repeated in a
+    chunk names the same entity at each occurrence.
+    """
     if span.chunk_id not in chunks:
         raise ValueError("unknown_evidence_chunk")
     if span.chunk_id not in visible:
@@ -80,6 +100,7 @@ def _anchor(
     text = chunk.text
     if not span.quote.strip():
         raise ValueError("empty_quote")
+    note = None
     if span.start is not None or span.end is not None:
         if (
             span.start is None
@@ -89,26 +110,36 @@ def _anchor(
             or span.end > len(text)
         ):
             raise ValueError("invalid_offsets")
-        if text[span.start : span.end] != span.quote:
-            raise ValueError("quote_offset_mismatch")
-        anchored = span.model_copy(deep=True)
+        if text[span.start : span.end] == span.quote:
+            start = span.start
+        else:
+            starts = _occurrences(text, span.quote)
+            if not starts:
+                raise ValueError("quote_offset_mismatch")
+            start = min(starts, key=lambda item: abs(item - span.start))
+            note = ("quote_offsets_corrected", len(starts))
     else:
-        # Include overlapping occurrences. 'aa' in 'aaa' has two possible
-        # anchors.
-        starts = []
-        cursor = 0
-        while (cursor := text.find(span.quote, cursor)) != -1:
-            starts.append(cursor)
-            cursor += 1
-        if len(starts) != 1:
-            raise ValueError(
-                "quote_not_found" if not starts else "ambiguous_quote"
-            )
-        anchored = span.model_copy(
-            update={"start": starts[0], "end": starts[0] + len(span.quote)}
-        )
+        starts = _occurrences(text, span.quote)
+        if not starts:
+            raise ValueError("quote_not_found")
+        if len(starts) > 1:
+            if not first_occurrence:
+                raise ValueError("ambiguous_quote")
+            note = ("ambiguous_quote_first_occurrence", len(starts))
+        start = starts[0]
+    anchored = span.model_copy(
+        update={"start": start, "end": start + len(span.quote)}
+    )
     _require_source_mapping(anchored, chunk)
-    return anchored
+    if note is None:
+        return anchored, None
+    code, occurrences = note
+    return anchored, {
+        "chunk_id": span.chunk_id,
+        "code": code,
+        "occurrences": occurrences,
+        "start": start,
+    }
 
 
 def _entity_refs(value: Any) -> Iterable[Any]:
@@ -141,6 +172,7 @@ def validate_local_extraction(
     document: DocumentEnvelope,
     extraction: Extraction,
     visible_ids: Iterable[str],
+    notes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Extraction, Dict[str, List[str]]]:
     """Return anchored candidates plus issue gates, never acceptance decisions.
 
@@ -148,6 +180,8 @@ def validate_local_extraction(
     review/compilation.
     Invalid records remain in the copy for an audit trail. Validation does not
     mutate the caller's extraction and never silently edits a quote or number.
+    Non-blocking anchoring choices (first of repeated entity names, offsets
+    corrected by literal search) are appended to ``notes`` for the audit.
     """
     # Python mode preserves nonfinite numbers for rejection. JSON serialization
     # may turn NaN/Infinity into null, hiding an invalid model-supplied value.
@@ -168,14 +202,22 @@ def validate_local_extraction(
     def add(key: str, issue: str) -> None:
         issues.setdefault(key, []).append(issue)
 
-    def anchor_spans(key: str, spans: List[SourceSpan]) -> List[SourceSpan]:
+    def anchor_spans(
+        key: str, spans: List[SourceSpan], first_occurrence: bool = False
+    ) -> List[SourceSpan]:
         anchored = []
         for span in spans:
             try:
-                anchored.append(_anchor(span, chunks, visible))
+                value, note = _anchor(
+                    span, chunks, visible, first_occurrence
+                )
             except ValueError as exc:
                 add(key, str(exc))
                 anchored.append(span.model_copy(deep=True))
+                continue
+            anchored.append(value)
+            if note is not None and notes is not None:
+                notes.append({"item": key, **note})
         return anchored
 
     for entity in result.entities:
@@ -196,7 +238,9 @@ def validate_local_extraction(
                 or entity.country_code not in country_codes
             ):
                 add(key, "invalid_country_code")
-        entity.evidence = anchor_spans(key, entity.evidence)
+        entity.evidence = anchor_spans(
+            key, entity.evidence, first_occurrence=True
+        )
 
     for claim in result.claims:
         key = "claim:" + claim.claim_id

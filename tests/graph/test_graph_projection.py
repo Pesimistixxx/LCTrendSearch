@@ -337,3 +337,122 @@ def test_solution_link_requires_reviewed_assertion_instead_of_a_sentence_cue():
     result.assertions[0].modality = "reported"
     result.assertions[0].verification_status = "unverified"
     assert GraphStore._solution_links(document, result) == []
+
+
+def _observed_values(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "observed_at":
+                yield item
+            yield from _observed_values(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _observed_values(item)
+
+
+def test_undated_document_evidence_is_not_dated_by_its_upload():
+    uploaded = "2026-09-20T10:00:00+00:00"
+    document = type(
+        "Doc",
+        (),
+        {
+            "document_version_id": "v1",
+            "published_at": None,
+            "version_published_at": None,
+            "retrieved_at": uploaded,
+            "chunks": [],
+            "domains": [],
+        },
+    )()
+    result = ExtractionResult(
+        document_version_id="v1",
+        run=ProcessingRun(
+            run_id="run1", parser="test", config_hash="x", started_at="now"
+        ),
+        mentions=[
+            Mention(
+                mention_id="m1",
+                chunk_id="ch1",
+                surface_text="NLP",
+                start=0,
+                end=3,
+                type_candidates=[ConceptKind.TECHNOLOGY],
+            )
+        ],
+        concepts=[
+            Concept(
+                concept_id="c1",
+                kind=ConceptKind.TECHNOLOGY,
+                preferred_label="NLP",
+            )
+        ],
+        resolutions=[
+            ResolutionDecision(
+                resolution_id="r1",
+                mention_id="m1",
+                status="accepted",
+                concept_id="c1",
+            )
+        ],
+    )
+    tx = Transaction()
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    observed = [
+        value
+        for _, parameters in tx.queries
+        for value in _observed_values(parameters)
+    ]
+    assert observed and uploaded not in observed
+
+
+def test_redownload_keeps_the_first_retrieval_for_visibility():
+    document = parse_openalex(
+        {"id": "https://openalex.org/W1", "title": "Example"}
+    )
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document))
+    query = " ".join(
+        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
+        .split()
+    )
+    # A later download must not move the version out of past snapshots.
+    assert "v.retrieved_at =" not in query
+    first = re.search(r"v\.first_retrieved_at = CASE (.*?) END", query)
+    last = re.search(r"v\.last_retrieved_at = CASE (.*?) END", query)
+    assert first and "$retrieved_at <" in first.group(1)
+    assert last and "$retrieved_at >" in last.group(1)
+
+
+class ReadSession:
+    def __init__(self, queries):
+        self.queries = queries
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def run(self, query, **parameters):
+        self.queries.append(query)
+        if "db.labels" in query:
+            return [{"label": "DocumentVersion"}]
+        return []
+
+
+def test_temporal_read_uses_first_retrieval_with_legacy_fallback():
+    queries = []
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: ReadSession(queries)}
+    )()
+    store._database = "neo4j"
+    asyncio.run(store.read_temporal_data())
+    versions = " ".join(
+        next(q for q in queries if "MATCH (d:Document)" in q).split()
+    )
+    assert (
+        "coalesce(v.first_retrieved_at, v.retrieved_at) AS retrieved_at"
+        in versions
+    )
+    assert "AS last_retrieved_at" in versions

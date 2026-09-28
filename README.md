@@ -216,7 +216,7 @@ LLM-провайдер использует endpoint `/chat/completions`. Зад
 | `LCTREND_WORKERS` / `runtime.json` → `ingestion.workers` | 4 | Документов одного задания или пачки обхода одновременно, 1–16 |
 | `crawl-openalex --workers N` | как выше | То же для CLI |
 | `LLM_MAX_CONCURRENCY` / `llm.json` → `max_concurrent_requests` | GigaChat: 1, OpenAI-совместимый: 4 | Одновременных запросов к LLM на процесс |
-| `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 3 и 120 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела |
+| `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 5 и 200 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела. 5 на пакет: извлечение, повтор после раунда контекста, две группы рецензии полного пакета и запас на повтор |
 | `pipeline.json` → `max_retries`, `retry_delay_seconds`, `max_retry_delay_seconds` | 4, 2 с, 60 с | Повторы LLM при 429/5xx/таймауте с экспоненциальной паузой или по `Retry-After` |
 | `sources.json` → `http` | 5 попыток, пауза 1–60 с | Повторы OpenAlex/GitHub/PyPI/PDF при 408/429/5xx; лимит GitHub ждёт `X-RateLimit-Reset` до 15 минут |
 | `pipeline.json` → `file_limits.pdf_max_pages`, `pdf_timeout_seconds` | 200 страниц, 900 с | Один конвертер Docling на процесс; слишком длинный или зависший PDF не останавливает задание |
@@ -281,6 +281,7 @@ python -m lctrend crawl-pypi --packages numpy pydantic
 | `--end-date DATE` | `build-training-set` | Последняя дата среза `YYYY-MM-DD`; по умолчанию конец корпуса |
 | `--subgraphs-output PATH` | `build-training-set` | Дополнительно сохранить ограниченные подграфы каждого среза в JSONL |
 | `--no-taxonomy` | `export-features`, `build-training-set` | Отключить семантические, таксономические и графовые признаки новизны |
+| `--as-known` | `export-features`, `build-training-set` | Строгий режим «как знала система»: содержимое видно не раньше его сбора и обработки. По умолчанию содержимое датируется публикацией, а время сбора влияет только на метрики |
 | `--help` | Любая команда | Справка, например `python -m lctrend fetch --help` |
 
 ### Временной датасет технологий
@@ -387,7 +388,7 @@ python -m pip install -e ".[llm,pdf,dev]"
 python -m lctrend init-graph
 ```
 
-Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest. Можно объединить: `python -m pip install -e ".[gui,llm,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
+Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest, ruff и зависимости `[gui]` для тестов сервера. Можно объединить: `python -m pip install -e ".[gui,llm,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
 
 ## Что происходит на каждом этапе
 

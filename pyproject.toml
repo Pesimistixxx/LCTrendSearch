@@ -23,7 +23,14 @@ dependencies = [
 llm = ["httpx>=0.27,<1"]
 pdf = ["docling>=2,<3"]
 gui = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1"]
-dev = ["pytest>=8,<9"]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.16,<0.17",
+    # tests/server exercises the FastAPI app, so dev needs the gui stack.
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "python-multipart>=0.0.9,<1",
+]
 
 [project.scripts]
 lctrend = "lctrend.cli:main"
@@ -37,6 +44,8 @@ lctrend = ["resources/*.json", "resources/*.cypher", "resources/prompts/*.txt"]
 [tool.ruff]
 line-length = 79
 target-version = "py39"
+# research/ holds third-party reference notebooks, not project code.
+extend-exclude = ["research"]
 
 [tool.ruff.lint]
 preview = true

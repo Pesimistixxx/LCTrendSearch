@@ -44,7 +44,7 @@ from .context import (
     build_payload,
     expand_context,
     plan_packets,
-    review_payload,
+    review_batches,
 )
 from .contracts import Extraction, Review
 from .validation import validate_local_extraction, validate_review
@@ -296,6 +296,100 @@ class _Budget:
                 ) from None
 
 
+async def _review(
+    document,
+    packet_id,
+    valid,
+    visible,
+    settings,
+    related_context,
+    budget,
+    prompt,
+    decisions,
+    metadata,
+    trace,
+):
+    """Review valid claims in groups that fit the payload budget."""
+    try:
+        groups, unfit = review_batches(
+            document,
+            valid.model_dump(mode="python"),
+            visible,
+            settings,
+            related_context=related_context,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Packet %s review failed: %s",
+            packet_id,
+            getattr(exc, "code", type(exc).__name__),
+        )
+        metadata["issues"].append(
+            {
+                "packet_id": packet_id,
+                "code": getattr(exc, "code", "review_contract"),
+            }
+        )
+        return
+    for claim_id in unfit:
+        logger.warning(
+            "Packet %s claim %s does not fit the review budget",
+            packet_id,
+            claim_id,
+        )
+        metadata["issues"].append(
+            {
+                "packet_id": packet_id,
+                "claim_id": claim_id,
+                "code": "review_payload_budget",
+            }
+        )
+    for claim_ids, payload in groups:
+        try:
+            trace.append(
+                {
+                    "stage": "review_context",
+                    "packet_id": packet_id,
+                    "claim_ids": claim_ids,
+                    "context": payload["review_context"],
+                }
+            )
+            review = await budget.call(Review, prompt, payload, "review")
+            review = validate_review(review, claim_ids)
+        except Exception as exc:
+            logger.warning(
+                "Packet %s review failed: %s",
+                packet_id,
+                getattr(exc, "code", type(exc).__name__),
+            )
+            metadata["issues"].append(
+                {
+                    "packet_id": packet_id,
+                    "claim_ids": claim_ids,
+                    "code": getattr(exc, "code", "review_contract"),
+                }
+            )
+            continue
+        decisions.update({item.claim_id: item for item in review.items})
+        metadata["issues"].extend(
+            {
+                "packet_id": packet_id,
+                "claim_id": item.claim_id,
+                "code": "review_unclear",
+                "reason": item.reason,
+            }
+            for item in review.items
+            if item.decision == "unclear"
+        )
+        trace.append(
+            {
+                "stage": "verification",
+                "packet_id": packet_id,
+                "items": review.model_dump()["items"],
+            }
+        )
+
+
 async def process_document(
     document: DocumentEnvelope,
     provider: Provider,
@@ -344,6 +438,8 @@ async def _process_document(
         "issues": [],
         "unresolved_claims": [],
         "invalid_entities": [],
+        # Non-blocking anchoring choices; see validate_local_extraction.
+        "anchoring_notes": [],
         "source_truth_assessed": False,
         "demo": bool(getattr(provider, "demo", False)),
         "source_snapshot": document.artifact.model_dump(),
@@ -553,8 +649,12 @@ async def _process_document(
                 status="running",
                 packet_id=packet.packet_id,
             )
+            anchoring: list = []
             extraction, issues = validate_local_extraction(
-                document, extraction, visible
+                document, extraction, visible, notes=anchoring
+            )
+            metadata["anchoring_notes"].extend(
+                {"packet_id": packet.packet_id, **note} for note in anchoring
             )
             _emit(
                 event,
@@ -622,57 +722,19 @@ async def _process_document(
                     }
                 )
             if valid_claims:
-                try:
-                    payload = review_payload(
-                        document,
-                        valid.model_dump(mode="python"),
-                        visible,
-                        settings,
-                        related_context=related_context,
-                    )
-                    trace.append(
-                        {
-                            "stage": "review_context",
-                            "packet_id": packet.packet_id,
-                            "context": payload["review_context"],
-                        }
-                    )
-                    review = await budget.call(
-                        Review, prompts["review"], payload, "review"
-                    )
-                    review = validate_review(
-                        review, [c.claim_id for c in valid_claims]
-                    )
-                    decisions = {item.claim_id: item for item in review.items}
-                    metadata["issues"].extend(
-                        {
-                            "packet_id": packet.packet_id,
-                            "claim_id": item.claim_id,
-                            "code": "review_unclear",
-                            "reason": item.reason,
-                        }
-                        for item in review.items
-                        if item.decision == "unclear"
-                    )
-                    trace.append(
-                        {
-                            "stage": "verification",
-                            "packet_id": packet.packet_id,
-                            "items": review.model_dump()["items"],
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Packet %s review failed: %s",
-                        packet.packet_id,
-                        getattr(exc, "code", type(exc).__name__),
-                    )
-                    metadata["issues"].append(
-                        {
-                            "packet_id": packet.packet_id,
-                            "code": getattr(exc, "code", "review_contract"),
-                        }
-                    )
+                await _review(
+                    document,
+                    packet.packet_id,
+                    valid,
+                    visible,
+                    settings,
+                    related_context,
+                    budget,
+                    prompts["review"],
+                    decisions,
+                    metadata,
+                    trace,
+                )
             batches.append(
                 (packet.packet_id, valid, decisions, context_pending)
             )

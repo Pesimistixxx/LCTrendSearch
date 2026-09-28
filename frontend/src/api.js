@@ -2,6 +2,8 @@ import { mockSearch, mockGraph } from './mock.js'
 
 // VITE_MOCK=0 → ходим в реальный бэкенд (FastAPI), иначе — рандомные данные для проверки UI.
 const MOCK = import.meta.env.VITE_MOCK !== '0'
+// Экраны результатов и справки помечают синтетику плашкой «ДЕМО».
+export const DEMO_DATA = MOCK
 
 /*
 Контракт бэкенда.

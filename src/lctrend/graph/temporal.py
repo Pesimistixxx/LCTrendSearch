@@ -2,17 +2,33 @@
 
 The graph holds every document version, mention and relation ever
 collected, including those published or observed after a snapshot date.
-A :class:`SnapshotView` keeps only what was knowable at the date ``T``:
+A :class:`SnapshotView` keeps only what was knowable at the date ``T``.
 
-- a document version is visible when published and retrieved by ``T``;
+Two time scales apply. Content (a version, its chunks, mentions, relations,
+maturity, economics and assertions) is immutable once published, so it is
+dated by publication: an article from 2019 said the same in 2019 as when it
+was collected in 2026. Mutable observations (citations, stars, downloads)
+change after publication, so they are dated by their own observation:
+
+- a document version is visible when published by ``T``;
 - a mention counts when its own date (``MENTIONS.observed_at``) is by ``T``
   and it belongs to a visible version;
 - metrics (citations, stars) count only from a version whose metrics were
-  observed by ``T``;
+  observed by ``T`` (``metrics_observed_at``);
 - dated histories inside version metadata (releases, weekly commits,
   citations per year) are cut at ``T``;
 - relations, maturity, economic evidence and assertions count when observed
   by ``T``. Undated rows are never used: their date cannot be placed.
+
+A document without any publication date is flagged ``undated``. Its
+collection date is never taken as its publication: it enters a snapshot
+only once collected (it cannot have been published later), counts in
+static aggregates, and stays out of dynamics, windows and ``first_seen``.
+
+The strict ``as_known`` mode reproduces what this system itself knew at
+``T``: content also waits for its collection (``retrieved_at``) and its
+extraction (``recorded_at`` / run start). A corpus collected today is
+empty in every past snapshot of that mode.
 
 Parties of a version (authors, organizations, countries, domains) come from
 the version itself, so later updates of the Document node cannot leak.
@@ -97,15 +113,29 @@ class Version:
     extracted: bool
     retrieved_date: Optional[date] = None
     extracted_date: Optional[date] = None
+    as_known: bool = False
+    # No publication date: visible from collection, never dated by it.
+    undated: bool = False
 
     @property
     def available_date(self) -> date:
-        """Publication and collection must both precede a snapshot."""
+        """When the content can enter a snapshot: its publication, or in
+        the ``as_known`` mode the later of publication and collection.
+        """
+        if self.undated:
+            return self.retrieved_date
+        if not self.as_known:
+            return self.version_date
         return max(
             when
             for when in (self.version_date, self.retrieved_date)
             if when is not None
         )
+
+    @property
+    def order_date(self) -> date:
+        """Orders versions of a document: by publication when known."""
+        return self.version_date or self.retrieved_date
 
     @property
     def independence_key(self) -> str:
@@ -170,6 +200,10 @@ class DocumentTrace:
         return self.version.family
 
     @property
+    def undated(self) -> bool:
+        return self.version.undated
+
+    @property
     def mention_count(self) -> int:
         return sum(item.mentions for item in self.mentions)
 
@@ -185,15 +219,21 @@ class TechnologyView:
     assertions: List[Event] = field(default_factory=list)
 
     @property
+    def dated_documents(self) -> List[DocumentTrace]:
+        """Documents with a publication date: the only input of dynamics."""
+        return [item for item in self.documents if not item.undated]
+
+    @property
     def first_seen(self) -> Optional[date]:
         return min(
-            (item.first_visible for item in self.documents), default=None
+            (item.first_visible for item in self.dated_documents),
+            default=None,
         )
 
     def last_signal(self) -> Optional[date]:
         dates = [
             day.observed
-            for document in self.documents
+            for document in self.dated_documents
             for day in document.mentions
         ]
         for events in (
@@ -247,18 +287,23 @@ def _history(
 class TemporalCorpus:
     """All dated graph data, indexed for point-in-time snapshots."""
 
-    def __init__(self, data: Dict[str, List[Dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        data: Dict[str, List[Dict[str, Any]]],
+        as_known: bool = False,
+    ) -> None:
+        # as_known: content also waits for its collection and extraction.
+        self.as_known = as_known
         self.versions: Dict[str, Version] = {}
         self.document_versions: Dict[str, List[Version]] = {}
         skipped = 0
         for row in data.get("versions", []):
             document_date = parse_date(row.get("document_published_at"))
             version_date = (
-                parse_date(row.get("version_published_at"))
-                or document_date
-                or parse_date(row.get("retrieved_at"))
+                parse_date(row.get("version_published_at")) or document_date
             )
-            if version_date is None:
+            retrieved_date = parse_date(row.get("retrieved_at"))
+            if version_date is None and retrieved_date is None:
                 skipped += 1
                 continue
             document_type = str(row.get("document_type") or "")
@@ -291,17 +336,22 @@ class TemporalCorpus:
                 domains=_tuple(row.get("domains")),
                 contributors=_tuple(row.get("contributors")),
                 extracted=bool(row.get("extracted")),
-                retrieved_date=parse_date(row.get("retrieved_at")),
+                retrieved_date=retrieved_date,
                 extracted_date=parse_date(row.get("extracted_at")),
+                as_known=as_known,
+                undated=version_date is None,
             )
             self.versions[version.version_id] = version
             self.document_versions.setdefault(version.document_id, []).append(
                 version
             )
         for versions in self.document_versions.values():
-            versions.sort(
-                key=lambda item: (item.version_date, item.version_id)
-            )
+            versions.sort(key=lambda item: (item.order_date, item.version_id))
+        # Documents whose every version lacks a publication date.
+        self.undated_documents = sum(
+            all(version.undated for version in versions)
+            for versions in self.document_versions.values()
+        )
         self.labels: Dict[str, str] = {}
         self.embeddings: Dict[str, List[float]] = {}
         self.embedding_dates: Dict[str, date] = {}
@@ -322,15 +372,16 @@ class TemporalCorpus:
             if version is None:
                 continue
             observed = parse_date(row.get("observed_at"))
+            if version.undated:
+                # Stored dates of undated content are its collection time.
+                observed = version.available_date
             if observed is None:
                 continue
+            available = max(observed, version.available_date)
             recorded = parse_date(row.get("recorded_at"))
-            # A backfilled mention becomes a signal when it was knowable.
-            available = max(
-                observed,
-                version.available_date,
-                recorded or version.available_date,
-            )
+            if as_known and recorded is not None:
+                # A backfilled mention becomes a signal when it was recorded.
+                available = max(available, recorded)
             technology_id = str(row["technology_id"])
             self.labels.setdefault(
                 technology_id, str(row.get("technology") or technology_id)
@@ -373,15 +424,15 @@ class TemporalCorpus:
                     continue
                 observed = parse_date(row.get("observed_at"))
                 version = self.versions.get(str(row.get("version_id") or ""))
+                if version is not None and version.undated:
+                    observed = version.available_date
                 if observed is None or version is None:
                     undated += 1
                     continue
-                observed = max(
-                    observed,
-                    version.available_date,
-                    parse_date(row.get("recorded_at"))
-                    or version.available_date,
-                )
+                observed = max(observed, version.available_date)
+                recorded = parse_date(row.get("recorded_at"))
+                if as_known and recorded is not None:
+                    observed = max(observed, recorded)
                 self.events.setdefault(
                     str(row["technology_id"]), {}
                 ).setdefault(kind, []).append(Event(observed, dict(row)))
@@ -454,8 +505,10 @@ class TemporalCorpus:
         if not visible:
             return None
         version = max(
-            visible, key=lambda item: (item.version_date, item.version_id)
+            visible, key=lambda item: (item.order_date, item.version_id)
         )
+        if not self.as_known:
+            return version
         return replace(
             version,
             extracted=(
@@ -586,7 +639,7 @@ class TemporalCorpus:
             event.observed <= cutoff
             and version is not None
             and version.available_date <= cutoff
-            and (recorded is None or recorded <= cutoff)
+            and (not self.as_known or recorded is None or recorded <= cutoff)
         )
 
     def first_visible(
@@ -669,7 +722,7 @@ class SnapshotView:
         )
         _, mentions = max(
             carrying,
-            key=lambda item: (item[0].version_date, item[0].version_id),
+            key=lambda item: (item[0].order_date, item[0].version_id),
         )
         visible = corpus.visible_version(document_id, cutoff)
         return DocumentTrace(

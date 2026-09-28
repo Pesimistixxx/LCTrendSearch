@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 def _version_date(document: DocumentEnvelope) -> Any:
+    """Content date of a version. Collection time is not a publication
+    date: undated content stays undated (``None``).
+    """
     return getattr(document, "version_published_at", None) or getattr(
-        document, "retrieved_at", None
+        document, "published_at", None
     )
 
 
@@ -264,10 +267,23 @@ class GraphStore:
                 v.document_type = $document_type,
                 v.source_family = $source.source_family,
                 v.reliability_tier = $source.reliability_tier,
-                v.retrieved_at = CASE
-                    WHEN v.retrieved_at IS NULL
-                        OR $retrieved_at > v.retrieved_at
-                    THEN $retrieved_at ELSE v.retrieved_at END,
+                // The first retrieval gates as-known visibility; a later
+                // download must not move the version out of past snapshots.
+                // Legacy graphs kept only the latest one as retrieved_at.
+                v.first_retrieved_at = CASE
+                    WHEN coalesce(v.first_retrieved_at, v.retrieved_at)
+                        IS NULL
+                        OR $retrieved_at
+                            < coalesce(v.first_retrieved_at, v.retrieved_at)
+                    THEN $retrieved_at
+                    ELSE coalesce(v.first_retrieved_at, v.retrieved_at) END,
+                v.last_retrieved_at = CASE
+                    WHEN coalesce(v.last_retrieved_at, v.retrieved_at)
+                        IS NULL
+                        OR $retrieved_at
+                            > coalesce(v.last_retrieved_at, v.retrieved_at)
+                    THEN $retrieved_at
+                    ELSE coalesce(v.last_retrieved_at, v.retrieved_at) END,
                 v.metrics_observed_at = CASE
                     WHEN $metrics_observed_at IS NULL THEN NULL
                     WHEN v.metrics_observed_at IS NULL
@@ -868,7 +884,10 @@ class GraphStore:
                        AS document_published_at,
                    v.document_version_id AS version_id,
                    v.version_published_at AS version_published_at,
-                   v.retrieved_at AS retrieved_at,
+                   coalesce(v.first_retrieved_at, v.retrieved_at)
+                       AS retrieved_at,
+                   coalesce(v.last_retrieved_at, v.retrieved_at)
+                       AS last_retrieved_at,
                    v.metrics_observed_at AS metrics_observed_at,
                    v.metrics_json AS metrics_json,
                    v.metadata_json AS metadata_json,

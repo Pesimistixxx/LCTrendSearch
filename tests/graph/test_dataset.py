@@ -70,6 +70,125 @@ def dataset(family="code"):
     }
 
 
+COLLECTED = "2026-09-20T10:00:00+00:00"
+PROCESSED = "2026-09-21T08:00:00+00:00"
+
+
+def collected_in_2026():
+    """Articles published 2016-2023, all collected and processed in 2026-09.
+
+    This is what the system builds for itself: every retrieval, metric and
+    extraction timestamp is from the collection run, not from publication.
+    """
+    versions, mentions = [], []
+    for year in range(2016, 2024):
+        row = version(f"a{year}", f"{year}-03-01", group=f"team-{year}")
+        row.update(
+            retrieved_at=COLLECTED,
+            metrics_observed_at=COLLECTED,
+            metrics_json={"citation_count": 5},
+            extracted_at=PROCESSED,
+        )
+        versions.append(row)
+        mentions.append(
+            {
+                "technology_id": "t",
+                "version_id": row["version_id"],
+                "observed_at": row["version_published_at"],
+                "recorded_at": PROCESSED,
+                "mentions": 1,
+                "accepted": 1,
+            }
+        )
+    return {
+        "versions": versions,
+        "technologies": [{"technology_id": "t", "technology": "Example"}],
+        "mentions": mentions,
+        "maturity": [
+            {
+                "technology_id": "t",
+                "version_id": "a2016-v1",
+                "observed_at": "2016-03-01",
+                "recorded_at": PROCESSED,
+                "stage_rank": 3,
+            }
+        ],
+    }
+
+
+def test_corpus_collected_today_yields_historical_rows():
+    rows = build_dataset_rows(
+        TemporalCorpus(collected_in_2026()), start_year=2016
+    )
+    historical = [row for row in rows if row["snapshot_date"] < "2026"]
+    assert historical
+    row = next(row for row in rows if row["snapshot_date"] == "2020-01-01")
+    assert row["first_seen_date"] == "2016-03-01"
+    assert row["document_count"] == 4
+    assert row["max_maturity_rank"] == 3
+    # Metrics are mutable: known only from their own observation in 2026.
+    assert row["citation_count"] is None
+    current = next(r for r in rows if r["snapshot_date"] == "2026-01-01")
+    assert current["documents_last_year"] == 0
+    assert current["technology_age_days"] > 3000
+
+
+def test_as_known_mode_keeps_collection_and_processing_gates():
+    corpus = TemporalCorpus(collected_in_2026(), as_known=True)
+    rows = build_dataset_rows(corpus, start_year=2016)
+    assert [row for row in rows if row["snapshot_date"] < "2026"] == []
+    assert build_snapshot_rows(corpus, "2026-09-19") == []
+    (row,) = build_snapshot_rows(corpus, "2026-09-21")
+    assert row["first_seen_date"] == "2026-09-21"
+
+
+def with_undated_upload(data):
+    """A file uploaded in 2026 without any publication date."""
+    upload = version("upload", None)
+    upload.update(
+        retrieved_at=COLLECTED, metrics_observed_at=None, extracted_at=None
+    )
+    data["versions"].append(upload)
+    data["mentions"] += [
+        {
+            "technology_id": technology,
+            "version_id": "upload-v1",
+            # Legacy graphs stored the upload time as the mention date.
+            "observed_at": COLLECTED[:10],
+            "mentions": 5,
+            "accepted": 5,
+        }
+        for technology in ("t", "only-upload")
+    ]
+    return data
+
+
+def test_undated_documents_stay_out_of_dynamics_and_first_seen(tmp_path):
+    corpus = TemporalCorpus(with_undated_upload(collected_in_2026()))
+    # Collected in 2026, so no earlier snapshot can know the upload.
+    assert build_snapshot_rows(corpus, "2025-01-01")[0]["document_count"] == 8
+    rows = {
+        row["technology_id"]: row
+        for row in build_snapshot_rows(corpus, "2026-09-21")
+    }
+    row = rows["t"]
+    assert row["first_seen_date"] == "2016-03-01"
+    assert row["document_count"] == 9
+    assert row["mention_count"] == 13
+    assert row["documents_last_year"] == 0
+    assert row["publication_growth"] == 0.0
+    assert row["mention_growth_12m"] == 0.0
+    assert row["burst_score"] == 0.0
+    upload_only = rows["only-upload"]
+    assert upload_only["first_seen_date"] is None
+    assert upload_only["technology_age_days"] is None
+    assert upload_only["documents_last_year"] == 0
+    output = tmp_path / "snapshot.csv"
+    write_snapshot_rows(output, list(rows.values()), corpus)
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    assert manifest["undated_documents"] == 1
+
+
 def at_2020(data):
     return next(
         row

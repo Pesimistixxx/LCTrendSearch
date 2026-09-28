@@ -356,6 +356,15 @@ cite { font: 600 12px var(--mono); color: var(--violet); font-style: normal; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
 
+/* ── плашка демо-данных: на результатах и в справке, в том числе при печати ── */
+.demo-banner {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+  margin-bottom: 18px; padding: 12px 18px;
+  border: 1px solid var(--amber); border-radius: 12px;
+  background: rgba(251, 191, 36, .1); color: var(--text); font-size: 14px;
+}
+.demo-banner b { font: 700 13px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--amber); }
+
 /* ── печать отчёта ── */
 @media print {
   :root { --text: #111; --muted: #555; --line: #ddd; --cyan: #0a8f7a; --violet: #6d4bd8; --amber: #b7791f; --rose: #c53030; --blue: #2b5bd7; }
@@ -364,6 +373,7 @@ cite { font: 600 12px var(--mono); color: var(--violet); font-style: normal; }
   .card, .doc-main { background: #fff; border-color: #ddd; box-shadow: none; backdrop-filter: none; }
   .doc-body { grid-template-columns: 1fr; }
   .sec p, .adv li, .src-top a { color: #222 !important; }
+  .demo-banner { display: flex !important; background: #fff; border: 2px solid #b7791f; color: #111; break-inside: avoid; }
   * { animation: none !important; }
 }
 

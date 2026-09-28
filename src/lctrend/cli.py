@@ -761,6 +761,12 @@ def main() -> None:
         action="store_true",
         help="Skip semantic, taxonomy and graph novelty features",
     )
+    training_command.add_argument(
+        "--as-known",
+        action="store_true",
+        help="Strict mode: content also waits for its collection and "
+        "extraction (what this system knew at T), not only publication",
+    )
     features_command = subparsers.add_parser(
         "export-features", help="Export snapshot graph features"
     )
@@ -772,6 +778,12 @@ def main() -> None:
         "--no-taxonomy",
         action="store_true",
         help="Skip semantic, taxonomy and graph novelty features",
+    )
+    features_command.add_argument(
+        "--as-known",
+        action="store_true",
+        help="Strict mode: content also waits for its collection and "
+        "extraction (what this system knew at T), not only publication",
     )
     taxonomy_command = subparsers.add_parser(
         "build-taxonomy",
@@ -811,8 +823,10 @@ async def _ensure_schema(store):
     await resolve(store.ensure_schema())
 
 
-async def _temporal_data(store):
-    return TemporalCorpus(await resolve(store.read_temporal_data()))
+async def _temporal_data(store, as_known=False):
+    return TemporalCorpus(
+        await resolve(store.read_temporal_data()), as_known=as_known
+    )
 
 
 async def _taxonomy_data(store, snapshot=None):
@@ -887,7 +901,9 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "build-training-set":
-        corpus = asyncio.run(_graph(_temporal_data))
+        corpus = asyncio.run(
+            _graph(lambda store: _temporal_data(store, args.as_known))
+        )
         rows = build_dataset_rows(
             corpus,
             start_year=args.start_year,
@@ -898,7 +914,7 @@ def _run(args: argparse.Namespace) -> None:
         )
         logger.info(
             "rows=%d output=%s",
-            write_dataset_rows(args.output, rows),
+            write_dataset_rows(args.output, rows, corpus),
             args.output,
         )
         if args.subgraphs_output:
@@ -953,7 +969,9 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "export-features":
-        corpus = asyncio.run(_graph(_temporal_data))
+        corpus = asyncio.run(
+            _graph(lambda store: _temporal_data(store, args.as_known))
+        )
         rows = build_snapshot_rows(
             corpus,
             args.snapshot,
@@ -961,7 +979,7 @@ def _run(args: argparse.Namespace) -> None:
         )
         logger.info(
             "rows=%d output=%s",
-            write_snapshot_rows(args.output, rows),
+            write_snapshot_rows(args.output, rows, corpus),
             args.output,
         )
         return
