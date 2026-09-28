@@ -19,6 +19,9 @@ def stable_id(namespace: str, *parts: object) -> str:
 # A semantic match proposes a review candidate; the mention keeps its own
 # provisional concept (see resolver.json semantic.use_in_llm).
 SEMANTIC_CANDIDATE_METHOD = "new_provisional_semantic_candidate"
+# Several concepts share the identity key of a mention; it is linked to all
+# of them as ambiguous until they are merged.
+AMBIGUOUS_COLLISION_METHOD = "deterministic_alias_collision"
 
 
 class DocumentType(str, Enum):
@@ -187,6 +190,12 @@ class Concept(BaseModel):
     language: Optional[str] = None
     status: str = "provisional"
     names: List[ConceptName] = Field(default_factory=list)
+    # Lexical identity key (extraction.lexical) the concept was created
+    # under; None for concepts created before key v2.
+    identity_key: Optional[str] = None
+    # Resolved mentions per canonical form; the most frequent form is the
+    # preferred label of a concept that has not been reviewed.
+    label_counts: Dict[str, int] = Field(default_factory=dict)
 
 
 class Mention(BaseModel):

@@ -31,6 +31,10 @@ class Result:
     def single(self):
         return {"count": self.count, "published": self.published}
 
+    def __iter__(self):
+        # Stored-kind probe of _settle_family_kinds: no stored nodes.
+        return iter(())
+
 
 class Transaction:
     def __init__(self, existing_count=0, published=0):

@@ -308,6 +308,11 @@ def _contracts(catalogs: Mapping) -> None:
     for pattern in ("number_pattern", "country_code_pattern"):
         _regex(schema[pattern], "llm_schema." + pattern)
     _strings(
+        schema["grounded_label_kinds"],
+        "llm_schema.grounded_label_kinds",
+        KINDS,
+    )
+    _strings(
         schema["measurement_predicates"],
         "llm_schema.measurement_predicates",
         set(predicates),
@@ -594,6 +599,15 @@ def validate_catalogs(catalogs: Optional[Mapping[str, Any]] = None) -> None:
                 "countries.iso_alpha2",
                 f"invalid assigned ISO country code {code!r}",
             )
+    names = _mapping(catalogs["countries"]["names"], "countries.names")
+    for code in codes:
+        _strings(
+            _required(names, code, "countries.names"),
+            "countries.names." + code,
+            nonempty=True,
+        )
+    for code in set(names) - set(codes):
+        _fail("countries.names." + code, "not an assigned ISO code")
     try:
         _sources(catalogs["sources"])
         _extraction(catalogs["extraction"])

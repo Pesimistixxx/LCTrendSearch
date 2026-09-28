@@ -810,10 +810,15 @@ def _write_temporal_rows(path, rows, training, corpus=None):
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         writer.writerows(values)
+    from .novelty import DUPLICATE_COLUMNS
+
     manifest = {
         "schema_version": config["schema_version"],
         "rows": len(values),
         "feature_columns": features,
+        # Dropped duplicate columns and the feature column that replaces
+        # each.
+        "column_aliases": DUPLICATE_COLUMNS,
         "identity_columns": IDENTITY_FIELDS,
         "outcome_columns": OUTCOME_FIELDS if training else [],
         "missing_value": "empty CSV cell",

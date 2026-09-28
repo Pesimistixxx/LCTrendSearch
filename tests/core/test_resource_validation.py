@@ -45,6 +45,13 @@ def test_bundled_resources_are_consistent():
         ("taxonomy", ("branching",), 1, "taxonomy.branching"),
         ("llm", ("model_ladder",), ["same", "same"], "model_ladder"),
         ("countries", ("iso_alpha2",), ["RU", "ZZ"], "countries.iso_alpha2"),
+        ("countries", ("names", "DE"), [], "countries.names.DE"),
+        (
+            "llm_schema",
+            ("grounded_label_kinds",),
+            ["Gadget"],
+            "llm_schema.grounded_label_kinds",
+        ),
         (
             "llm_schema",
             ("currency_aliases", "JPY"),

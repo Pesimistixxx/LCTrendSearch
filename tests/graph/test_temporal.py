@@ -319,25 +319,32 @@ def test_document_presence_is_scoped_to_the_technology():
     assert corpus.covered_families(date(2021, 1, 1), "t2") == set()
 
 
-def test_current_embeddings_need_their_own_timestamp():
-    corpus = TemporalCorpus(
-        {
-            "technologies": [
-                {"technology_id": "undated", "embedding": [1, 0]},
-                {
-                    "technology_id": "later",
-                    "embedding": [0, 1],
-                    "embedding_observed_at": "2022-01-01",
-                },
-                {
-                    "technology_id": "early",
-                    "embedding": [1, 1],
-                    "embedding_observed_at": "2020-01-01",
-                },
-            ]
-        }
-    )
-    assert corpus.embeddings_at(date(2021, 1, 1)) == {"early": [1, 1]}
+def test_name_vectors_are_dated_by_concept_except_in_strict_mode():
+    data = {
+        "technologies": [
+            {"technology_id": "undated", "embedding": [1, 0]},
+            {
+                "technology_id": "later",
+                "embedding": [0, 1],
+                "embedding_observed_at": "2022-01-01",
+            },
+            {
+                "technology_id": "early",
+                "embedding": [1, 1],
+                "embedding_observed_at": "2020-01-01",
+            },
+        ]
+    }
+    # N-3: a name vector is visible with its concept, whenever computed;
+    # the snapshot selects the concepts visible at T.
+    assert TemporalCorpus(data).embeddings_at(date(2021, 1, 1)) == {
+        "undated": [1, 0],
+        "later": [0, 1],
+        "early": [1, 1],
+    }
+    # The strict mode still needs the vector's own timestamp.
+    strict = TemporalCorpus(data, as_known=True)
+    assert strict.embeddings_at(date(2021, 1, 1)) == {"early": [1, 1]}
 
 
 @pytest.mark.parametrize("as_known", [False, True])

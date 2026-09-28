@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterator, List, Tuple
 from ..core.aio import resolve
 from ..core.config import cypher_identifier, load_catalog, resource_path
 from ..core.models import (
+    AMBIGUOUS_COLLISION_METHOD,
     SEMANTIC_CANDIDATE_METHOD,
     Concept,
     ConceptKind,
@@ -20,6 +21,7 @@ from ..core.models import (
     stable_id,
     validate_extraction,
 )
+from ..extraction.lexical import KEY_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +109,14 @@ def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
         language=properties.get("language"),
         status=properties.get("status", "provisional"),
         names=names,
+        identity_key=properties.get("identity_key"),
+        label_counts=json.loads(properties.get("label_counts_json") or "{}"),
     )
+
+
+# Kinds of one identity family (extraction.lexical.kind_family); a node is
+# only ever relabeled upwards, so concurrent writers cannot downgrade it.
+FAMILY_RANK = {"Material": 1, "Method": 2, "Technology": 3}
 
 
 class GraphStore:
@@ -734,9 +743,11 @@ class GraphStore:
     async def read_concepts(self) -> List[Concept]:
         # Metadata nodes share some labels (Organization, Country, Domain)
         # but carry no concept_id; UNION removes multi-label duplicates.
+        # A merged concept lives on in its MERGED_INTO target.
         query = "\nUNION\n".join(
             f"MATCH (c:{cypher_identifier(label)}) "
             "WHERE c.concept_id IS NOT NULL AND c.kind IS NOT NULL "
+            "AND coalesce(c.status, '') <> 'merged' "
             "RETURN properties(c) AS properties"
             for label in CONCEPT_LABELS
         )
@@ -748,6 +759,74 @@ class GraphStore:
             ]
         logger.debug("Read %d concepts from Neo4j", len(concepts))
         return concepts
+
+    async def merge_concepts(
+        self, source_id: str, target_id: str, reason: str | None = None
+    ) -> Dict[str, Any]:
+        """Merge a duplicate concept into another (see graph.merge)."""
+        from .merge import merge_concepts
+
+        return await merge_concepts(self, source_id, target_id, reason)
+
+    async def read_concept_forms(
+        self,
+    ) -> Tuple[Dict[str, int], Dict[str, Dict[str, int]]]:
+        """Resolved mentions per concept and per canonical form."""
+        query = "\nUNION ALL\n".join(
+            f"MATCH (c:{cypher_identifier(label)})<-[m:MENTIONS]-(:Chunk) "
+            "WHERE c.concept_id IS NOT NULL "
+            "AND coalesce(m.resolution_status, '') <> 'ambiguous' "
+            "RETURN c.concept_id AS concept_id, "
+            "coalesce(m.canonical_text, m.surface_text) AS form, "
+            "count(m) AS mentions"
+            for label in CONCEPT_LABELS
+        )
+        mentions: Dict[str, int] = {}
+        forms: Dict[str, Dict[str, int]] = {}
+        async with self._driver.session(database=self._database) as session:
+            for record in await _records(session, query):
+                row = _data(record)
+                if row.get("form") is None:
+                    continue
+                concept_id, count = row["concept_id"], int(row["mentions"])
+                mentions[concept_id] = mentions.get(concept_id, 0) + count
+                counts = forms.setdefault(concept_id, {})
+                counts[row["form"]] = counts.get(row["form"], 0) + count
+        return mentions, forms
+
+    async def write_concept_identities(self, updates: List[Any]) -> None:
+        """Store key v2 identity keys, form counts and preferred labels."""
+        rows: Dict[str, List[Dict[str, Any]]] = {}
+        for update in updates:
+            rows.setdefault(cypher_identifier(update.kind), []).append(
+                {
+                    "concept_id": update.concept_id,
+                    "identity_key": update.identity_key,
+                    "label_counts_json": json_value(update.label_counts),
+                    "preferred_label": update.preferred_label,
+                }
+            )
+
+        async def write(tx: Any) -> None:
+            for label, items in rows.items():
+                for batch in _batches(items):
+                    await _run(
+                        tx,
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (c:{label} {{concept_id: row.concept_id}})
+                        SET c.identity_key = row.identity_key,
+                            c.key_version = $key_version,
+                            c.label_counts_json = row.label_counts_json,
+                            c.preferred_label = row.preferred_label,
+                            c.name = row.preferred_label
+                        """,
+                        rows=batch,
+                        key_version=KEY_VERSION,
+                    )
+
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(write)
 
     async def read_training_data(
         self,
@@ -909,6 +988,7 @@ class GraphStore:
         mentions = """
             MATCH (t:Technology)<-[m:MENTIONS]-(c:Chunk)
                   <-[:HAS_CHUNK]-(v:DocumentVersion)
+            WHERE coalesce(m.resolution_status, '') <> 'ambiguous'
             OPTIONAL MATCH (run:ProcessingRun {run_id: m.run_id})
             RETURN t.concept_id AS technology_id,
                    v.document_version_id AS version_id,
@@ -929,6 +1009,7 @@ class GraphStore:
         technologies = """
             MATCH (t:Technology)
             WHERE t.concept_id IS NOT NULL
+              AND coalesce(t.status, '') <> 'merged'
             RETURN t.concept_id AS technology_id,
                    t.preferred_label AS technology,
                    t.first_seen_at AS first_seen_at,
@@ -1165,8 +1246,10 @@ class GraphStore:
         concepts = """
             MATCH (c:__LABEL__)
             WHERE c.embedding IS NOT NULL AND c.concept_id IS NOT NULL
-            OPTIONAL MATCH (c)<-[:MENTIONS]-(chunk:Chunk)<-[:HAS_CHUNK]-
+              AND coalesce(c.status, '') <> 'merged'
+            OPTIONAL MATCH (c)<-[m:MENTIONS]-(chunk:Chunk)<-[:HAS_CHUNK]-
                   (v:DocumentVersion)<-[:HAS_VERSION]-(d:Document)
+            WHERE coalesce(m.resolution_status, '') <> 'ambiguous'
             WITH c, collect(DISTINCT CASE WHEN d.document_id IS NOT NULL
                 THEN {document_id: d.document_id,
                       date: coalesce(chunk.created_at, v.version_published_at,
@@ -1473,6 +1556,98 @@ class GraphStore:
         return rows
 
     @staticmethod
+    async def _settle_family_kinds(
+        tx: Any, result: ExtractionResult
+    ) -> Tuple[ExtractionResult, Dict[str, str]]:
+        """Write each Technology-family concept under its highest kind.
+
+        A stored node of a lower kind is relabeled; a stored node of a
+        higher kind keeps its label, so a stale registry copy cannot
+        create a second node or downgrade the concept. Also returns the
+        stored label of every ambiguous candidate of the family.
+        """
+        candidates = {
+            item["concept_id"]: item["kind"]
+            for decision in result.resolutions
+            if decision.method == AMBIGUOUS_COLLISION_METHOD
+            for item in decision.candidates
+            if item.get("kind") in FAMILY_RANK
+        }
+        ids = list(
+            dict.fromkeys(
+                [
+                    *(
+                        concept.concept_id
+                        for concept in result.concepts
+                        if concept.kind.value in FAMILY_RANK
+                    ),
+                    *candidates,
+                ]
+            )
+        )
+        if not ids:
+            return result, {}
+        stored = {
+            row["concept_id"]: [label for label in FAMILY_RANK if row[label]]
+            for row in map(
+                _data,
+                await _records(
+                    tx,
+                    """
+                    UNWIND $ids AS id
+                    OPTIONAL MATCH (t:Technology {concept_id: id})
+                    OPTIONAL MATCH (m:Method {concept_id: id})
+                    OPTIONAL MATCH (x:Material {concept_id: id})
+                    RETURN id AS concept_id, t IS NOT NULL AS Technology,
+                           m IS NOT NULL AS Method, x IS NOT NULL AS Material
+                    """,
+                    ids=ids,
+                ),
+            )
+        }
+        moves: Dict[Tuple[str, str], List[str]] = {}
+        concepts = []
+        for concept in result.concepts:
+            labels = stored.get(concept.concept_id) or []
+            if concept.kind.value not in FAMILY_RANK or not labels:
+                concepts.append(concept)
+                continue
+            kind = max([concept.kind.value, *labels], key=FAMILY_RANK.get)
+            if kind not in labels:
+                source = max(labels, key=FAMILY_RANK.get)
+                moves.setdefault((source, kind), []).append(concept.concept_id)
+            if len(labels) > 1:
+                logger.warning(
+                    "Concept %s is stored under several kinds %s; merge them",
+                    concept.concept_id,
+                    labels,
+                )
+            concepts.append(
+                concept.model_copy(update={"kind": ConceptKind(kind)})
+            )
+        for (source, target), rows in sorted(moves.items()):
+            await _run(
+                tx,
+                f"""
+                UNWIND $ids AS id
+                MATCH (c:{source} {{concept_id: id}})
+                REMOVE c:{source}
+                SET c:{target}, c.kind = $kind
+                """,
+                ids=rows,
+                kind=target,
+            )
+        candidate_labels = {
+            concept_id: max(
+                stored.get(concept_id) or [kind], key=FAMILY_RANK.get
+            )
+            for concept_id, kind in candidates.items()
+        }
+        return result.model_copy(
+            update={"concepts": concepts}
+        ), candidate_labels
+
+    @staticmethod
     async def _write_extraction(
         tx: Any,
         document: DocumentEnvelope,
@@ -1537,6 +1712,9 @@ class GraphStore:
             run_id=run.run_id,
         )
 
+        result, candidate_labels = await GraphStore._settle_family_kinds(
+            tx, result
+        )
         for concept in result.concepts:
             label = concept.kind.value
             await _run(
@@ -1546,10 +1724,14 @@ class GraphStore:
                 SET c.kind = $kind, c.preferred_label = $preferred_label,
                     c.name = $preferred_label,
                     c.definition = $definition, c.language = $language,
-                    c.status = $status,
+                    c.status = CASE WHEN c.status = 'merged'
+                        THEN c.status ELSE $status END,
                     c.aliases = $aliases,
                     c.normalized_aliases = $normalized_aliases,
                     c.names_json = $names_json,
+                    c.identity_key = $identity_key,
+                    c.key_version = $key_version,
+                    c.label_counts_json = $label_counts_json,
                     c.first_seen_at = CASE
                         WHEN $observed_at IS NULL THEN c.first_seen_at
                         WHEN c.first_seen_at IS NULL
@@ -1579,8 +1761,12 @@ class GraphStore:
                 names_json=json_value(
                     [name.model_dump() for name in concept.names]
                 ),
+                key_version=KEY_VERSION if concept.identity_key else None,
+                label_counts_json=json_value(concept.label_counts),
                 observed_at=_version_date(document),
-                **concept.model_dump(exclude={"names"}, mode="json"),
+                **concept.model_dump(
+                    exclude={"names", "label_counts"}, mode="json"
+                ),
             )
 
         # Every concept a mention, role or projection points to is in
@@ -1645,9 +1831,18 @@ class GraphStore:
                     f"""
                     UNWIND $rows AS row
                     MATCH (c:{label} {{concept_id: row.concept_id}})
-                    SET c.embedding = row.vector,
-                        c.embedding_model = $model,
-                        c.embedding_observed_at = $recorded_at
+                    // The same vector of the same model keeps the date on
+                    // which past snapshots already saw it.
+                    WITH c, row,
+                         c.embedding = row.vector
+                         AND c.embedding_model = $model
+                         AND c.embedding_observed_at IS NOT NULL
+                         AS unchanged
+                    SET c.embedding_observed_at = CASE WHEN unchanged
+                            THEN c.embedding_observed_at
+                            ELSE $recorded_at END,
+                        c.embedding = row.vector,
+                        c.embedding_model = $model
                     """,
                     rows=batch,
                     model=result.embedding_model,
@@ -1734,23 +1929,43 @@ class GraphStore:
         mention_rows: Dict[str, List[Dict[str, Any]]] = {}
         for mention in result.mentions:
             decision = decisions.get(mention.mention_id)
-            if (
-                decision is None
-                or decision.concept_id is None
-                or decision.status not in ("accepted", "provisional")
-            ):
+            if decision is None:
                 continue
-            mention_rows.setdefault(labels[decision.concept_id], []).append(
-                {
-                    **mention.model_dump(mode="json"),
-                    "concept_id": decision.concept_id,
-                    "method": decision.method,
-                    "score": decision.score,
-                    "resolution_status": decision.status,
-                    "basis": decision.basis,
-                    "observed_at": _chunk_date(document, mention.chunk_id),
-                }
-            )
+            if decision.method == AMBIGUOUS_COLLISION_METHOD:
+                # An identity-key collision links the mention to every
+                # candidate; readers of mention counts skip these links.
+                targets = [
+                    (
+                        item["concept_id"],
+                        candidate_labels.get(item["concept_id"])
+                        or cypher_identifier(item["kind"]),
+                    )
+                    for item in decision.candidates
+                    if item.get("kind") in CONCEPT_LABELS
+                ]
+            elif decision.concept_id is not None and decision.status in (
+                "accepted",
+                "provisional",
+            ):
+                targets = [
+                    (decision.concept_id, labels[decision.concept_id])
+                ]
+            else:
+                continue
+            for concept_id, label in targets:
+                mention_rows.setdefault(label, []).append(
+                    {
+                        **mention.model_dump(mode="json"),
+                        "concept_id": concept_id,
+                        "method": decision.method,
+                        "score": decision.score,
+                        "resolution_status": decision.status,
+                        "basis": decision.basis,
+                        "observed_at": _chunk_date(
+                            document, mention.chunk_id
+                        ),
+                    }
+                )
         for label, rows in mention_rows.items():
             for batch in _batches(rows):
                 await _run(

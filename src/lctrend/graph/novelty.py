@@ -25,7 +25,6 @@ NOVELTY_FIELDS = (
     "taxonomy_node_size",
     "taxonomy_sibling_count",
     "taxonomy_general_term",
-    "taxonomy_depth",
     "semantic_novelty",
     "nearest_known_distance",
     "cluster_centroid_distance",
@@ -48,10 +47,16 @@ NOVELTY_FIELDS = (
     "bridge_score",
     "recombination_surprise",
     "task_combination_novelty",
-    "nearest_known_technology_distance",
-    "semantic_outlier_score",
-    "new_taxonomy_branch",
 )
+
+# Former columns that repeated another column value for value; the
+# manifest maps each to the column that remains.
+DUPLICATE_COLUMNS = {
+    "nearest_known_technology_distance": "nearest_known_distance",
+    "semantic_outlier_score": "embedding_outlier_score",
+    "new_taxonomy_branch": "new_branch_in_known_area",
+    "taxonomy_depth": "taxonomy_level",
+}
 
 
 def _relations(snapshot: SnapshotView):
@@ -330,16 +335,14 @@ def _semantic(snapshot, config):
             if vector is not None
             else []
         )
-        nearest = distances[0] if distances else None
-        row["nearest_known_distance"] = nearest
-        row["nearest_known_technology_distance"] = nearest
-        row["semantic_novelty"] = nearest
+        # semantic_novelty is taxonomy_features' distance to concepts known a
+        # year before T; this is the distance to any concept seen before T.
+        row["nearest_known_distance"] = distances[0] if distances else None
         row["embedding_outlier_score"] = (
             sum(distances[:neighbors]) / len(distances[:neighbors])
             if distances
             else None
         )
-        row["semantic_outlier_score"] = row["embedding_outlier_score"]
         node = taxonomy.nodes.get(taxonomy.placement.get(key))
         centroid = None
         if node is not None and vector is not None:
@@ -356,8 +359,8 @@ def _semantic(snapshot, config):
                         0.0, min(2.0, 1.0 - float(vector @ (mean / norm)))
                     )
         row["cluster_centroid_distance"] = centroid
-        row["taxonomy_depth"] = node.level if node else None
         for name in (
+            "semantic_novelty",
             "taxonomy_level",
             "taxonomy_node_size",
             "taxonomy_sibling_count",
@@ -367,7 +370,6 @@ def _semantic(snapshot, config):
             "new_branch_in_known_area",
         ):
             row.setdefault(name, None)
-        row["new_taxonomy_branch"] = row["new_branch_in_known_area"]
     return rows
 
 
@@ -462,4 +464,9 @@ def novelty_features(
     return rows
 
 
-__all__ = ["NOVELTY_FIELDS", "novelty_features", "technology_graph"]
+__all__ = [
+    "DUPLICATE_COLUMNS",
+    "NOVELTY_FIELDS",
+    "novelty_features",
+    "technology_graph",
+]

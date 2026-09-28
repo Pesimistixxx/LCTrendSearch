@@ -136,12 +136,15 @@ def test_future_documents_relations_and_vectors_do_not_change_features():
 
 def test_missing_embedding_does_not_invent_semantic_novelty():
     data = corpus_data()
+    # Vectors are dated by the concept (N-3), so an undated vector is still
+    # a vector; a missing one is what must not invent novelty.
     for row in data["technologies"]:
-        row.pop("embedding_observed_at")
+        row.pop("embedding")
     rows = novelty_features(TemporalCorpus(data).view(date(2020, 1, 1)))
     assert rows["a"]["semantic_novelty"] is None
     assert rows["a"]["cluster_centroid_distance"] is None
-    assert rows["a"]["taxonomy_depth"] is None
+    # taxonomy_depth was a copy of taxonomy_level and is no longer a column.
+    assert rows["a"]["taxonomy_level"] is None
 
 
 def test_same_day_concept_cannot_be_semantic_reference():
@@ -158,3 +161,99 @@ def test_sampled_betweenness_is_repeatable():
     assert novelty_features(snapshot, config) == novelty_features(
         snapshot, config
     )
+
+
+def emerging_cluster():
+    """Three established terms near [1, 0], five new ones near [0, 1]."""
+    versions, mentions, technologies = [], [], []
+    for index in range(8):
+        new = index >= 3
+        when = f"2019-{index + 3:02d}-01" if new else "2015-01-01"
+        key = f"t{index}"
+        versions.append(
+            {
+                "document_id": key,
+                "version_id": key + "v",
+                "document_type": "article",
+                "version_published_at": when,
+                "retrieved_at": when,
+            }
+        )
+        mentions.append(
+            {
+                "technology_id": key,
+                "version_id": key + "v",
+                "observed_at": when,
+                "mentions": 1,
+            }
+        )
+        offset = 0.01 * index
+        technologies.append(
+            {
+                "technology_id": key,
+                "embedding": [offset, 1.0] if new else [1.0, offset],
+                "embedding_observed_at": when,
+            }
+        )
+    return {
+        "versions": versions,
+        "mentions": mentions,
+        "technologies": technologies,
+        "relations": [],
+    }
+
+
+def test_an_emerging_cluster_keeps_its_documented_semantic_novelty():
+    rows = novelty_features(
+        TemporalCorpus(emerging_cluster()).view(date(2020, 1, 1))
+    )
+    for key in ("t3", "t4", "t5", "t6", "t7"):
+        # 1 - cosine to the nearest concept known a year before T.
+        assert rows[key]["semantic_novelty"] > 0.5
+        # The distance to any earlier concept is a different metric:
+        # the cluster's own members are close.
+        assert rows[key]["nearest_known_distance"] < 0.01
+    assert rows["t0"]["semantic_novelty"] < 0.01
+
+
+def test_novelty_fields_have_no_duplicate_columns():
+    duplicates = {
+        "nearest_known_technology_distance",
+        "semantic_outlier_score",
+        "new_taxonomy_branch",
+        "taxonomy_depth",
+    }
+    assert not duplicates & set(NOVELTY_FIELDS)
+
+
+def embedded_today():
+    """The emerging cluster, with every vector computed in 2026."""
+    data = emerging_cluster()
+    for row in data["technologies"]:
+        row["embedding_observed_at"] = "2026-09-28"
+    return data
+
+
+def test_name_vectors_are_dated_by_the_concepts_first_appearance():
+    # A name's vector does not depend on when it was computed: a
+    # historical snapshot sees it once the concept itself is visible, so
+    # training rows carry the same semantic columns as inference (N-3).
+    rows = novelty_features(
+        TemporalCorpus(embedded_today()).view(date(2020, 1, 1))
+    )
+    assert rows["t3"]["semantic_novelty"] > 0.5
+    assert rows["t0"]["nearest_known_distance"] is not None
+    early = novelty_features(
+        TemporalCorpus(embedded_today()).view(date(2019, 7, 1))
+    )
+    # t4 (first seen 2019-07-01) is visible, t5 (2019-08-01) is not yet.
+    assert "t5" not in early and early["t4"]["semantic_novelty"] > 0.5
+
+
+def test_strict_mode_dates_vectors_by_their_computation():
+    rows = novelty_features(
+        TemporalCorpus(embedded_today(), as_known=True).view(date(2027, 1, 1))
+    )
+    assert rows["t3"]["semantic_novelty"] is not None
+    strict = TemporalCorpus(embedded_today(), as_known=True)
+    assert strict.embeddings_at(date(2020, 1, 1)) == {}

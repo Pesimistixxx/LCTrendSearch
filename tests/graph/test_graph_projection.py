@@ -77,6 +77,10 @@ class Result:
     def consume(self):
         return None
 
+    def __iter__(self):
+        # Stored-kind probe of _settle_family_kinds: no stored nodes.
+        return iter(())
+
 
 class Transaction:
     def __init__(self):
