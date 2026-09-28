@@ -1203,3 +1203,44 @@ def test_json_after_a_preamble_or_inside_a_fence_is_read():
         "```\n" + body + "\n```",
     ):
         assert _validate(Extraction, _strip_fence(content)).claims == []
+
+
+def test_answer_cut_at_the_output_limit_is_retried_in_halves():
+    # B-6: finish_reason=length used to lose the whole packet.
+    doc = document(
+        ["Sensor S solves monitoring.", "Sensor S solves monitoring."],
+        shared_stream=True,
+    )
+    provider = ScriptProvider(
+        [
+            LLMError("incomplete_response", "cut at max_tokens"),
+            extracted(doc, "c1"),
+            reviewed(),
+            extracted(doc, "c2"),
+            reviewed(),
+        ]
+    )
+    result = asyncio.run(
+        process_document(
+            doc,
+            provider,
+            settings=settings(primary_chunks=2, max_model_calls=8),
+        )
+    )
+    assert [call["stage"] for call in provider.calls] == [
+        "extract",
+        "extract",
+        "review",
+        "extract",
+        "review",
+    ]
+    assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
+    split = next(
+        item
+        for item in result.run.metadata["issues"]
+        if item.get("code") == "incomplete_response"
+    )
+    assert len(split["split_into"]) == 2
+    assert result.assertions and all(
+        item.status == "accepted" for item in result.assertions
+    )

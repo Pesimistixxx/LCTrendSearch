@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ from .context import (
     expand_context,
     plan_packets,
     review_batches,
+    split_packet,
 )
 from .contracts import Extraction, Review
 from .validation import validate_local_extraction, validate_review
@@ -532,14 +534,18 @@ async def _process_document(
     )
     processed, failed = [], []
     batches = []
-    for packet_number, original in enumerate(plan.packets, 1):
+    queue = deque(plan.packets)
+    packet_number = 0
+    while queue:
+        original = queue.popleft()
+        packet_number += 1
         _emit(
             event,
             stage="packet",
             status="running",
             packet_id=original.packet_id,
             packet_number=packet_number,
-            total_packets=len(plan.packets),
+            total_packets=packet_number + len(queue),
         )
         if budget.used + 2 > budget.limit:
             failed.append(original.packet_id)
@@ -579,7 +585,7 @@ async def _process_document(
             # early packet's context rounds must not starve the rest. A
             # budget below that minimum cannot cover all packets anyway.
             reserved = (
-                2 * (len(plan.packets) - packet_number)
+                2 * len(queue)
                 if budget.limit >= 2 * len(plan.packets)
                 else 0
             )
@@ -784,9 +790,30 @@ async def _process_document(
                 status="succeeded",
                 packet_id=packet.packet_id,
                 packet_number=packet_number,
-                total_packets=len(plan.packets),
+                total_packets=packet_number + len(queue),
             )
         except Exception as exc:
+            halves = (
+                split_packet(document, original, settings)
+                if getattr(exc, "code", None) == "incomplete_response"
+                else []
+            )
+            if halves:
+                # The answer hit the output limit: retry in two halves
+                # instead of losing the whole packet (B-6).
+                queue.extendleft(reversed(halves))
+                metadata["issues"].append(
+                    {
+                        "packet_id": original.packet_id,
+                        "code": "incomplete_response",
+                        "split_into": [item.packet_id for item in halves],
+                    }
+                )
+                logger.info(
+                    "Packet %s hit the output limit; split in two",
+                    original.packet_id,
+                )
+                continue
             logger.warning(
                 "Packet %s failed: %s",
                 original.packet_id,
