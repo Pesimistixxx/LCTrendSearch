@@ -265,3 +265,57 @@ def test_document_without_calls_does_not_take_a_neighbours_calls():
     assert quiet.run.metadata["provider_calls"] == []
     assert quiet.run.metadata["model_events"] == []
     assert loaded.run.metadata["model_events"] == []
+
+
+def test_concurrency_limit_is_shared_by_clients_and_loops(monkeypatch):
+    # B-10: each client and each event loop had its own semaphore, so a
+    # limit of 1 still let the job loop and the resolver's client overlap.
+    import threading
+    import time
+
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "1")
+    guard = threading.Lock()
+    active, peak = 0, 0
+
+    def respond(request):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with guard:
+            active -= 1
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": '{"entities": []}'},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    from lctrend.llm.contracts import Extraction
+
+    def job():
+        provider = JsonLLM(
+            "model",
+            base_url="http://127.0.0.1:2/v1",
+            transport=httpx.MockTransport(respond),
+        )
+
+        async def many():
+            await asyncio.gather(
+                *(provider.generate(Extraction, "s", {}) for _ in range(3))
+            )
+
+        asyncio.run(many())
+
+    threads = [threading.Thread(target=job) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert peak == 1
