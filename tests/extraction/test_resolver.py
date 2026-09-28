@@ -81,7 +81,9 @@ def test_abbreviation_and_full_name_share_one_concept():
 def test_normalization_and_missing_optional_lemma(monkeypatch):
     assert normalize_name("  Graph-based_NER™ ") == "graph based ner"
     monkeypatch.setitem(sys.modules, "simplemma", None)
-    assert not alias_keys("models") & alias_keys("model")
+    # Key v2 strips an English plural itself: it no longer depends on the
+    # optional lemmatizer, so "models" and "model" share a key without it.
+    assert alias_keys("models") & alias_keys("model")
     assert alias_keys("  MODEL ") & alias_keys("model")
 
 

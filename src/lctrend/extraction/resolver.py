@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import math
 import re
-import sys
 import unicodedata
 from collections import defaultdict
 from functools import lru_cache
@@ -20,6 +19,7 @@ from ..core.models import (
     ResolutionDecision,
     stable_id,
 )
+from .lexical import identity_key, lexical_key
 
 
 # Names repeat across documents; the caches keep resolution linear in the
@@ -35,53 +35,18 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-_SIMPLEMMA_MISSING = False
-
-
-def _lemmatizer():
-    """The optional simplemma function; a failed import is tried only once."""
-    global _SIMPLEMMA_MISSING
-    module = sys.modules.get("simplemma")
-    if module is None and not _SIMPLEMMA_MISSING:
-        try:
-            import simplemma as module
-        except ImportError:
-            _SIMPLEMMA_MISSING = True
-    return getattr(module, "lemmatize", None)
-
-
-@lru_cache(maxsize=262144)
-def _lemma(value: str, lemmatize) -> str:
-    normalized = normalize_name(value)
-    if lemmatize is None:
-        return normalized
-    return " ".join(
-        lemmatize(token, lang=("en", "ru")) for token in normalized.split()
-    )
-
-
 def lemmatize_name(value: str) -> str:
-    return _lemma(value, _lemmatizer())
+    return lexical_key(value)
 
 
-@lru_cache(maxsize=262144)
-def _keys(value: str, lemmatize) -> frozenset[str]:
+def _alias_keys(value: str, kind: object = None) -> frozenset[str]:
     # Initials are retrieval hints, never identity evidence (CC has many
     # meanings).
-    return frozenset(
-        {
-            f"normalized:{normalize_name(value)}",
-            f"lemma:{_lemma(value, lemmatize)}",
-        }
-    )
+    return frozenset({f"key:{identity_key(value, kind)}"})
 
 
-def _alias_keys(value: str) -> frozenset[str]:
-    return _keys(value, _lemmatizer())
-
-
-def alias_keys(value: str) -> set[str]:
-    return set(_alias_keys(value))
+def alias_keys(value: str, kind: object = None) -> set[str]:
+    return set(_alias_keys(value, kind))
 
 
 EMBEDDING_PROVIDERS = ("gigachat", "transformers")
@@ -350,7 +315,9 @@ class ConceptIndex:
         self._concepts[concept_id] = concept
         self._order.setdefault(concept_id, len(self._order))
         aliases = _aliases(concept)
-        keys = frozenset().union(*(_alias_keys(alias) for alias in aliases))
+        keys = frozenset().union(
+            *(_alias_keys(alias, concept.kind) for alias in aliases)
+        )
         normalized = frozenset(normalize_name(alias) for alias in aliases)
         for key in keys:
             self._keys[key].add(concept_id)
@@ -367,10 +334,12 @@ class ConceptIndex:
         for name in normalized:
             self._normalized[name].discard(concept_id)
 
-    def matches(self, text: str, groups: list) -> List[Concept]:
-        """Concepts sharing a normalized/lemma key or an explicit synonym."""
+    def matches(
+        self, text: str, groups: list, kind: object = None
+    ) -> List[Concept]:
+        """Concepts sharing an identity key or an explicit synonym."""
         found = set()
-        for key in _alias_keys(text):
+        for key in _alias_keys(text, kind):
             found |= self._keys.get(key, set())
         normalized = normalize_name(text)
         for group in groups:
@@ -387,6 +356,14 @@ class ConceptIndex:
             self._concepts[concept_id]
             for concept_id in sorted(found, key=self._order.__getitem__)
         ]
+
+
+def _mention_kind(mention: Mention) -> ConceptKind:
+    return (
+        mention.type_candidates[0]
+        if mention.type_candidates
+        else ConceptKind.CANDIDATE
+    )
 
 
 def _compatible(mention: Mention, concept: Concept) -> bool:
@@ -442,7 +419,9 @@ def resolve_mentions(
         canonical_text = mention.canonical_text or mention.surface_text
         deterministic = [
             concept
-            for concept in concepts.matches(canonical_text, groups)
+            for concept in concepts.matches(
+                canonical_text, groups, _mention_kind(mention)
+            )
             if _compatible(mention, concept)
         ]
         resolution_id = stable_id(

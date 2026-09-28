@@ -1,0 +1,73 @@
+"""Lexical identity key v2: the regression table of the 2026-09-28 audit.
+
+Each row resolves two mentions against an empty registry. A false merge
+must end in two concepts, a false split in one.
+"""
+
+import pytest
+
+from lctrend.core.models import ConceptKind, Mention
+from lctrend.extraction.resolver import resolve_mentions
+
+T = ConceptKind.TECHNOLOGY
+COUNTRY = ConceptKind.COUNTRY
+
+
+def mention(mention_id, text, kind):
+    return Mention(
+        mention_id=mention_id,
+        chunk_id="c1",
+        surface_text=text,
+        canonical_text=text,
+        start=0,
+        end=len(text),
+        type_candidates=[kind],
+    )
+
+
+def same_concept(left, right, kind=T, right_kind=None):
+    _, decisions = resolve_mentions(
+        [mention("m1", left, kind), mention("m2", right, right_kind or kind)],
+        [],
+    )
+    first, second = decisions
+    return (
+        second.concept_id is not None
+        and first.concept_id == second.concept_id
+    )
+
+
+# C-1: English lemmatization merged acronyms and unrelated words.
+FALSE_MERGES_C1 = [
+    ("AI", "AM", T),
+    ("AI", "IS", T),
+    ("AI", "BE", T),
+    ("IS", "BE", T),
+    ("GAN", "gin", T),
+    ("LED", "lead", T),
+    ("Faster R-CNN", "Fast R-CNN", T),
+    # Countries are identified by the ISO code alone: Iceland is not Belgium.
+    ("IS", "BE", COUNTRY),
+    ("AM", "IS", COUNTRY),
+    ("US", "USA", COUNTRY),
+]
+
+FALSE_SPLITS_C1 = [
+    ("models", "model", T),
+    ("graph neural networks", "graph neural network", T),
+    ("LLMs", "LLM", T),
+    ("LEDs", "LED", T),
+    ("batteries", "battery", T),
+    ("LARGE LANGUAGE MODELS", "large language model", T),
+    ("de", "DE", COUNTRY),
+]
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_MERGES_C1)
+def test_false_merges_are_separated(left, right, kind):
+    assert not same_concept(left, right, kind)
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C1)
+def test_false_splits_are_joined(left, right, kind):
+    assert same_concept(left, right, kind)
