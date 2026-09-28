@@ -106,7 +106,7 @@ def plan_key_migration(
     form_counts: Mapping[str, Mapping[str, int]] | None = None,
     kind_counts: Mapping[str, Mapping[str, int]] | None = None,
 ) -> MigrationPlan:
-    """Group concepts by (kind family, key v2) and pick one target each.
+    """Group legacy concepts by (exact kind, key v2) and pick one target each.
 
     The target is, in order: a reviewed concept, the concept whose id
     key v2 would create, the most mentioned, the highest kind of the
@@ -118,9 +118,12 @@ def plan_key_migration(
     plan = MigrationPlan()
     groups: Dict[tuple, List[Concept]] = {}
     for concept in concepts:
+        if concept.identity_scope or concept.technology:
+            continue
         key, kind = concept_identity(concept.preferred_label, concept.kind)
         family = kind_family(kind)
-        groups.setdefault((family, key), []).append(concept)
+        group_kind = concept.kind.value if family == "technology" else family
+        groups.setdefault((group_kind, key), []).append(concept)
         counts = dict(form_counts.get(concept.concept_id) or {})
         if not counts:
             counts = dict(concept.label_counts) or {concept.preferred_label: 1}
@@ -134,7 +137,12 @@ def plan_key_migration(
         # A reviewed concept and a curated synonym group keep their kind.
         settled = (
             settled_kind(votes, concept.kind)
-            if votes and concept.status != "accepted" and kind == concept.kind
+            if (
+                family != "technology"
+                and votes
+                and concept.status != "accepted"
+                and kind == concept.kind
+            )
             else concept.kind.value
         )
         plan.updates.append(

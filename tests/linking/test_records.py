@@ -21,7 +21,7 @@ from lctrend.linking.records import link_known_technologies
 from lctrend.llm.client import LLMError
 
 
-def concept(label, kind=ConceptKind.TECHNOLOGY, concept_id=None):
+def concept(label, kind=ConceptKind.METHOD, concept_id=None):
     return Concept(
         concept_id=concept_id or stable_id("concept", label),
         kind=kind,
@@ -123,7 +123,7 @@ def test_name_of_two_concepts_links_nothing():
     assert link_known_technologies(document("Transformers."), registry) is None
 
 
-def test_economic_record_skips_the_model():
+def test_economic_record_keeps_contextual_extraction():
     model = CountingModel()
     result = asyncio.run(
         process_material(
@@ -133,9 +133,8 @@ def test_economic_record_skips_the_model():
         )
     )
 
-    assert result.run.parser == "registry_match"
-    assert result.run.status == "succeeded"
-    assert model.requests == 0
+    assert result.run.parser == "llm_packets"
+    assert model.requests > 0
 
 
 @pytest.mark.parametrize(
@@ -153,3 +152,8 @@ def test_other_records_and_unknown_texts_take_the_model_path(record):
 
     assert result.run.parser == "llm_packets"
     assert model.requests > 0
+
+
+def test_a_technology_name_alone_needs_contextual_review():
+    registry = [concept("Transformer", kind=ConceptKind.TECHNOLOGY)]
+    assert link_known_technologies(document("Transformers."), registry) is None

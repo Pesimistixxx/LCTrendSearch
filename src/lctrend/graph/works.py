@@ -371,7 +371,6 @@ class WorkIndex:
         return [docs for docs in self.work_documents.values() if docs]
 
 
-
 def _family_id(metadata_json: Iterable[Optional[str]]) -> Optional[str]:
     import json
 

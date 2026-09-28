@@ -1,0 +1,473 @@
+{
+  "baseline_revision": "2d15228506b6f6c86f107e300966981d8490e7bd",
+  "evaluation_mode": "offline replay, not live model inference",
+  "graph_writes": 0,
+  "summary": {
+    "replace_identity": 6,
+    "reclassify": 9
+  },
+  "identity_plan": [
+    {
+      "old_id": "concept:24e1f5dfcd426ad1fef169cb",
+      "old_name": "CNN",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:0d7620f85f81076d7bd047a2",
+          "kind": "Technology",
+          "name": "Convolutional neural network"
+        }
+      ],
+      "document_version_ids": [
+        "version:cnn"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:eb9a0a6ae9595c4dd857d964",
+      "old_name": "Vision Transformer",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:a54522b2a530272db1aff9c9",
+          "kind": "Technology",
+          "name": "Vision Transformer"
+        }
+      ],
+      "document_version_ids": [
+        "version:vit"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:50ffcee14d06046fe171452e",
+      "old_name": "cache tiering",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:9a2ae46ff99aead16f3e7a8d",
+          "kind": "Technology",
+          "name": "Request-indexed KV cache offload to host DRAM"
+        }
+      ],
+      "document_version_ids": [
+        "version:kv"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:53fae7d67e5131326a7bf50c",
+      "old_name": "optical circuit switch",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:7a1d1fed9fb81c4d8d9dbba3",
+          "kind": "Technology",
+          "name": "optical circuit switch"
+        }
+      ],
+      "document_version_ids": [
+        "version:ocs"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:29eb02eb6edfd46fca75df22",
+      "old_name": "tool-description scanner",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:abeddde13f9bc253980e55f1",
+          "kind": "Technology",
+          "name": "tool-description scanner"
+        }
+      ],
+      "document_version_ids": [
+        "version:mcp"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:1afe15e20832f33180ca2af8",
+      "old_name": "FIS-ML",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:da7fd3040ff09e12d65fb524",
+          "kind": "Technology",
+          "name": "FIS-ML"
+        },
+        {
+          "concept_id": "concept-v3:758ed33219d10216d5d260d0",
+          "kind": "ConceptCandidate",
+          "name": "FIS-ML"
+        }
+      ],
+      "document_version_ids": [
+        "version:fis",
+        "version:unknown"
+      ],
+      "missing_context": false,
+      "action": "split"
+    },
+    {
+      "old_id": "concept:ab5dc9382f4a105138b85eb5",
+      "old_name": "ML",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:14b48c6f30ac3e351e006bd3",
+          "kind": "Domain",
+          "name": "Machine learning"
+        },
+        {
+          "concept_id": "concept-v3:939dc52d3277aed5cb8febb3",
+          "kind": "ConceptCandidate",
+          "name": "ML"
+        }
+      ],
+      "document_version_ids": [
+        "version:ml",
+        "version:standard_ml"
+      ],
+      "missing_context": false,
+      "action": "split"
+    },
+    {
+      "old_id": "concept:53b4d7258e8fe7e0f6e037af",
+      "old_name": "CV",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:f351d58b0fe91f3cdedeaced",
+          "kind": "Domain",
+          "name": "Computer vision"
+        }
+      ],
+      "document_version_ids": [
+        "version:cv"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:fd622068a6d5d58c4ec13c39",
+      "old_name": "Python",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:da0ffcdeb95b76c9b5b67d79",
+          "kind": "ConceptCandidate",
+          "name": "Python"
+        }
+      ],
+      "document_version_ids": [
+        "version:python"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:ff007b28073400a2178739ad",
+      "old_name": "OpenCV",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:afc7d0ed3b9ba06ffd070c74",
+          "kind": "ConceptCandidate",
+          "name": "OpenCV"
+        }
+      ],
+      "document_version_ids": [
+        "version:opencv"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:59d801d4487d83d2005c928d",
+      "old_name": "Acme",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:704ef77ceaf3ff8d707988cd",
+          "kind": "Company",
+          "name": "Acme"
+        }
+      ],
+      "document_version_ids": [
+        "version:company"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:e8897886129999690d2efd52",
+      "old_name": "Nimbus",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:eb5e5934844759d688d515ad",
+          "kind": "ConceptCandidate",
+          "name": "Nimbus"
+        }
+      ],
+      "document_version_ids": [
+        "version:product"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    },
+    {
+      "old_id": "concept:17b2a74193ae5698c9977288",
+      "old_name": "CNN for farming",
+      "proposals": [
+        {
+          "concept_id": "concept-v3:3300804b985c9610e24fece5",
+          "kind": "ConceptCandidate",
+          "name": "CNN for farming"
+        }
+      ],
+      "document_version_ids": [
+        "version:application"
+      ],
+      "missing_context": false,
+      "action": "review_mapping"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "cnn",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:24e1f5dfcd426ad1fef169cb",
+        "kind": "Technology",
+        "name": "CNN"
+      },
+      "after": {
+        "id": "concept-v3:0d7620f85f81076d7bd047a2",
+        "kind": "Technology",
+        "name": "Convolutional neural network"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "vit",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:eb9a0a6ae9595c4dd857d964",
+        "kind": "Technology",
+        "name": "Vision Transformer"
+      },
+      "after": {
+        "id": "concept-v3:a54522b2a530272db1aff9c9",
+        "kind": "Technology",
+        "name": "Vision Transformer"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "kv",
+      "source_type": "representative excerpt",
+      "reference": "Workbook row 12, signal 10; representative mechanism, not a claim about listed vendors",
+      "before": {
+        "id": "concept:50ffcee14d06046fe171452e",
+        "kind": "Technology",
+        "name": "cache tiering"
+      },
+      "after": {
+        "id": "concept-v3:9a2ae46ff99aead16f3e7a8d",
+        "kind": "Technology",
+        "name": "Request-indexed KV cache offload to host DRAM"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "ocs",
+      "source_type": "representative excerpt",
+      "reference": "Workbook row 11, signal 9; representative excerpt",
+      "before": {
+        "id": "concept:53fae7d67e5131326a7bf50c",
+        "kind": "Technology",
+        "name": "optical circuit switch"
+      },
+      "after": {
+        "id": "concept-v3:7a1d1fed9fb81c4d8d9dbba3",
+        "kind": "Technology",
+        "name": "optical circuit switch"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "mcp",
+      "source_type": "representative excerpt",
+      "reference": "Workbook row 6, signal 4; representative excerpt",
+      "before": {
+        "id": "concept:29eb02eb6edfd46fca75df22",
+        "kind": "Technology",
+        "name": "tool-description scanner"
+      },
+      "after": {
+        "id": "concept-v3:abeddde13f9bc253980e55f1",
+        "kind": "Technology",
+        "name": "tool-description scanner"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "fis",
+      "source_type": "representative excerpt",
+      "reference": "Invented, explicitly representative abbreviation; not a claim about any real FIS-ML publication",
+      "before": {
+        "id": "concept:1afe15e20832f33180ca2af8",
+        "kind": "Technology",
+        "name": "FIS-ML"
+      },
+      "after": {
+        "id": "concept-v3:da7fd3040ff09e12d65fb524",
+        "kind": "Technology",
+        "name": "FIS-ML"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "ml",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:ab5dc9382f4a105138b85eb5",
+        "kind": "Technology",
+        "name": "ML"
+      },
+      "after": {
+        "id": "concept-v3:14b48c6f30ac3e351e006bd3",
+        "kind": "Domain",
+        "name": "Machine learning"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "cv",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:53b4d7258e8fe7e0f6e037af",
+        "kind": "Technology",
+        "name": "CV"
+      },
+      "after": {
+        "id": "concept-v3:f351d58b0fe91f3cdedeaced",
+        "kind": "Domain",
+        "name": "Computer vision"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "standard_ml",
+      "source_type": "real collected abstract",
+      "reference": "Local OpenAlex snapshot: https://openalex.org/W1829244603",
+      "before": {
+        "id": "concept:ab5dc9382f4a105138b85eb5",
+        "kind": "Technology",
+        "name": "ML"
+      },
+      "after": {
+        "id": "concept-v3:939dc52d3277aed5cb8febb3",
+        "kind": "ConceptCandidate",
+        "name": "ML"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "python",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:fd622068a6d5d58c4ec13c39",
+        "kind": "Technology",
+        "name": "Python"
+      },
+      "after": {
+        "id": "concept-v3:da0ffcdeb95b76c9b5b67d79",
+        "kind": "ConceptCandidate",
+        "name": "Python"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "opencv",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:ff007b28073400a2178739ad",
+        "kind": "Technology",
+        "name": "OpenCV"
+      },
+      "after": {
+        "id": "concept-v3:afc7d0ed3b9ba06ffd070c74",
+        "kind": "ConceptCandidate",
+        "name": "OpenCV"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "unknown",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:1afe15e20832f33180ca2af8",
+        "kind": "Technology",
+        "name": "FIS-ML"
+      },
+      "after": {
+        "id": "concept-v3:758ed33219d10216d5d260d0",
+        "kind": "ConceptCandidate",
+        "name": "FIS-ML"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "company",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:59d801d4487d83d2005c928d",
+        "kind": "Technology",
+        "name": "Acme"
+      },
+      "after": {
+        "id": "concept-v3:704ef77ceaf3ff8d707988cd",
+        "kind": "Company",
+        "name": "Acme"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "product",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:e8897886129999690d2efd52",
+        "kind": "Technology",
+        "name": "Nimbus"
+      },
+      "after": {
+        "id": "concept-v3:eb5e5934844759d688d515ad",
+        "kind": "ConceptCandidate",
+        "name": "Nimbus"
+      },
+      "run_status": "succeeded"
+    },
+    {
+      "case_id": "application",
+      "source_type": "representative excerpt",
+      "reference": null,
+      "before": {
+        "id": "concept:17b2a74193ae5698c9977288",
+        "kind": "Technology",
+        "name": "CNN for farming"
+      },
+      "after": {
+        "id": "concept-v3:3300804b985c9610e24fece5",
+        "kind": "ConceptCandidate",
+        "name": "CNN for farming"
+      },
+      "run_status": "succeeded"
+    }
+  ]
+}

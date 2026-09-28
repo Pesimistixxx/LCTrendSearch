@@ -24,7 +24,10 @@ pytestmark = pytest.mark.legacy_technology_entities
 
 TEXT = (
     "Acme Energy GmbH developed the solid-state battery in Германии. "
-    "The solid-state battery reached TRL 6 in a pilot plant."
+    "The solid-state battery reached TRL 6 in a pilot plant. "
+    "A solid-state battery stores electrical energy by transferring ions "
+    "through a solid electrolyte between electrodes, "
+    "rather than a liquid electrolyte."
 )
 
 
@@ -109,16 +112,63 @@ def extraction(**overrides):
         ],
         "context_requests": [],
     }
+    value["entities"][0]["technology"] = battery_profile()
     value.update(overrides)
     return value
 
 
-def supported(*claim_ids):
+def battery_profile():
     return {
+        "canonical_name": "solid-state battery",
+        "definition": (
+            "Energy storage by ion transfer through a solid electrolyte."
+        ),
+        "function": "Store electrical energy",
+        "mechanism": (
+            "Transfer ions through a solid electrolyte between electrodes"
+        ),
+        "boundary": "Solid rather than liquid electrolyte",
+        "identity_scope": "electrochemical energy storage device",
+        "evidence": [
+            {
+                "chunk_id": "c1",
+                "quote": TEXT,
+                "supports_fields": [
+                    "canonical_name",
+                    "definition",
+                    "function",
+                    "mechanism",
+                    "boundary",
+                    "identity_scope",
+                ],
+            }
+        ],
+    }
+
+
+def supported(*claim_ids):
+    profile = battery_profile()
+    return {
+        "entity_items": [
+            {
+                "local_id": "battery",
+                "decision": "accept",
+                "kind": "Technology",
+                "canonical_name": profile["canonical_name"],
+                "identity_scope": profile["identity_scope"],
+                "supported_fields": profile["evidence"][0]["supports_fields"],
+                "coherent": True,
+                "specific": True,
+                "adaptation_or_base": True,
+                "definition_only": True,
+                "reason": "Solid electrolyte mechanism is explicit.",
+                "evidence": [{"chunk_id": "c1", "quote": TEXT}],
+            }
+        ],
         "items": [
             {"claim_id": item, "decision": "supported", "reason": "Stated."}
             for item in claim_ids
-        ]
+        ],
     }
 
 

@@ -549,7 +549,7 @@ def entity(local_id, label, kind, quote=None):
     )
 
 
-def test_umbrella_field_becomes_a_domain_and_keeps_only_domain_claims():
+def test_names_do_not_reclassify_entities_before_semantic_review():
     # Feedback: the radar found "ML" and "NLP" instead of concrete
     # technologies such as transformer-based NER.
     text = (
@@ -589,12 +589,12 @@ def test_umbrella_field_becomes_a_domain_and_keeps_only_domain_claims():
     kinds = {item.local_id: item.kind for item in result.entities}
     assert kinds == {
         "ner": ConceptKind.TECHNOLOGY,
-        "ml": ConceptKind.DOMAIN,
-        "nlp": ConceptKind.DOMAIN,
+        "ml": ConceptKind.METHOD,
+        "nlp": ConceptKind.TECHNOLOGY,
     }
-    assert "claim:uses" in issues
-    assert "claim:domain" not in issues
-    assert {note["item"] for note in notes} >= {"entity:ml", "entity:nlp"}
+    assert "claim:uses" not in issues
+    assert "claim:domain" in issues
+    assert not any(n.get("code") == "kind_normalized" for n in notes)
 
 
 def test_organization_kind_comes_from_the_catalog_and_names_are_required():
@@ -682,7 +682,7 @@ def test_declared_aliases_must_stand_next_to_the_label():
     assert len(payload.entities[0].aliases) == 4
 
 
-def test_an_umbrella_term_is_not_an_alias():
+def test_alias_meaning_is_left_for_contextual_entity_review():
     doc = document("Graph neural networks (machine learning) detect fraud.")
     payload = Extraction(
         entities=[
@@ -699,12 +699,14 @@ def test_an_umbrella_term_is_not_an_alias():
     )
     notes = []
     result, _ = validate_local_extraction(doc, payload, ["c1"], notes)
-    assert result.entities[0].aliases == []
-    assert notes[-1]["reason"] == "generic_term"
+    assert result.entities[0].aliases == ["machine learning"]
+    assert not any(n.get("reason") == "generic_term" for n in notes)
 
 
 def test_a_definition_is_a_short_phrase_of_a_technology_kind():
-    doc, payload = compound(definition="  inhibitor of\ncholesterol  synthesis ")
+    doc, payload = compound(
+        definition="  inhibitor of\ncholesterol  synthesis "
+    )
     result, _ = validate_local_extraction(doc, payload, ["c1"])
     assert result.entities[0].definition == (
         "inhibitor of cholesterol synthesis"

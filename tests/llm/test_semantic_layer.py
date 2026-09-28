@@ -74,7 +74,7 @@ def answers():
                 {
                     "local_id": "tech",
                     "label": "Carbon conversion",
-                    "kind": "Technology",
+                    "kind": "Method",
                     "evidence": [
                         {"chunk_id": "c1", "quote": "Carbon conversion"}
                     ],
@@ -109,7 +109,7 @@ def answers():
 REGISTRY = [
     Concept(
         concept_id="tech:capture",
-        kind=ConceptKind.TECHNOLOGY,
+        kind=ConceptKind.METHOD,
         preferred_label="carbon capture",
         status="accepted",
     )
@@ -146,7 +146,7 @@ def test_semantic_match_is_a_review_candidate_and_keeps_the_claim():
     assert decision.status == "provisional"
     assert decision.concept_id != "tech:capture"
     assert decision.candidates[0]["concept_id"] == "tech:capture"
-    assert decision.candidates[0]["kind"] == "Technology"
+    assert decision.candidates[0]["kind"] == "Method"
     assert result.embedding_model == "EmbeddingsGigaR"
     assert set(result.concept_embeddings) == {
         concept.concept_id for concept in result.concepts

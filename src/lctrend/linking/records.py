@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from ..core.models import (
     Concept,
+    ConceptKind,
     DocumentEnvelope,
     DocumentType,
     ExtractionResult,
@@ -57,6 +58,10 @@ def link_known_technologies(
                 continue
             seen.add(concept_id)
             concept = index.concepts[concept_id]
+            if concept.kind == ConceptKind.TECHNOLOGY:
+                # A registry name cannot establish this document's meaning.
+                # Use the contextual entity reviewer even for known names.
+                return None
             surface = chunk.text[start:end]
             mention_id = stable_id(
                 "mention",

@@ -48,3 +48,5 @@ CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.
 CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);
 CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (n:Chunk) ON EACH [n.text];
 CREATE FULLTEXT INDEX document_title IF NOT EXISTS FOR (n:Document) ON EACH [n.title];
+
+CREATE CONSTRAINT entity_assessment_id IF NOT EXISTS FOR (a:EntityAssessment) REQUIRE a.assessment_id IS UNIQUE;

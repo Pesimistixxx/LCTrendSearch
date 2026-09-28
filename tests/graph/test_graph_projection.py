@@ -18,6 +18,7 @@ from lctrend.core.models import (
 from lctrend.extraction.resolver import resolve_mentions
 from lctrend.graph.store import GraphStore, _concept_from_properties
 from lctrend.ingest.adapters import parse_openalex
+from tests.technology_fixtures import define_test_sensors
 
 
 def test_graph_roundtrip_does_not_promote_unreviewed_aliases():
@@ -212,22 +213,20 @@ def test_extraction_stores_aliases_and_resolution_on_relationships():
             )
         ],
     )
-    asyncio.run(
-        GraphStore._write_extraction(
-            tx,
-            type(
-                "Doc",
-                (),
-                {
-                    "document_version_id": "v1",
-                    "published_at": None,
-                    "chunks": [],
-                    "domains": [],
-                },
-            )(),
-            result,
-        )
-    )
+    document = type(
+        "Doc",
+        (),
+        {
+            "document_version_id": "v1",
+            "published_at": None,
+            "domains": [],
+            "chunks": [
+                Chunk(chunk_id="ch1", kind="paragraph", text="NLP", order=0)
+            ],
+        },
+    )()
+    define_test_sensors(document, result)
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
     queries = "\n".join(query for query, _ in tx.queries)
     assert "ConceptName" not in queries
     assert "ResolutionDecision" not in queries
@@ -364,7 +363,9 @@ def test_undated_document_evidence_is_not_dated_by_its_upload():
             "published_at": None,
             "version_published_at": None,
             "retrieved_at": uploaded,
-            "chunks": [],
+            "chunks": [
+                Chunk(chunk_id="ch1", kind="paragraph", text="NLP", order=0)
+            ],
             "domains": [],
         },
     )()
@@ -399,6 +400,7 @@ def test_undated_document_evidence_is_not_dated_by_its_upload():
             )
         ],
     )
+    define_test_sensors(document, result)
     tx = Transaction()
     asyncio.run(GraphStore._write_extraction(tx, document, result))
     observed = [
@@ -416,8 +418,9 @@ def test_redownload_keeps_the_first_retrieval_for_visibility():
     tx = Transaction()
     asyncio.run(GraphStore._write_document(tx, document))
     query = " ".join(
-        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
-        .split()
+        next(
+            q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q
+        ).split()
     )
     # A later download must not move the version out of past snapshots.
     assert "v.retrieved_at =" not in query
@@ -488,8 +491,9 @@ def test_metrics_are_a_dated_observation_of_the_unchanged_version():
     assert json.loads(observations[0]["metrics_json"])["citation_count"] == 17
     # The version keeps only a newer observation as its current metrics.
     query = " ".join(
-        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
-        .split()
+        next(
+            q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q
+        ).split()
     )
     current = re.search(r"v\.metrics_json = CASE (.*?) END", query)
     assert current and ">= v.metrics_observed_at" in current.group(1)
@@ -577,9 +581,7 @@ def test_extraction_write_cost_does_not_grow_with_its_concepts():
             concepts=[
                 Concept(
                     concept_id=f"c{index}",
-                    kind=ConceptKind.TECHNOLOGY
-                    if index % 2
-                    else ConceptKind.TASK,
+                    kind=ConceptKind.METHOD if index % 2 else ConceptKind.TASK,
                     preferred_label=f"Concept {index}",
                 )
                 for index in range(size)

@@ -1,0 +1,824 @@
+[
+  {
+    "id": "cnn",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "A convolutional neural network (CNN) extracts image features. Shared learned kernels slide across local pixel neighborhoods; stacked convolution layers form the image recognition architecture.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "cnn",
+          "label": "CNN",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "CNN"
+            }
+          ],
+          "technology": {
+            "canonical_name": "Convolutional neural network",
+            "definition": "Extract image features by sliding shared learned kernels over local pixel neighborhoods.",
+            "function": "Extract image features",
+            "mechanism": "sliding shared learned kernels over local pixel neighborhoods",
+            "boundary": "An image recognition architecture of stacked convolution layers",
+            "identity_scope": "neural network architecture",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "A convolutional neural network (CNN) extracts image features. Shared learned kernels slide across local pixel neighborhoods; stacked convolution layers form the image recognition architecture.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "cnn",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "A convolutional neural network (CNN) extracts image features. Shared learned kernels slide across local pixel neighborhoods; stacked convolution layers form the image recognition architecture."
+            }
+          ],
+          "canonical_name": "Convolutional neural network",
+          "identity_scope": "neural network architecture",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "vit",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "Vision Transformer classifies images. It splits an image into fixed-size patches, linearly embeds them with position embeddings, and applies transformer self-attention to the patch sequence.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "vit",
+          "label": "Vision Transformer",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Vision Transformer"
+            }
+          ],
+          "technology": {
+            "canonical_name": "Vision Transformer",
+            "definition": "Classify images by self-attention over position-encoded linear embeddings of image patches.",
+            "function": "Classify images",
+            "mechanism": "self-attention over position-encoded linear embeddings of image patches",
+            "boundary": "A transformer encoder operating on an image patch sequence",
+            "identity_scope": "neural network architecture",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "Vision Transformer classifies images. It splits an image into fixed-size patches, linearly embeds them with position embeddings, and applies transformer self-attention to the patch sequence.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "vit",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Vision Transformer classifies images. It splits an image into fixed-size patches, linearly embeds them with position embeddings, and applies transformer self-attention to the patch sequence."
+            }
+          ],
+          "canonical_name": "Vision Transformer",
+          "identity_scope": "neural network architecture",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "kv",
+    "source_type": "representative excerpt",
+    "reference": "Workbook row 12, signal 10; representative mechanism, not a claim about listed vendors",
+    "text": "Our cache tiering releases GPU memory during LLM inference. It copies inactive KV blocks to host DRAM, indexes each block by request and token range, and restores those same blocks on demand before attention runs.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "kv",
+          "label": "cache tiering",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "cache tiering"
+            }
+          ],
+          "technology": {
+            "canonical_name": "Request-indexed KV cache offload to host DRAM",
+            "definition": "Release GPU memory during LLM inference by copying inactive KV blocks to DRAM and restoring request-indexed token ranges before attention.",
+            "function": "Release GPU memory during LLM inference",
+            "mechanism": "copying inactive KV blocks to DRAM and restoring request-indexed token ranges before attention",
+            "boundary": "Offload and restore of the same KV blocks between GPU and host DRAM",
+            "identity_scope": "KV cache memory management",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "Our cache tiering releases GPU memory during LLM inference. It copies inactive KV blocks to host DRAM, indexes each block by request and token range, and restores those same blocks on demand before attention runs.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "kv",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Our cache tiering releases GPU memory during LLM inference. It copies inactive KV blocks to host DRAM, indexes each block by request and token range, and restores those same blocks on demand before attention runs."
+            }
+          ],
+          "canonical_name": "Request-indexed KV cache offload to host DRAM",
+          "identity_scope": "KV cache memory management",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "ocs",
+    "source_type": "representative excerpt",
+    "reference": "Workbook row 11, signal 9; representative excerpt",
+    "text": "An optical circuit switch routes optical channels using a MEMS mirror array. Mirror angles establish a continuous light path between ports without converting the data into electrical packets.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "ocs",
+          "label": "optical circuit switch",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "optical circuit switch"
+            }
+          ],
+          "technology": {
+            "canonical_name": "optical circuit switch",
+            "definition": "Route optical channels between ports by steering continuous light paths with a MEMS mirror array.",
+            "function": "Route optical channels between ports",
+            "mechanism": "steering continuous light paths with a MEMS mirror array",
+            "boundary": "Circuit switching without electrical packet conversion",
+            "identity_scope": "optical switching device",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "An optical circuit switch routes optical channels using a MEMS mirror array. Mirror angles establish a continuous light path between ports without converting the data into electrical packets.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "ocs",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "An optical circuit switch routes optical channels using a MEMS mirror array. Mirror angles establish a continuous light path between ports without converting the data into electrical packets."
+            }
+          ],
+          "canonical_name": "optical circuit switch",
+          "identity_scope": "optical switching device",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "mcp",
+    "source_type": "representative excerpt",
+    "reference": "Workbook row 6, signal 4; representative excerpt",
+    "text": "A tool-description scanner detects injected instructions in MCP tool metadata. It parses tool descriptions, applies an instruction classifier to those descriptions, and flags suspicious text before the tools are exposed to the agent.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "mcp",
+          "label": "tool-description scanner",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "tool-description scanner"
+            }
+          ],
+          "technology": {
+            "canonical_name": "tool-description scanner",
+            "definition": "Detect injected instructions in MCP tool metadata by parsing tool descriptions and classifying instructions before agent exposure.",
+            "function": "Detect injected instructions in MCP tool metadata",
+            "mechanism": "parsing tool descriptions and classifying instructions before agent exposure",
+            "boundary": "Inspection of tool metadata before exposure, not model training",
+            "identity_scope": "MCP metadata inspection algorithm",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "A tool-description scanner detects injected instructions in MCP tool metadata. It parses tool descriptions, applies an instruction classifier to those descriptions, and flags suspicious text before the tools are exposed to the agent.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "mcp",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "A tool-description scanner detects injected instructions in MCP tool metadata. It parses tool descriptions, applies an instruction classifier to those descriptions, and flags suspicious text before the tools are exposed to the agent."
+            }
+          ],
+          "canonical_name": "tool-description scanner",
+          "identity_scope": "MCP metadata inspection algorithm",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "fis",
+    "source_type": "representative excerpt",
+    "reference": "Invented, explicitly representative abbreviation; not a claim about any real FIS-ML publication",
+    "text": "FIS-ML means finite impulse shaping with matched lobes in this experiment. The pulse shaper convolves an input waveform with a finite kernel whose side lobes cancel ringing; it operates on waveforms before transmission.",
+    "expected_kind": "Technology",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "fis",
+          "label": "FIS-ML",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "FIS-ML"
+            }
+          ],
+          "technology": {
+            "canonical_name": "FIS-ML",
+            "definition": "Suppress waveform ringing before transmission by convolving waveforms with a finite kernel whose side lobes cancel ringing.",
+            "function": "Suppress waveform ringing before transmission",
+            "mechanism": "convolving waveforms with a finite kernel whose side lobes cancel ringing",
+            "boundary": "A pre-transmission waveform shaping algorithm",
+            "identity_scope": "waveform processing algorithm",
+            "evidence": [
+              {
+                "chunk_id": "c1",
+                "quote": "FIS-ML means finite impulse shaping with matched lobes in this experiment. The pulse shaper convolves an input waveform with a finite kernel whose side lobes cancel ringing; it operates on waveforms before transmission.",
+                "supports_fields": [
+                  "canonical_name",
+                  "definition",
+                  "function",
+                  "mechanism",
+                  "boundary",
+                  "identity_scope"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "fis",
+          "decision": "accept",
+          "kind": "Technology",
+          "reason": "The quoted source describes this meaning and its technical limits.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "FIS-ML means finite impulse shaping with matched lobes in this experiment. The pulse shaper convolves an input waveform with a finite kernel whose side lobes cancel ringing; it operates on waveforms before transmission."
+            }
+          ],
+          "canonical_name": "FIS-ML",
+          "identity_scope": "waveform processing algorithm",
+          "supported_fields": [
+            "canonical_name",
+            "definition",
+            "function",
+            "mechanism",
+            "boundary",
+            "identity_scope"
+          ],
+          "coherent": true,
+          "specific": true,
+          "adaptation_or_base": true,
+          "definition_only": true
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "ml",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "Machine learning (ML) is a research field. This overview surveys its applications without specifying an algorithm.",
+    "expected_kind": "Domain",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "ml",
+          "label": "ML",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "ML"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "ml",
+          "decision": "reclassify",
+          "kind": "Domain",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Machine learning (ML) is a research field. This overview surveys its applications without specifying an algorithm."
+            }
+          ],
+          "canonical_name": "Machine learning",
+          "identity_scope": "research field"
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "cv",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "Computer vision (CV) is the field concerned with interpreting images; no architecture is described here.",
+    "expected_kind": "Domain",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "cv",
+          "label": "CV",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "CV"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "cv",
+          "decision": "reclassify",
+          "kind": "Domain",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Computer vision (CV) is the field concerned with interpreting images; no architecture is described here."
+            }
+          ],
+          "canonical_name": "Computer vision",
+          "identity_scope": "research field"
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "standard_ml",
+    "source_type": "real collected abstract",
+    "reference": "Local OpenAlex snapshot: https://openalex.org/W1829244603",
+    "text": "Standard ML is a general-purpose programming language designed for large projects. This book provides a formal definition of Standard ML for the benefit of all concerned with the language, including users and implementers. Because computer programs are increasingly required to withstand rigorous analysis, it is all the more important that the language in which they are written be defined with full rigor. One purpose of a language definition is to establish a theory of meanings upon which the understanding of particular programs may rest. To properly define a programming language, it is necessary to use some form of notation other than a programming language. Given a concern for rigor, mathematical notation is an obvious choice. The authors have defined their semantic objects in mathematical notation that is completely independent of Standard ML. In defining a language one must also define the rules of evaluation precisely—that is, define what meaning results from evaluating any phrase of the language. The definition thus constitutes a formal specification for an implementation. The authors have developed enough of their theory to give sense to their rules of evaluation. The Definition of Standard ML is the essential point of reference for Standard ML. Since its publication in 1990, the implementation technology of the language has advanced enormously and the number of users has grown. The revised edition includes a number of new features, omits little-used features, and corrects mistakes of definition.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "standard_ml",
+          "label": "ML",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "ML"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "standard_ml",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "ML names the Standard ML programming language in this abstract, not machine learning. The abstract discusses a formal specification but does not describe a concrete technical mechanism sufficiently for Technology.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Standard ML is a general-purpose programming language designed for large projects. This book provides a formal definition of Standard ML for the benefit of all concerned with the language, including users and implementers. Because computer programs are increasingly required to withstand rigorous analysis, it is all the more important that the language in which they are written be defined with full rigor. One purpose of a language definition is to establish a theory of meanings upon which the understanding of particular programs may rest. To properly define a programming language, it is necessary to use some form of notation other than a programming language. Given a concern for rigor, mathematical notation is an obvious choice. The authors have defined their semantic objects in mathematical notation that is completely independent of Standard ML. In defining a language one must also define the rules of evaluation precisely—that is, define what meaning results from evaluating any phrase of the language. The definition thus constitutes a formal specification for an implementation. The authors have developed enough of their theory to give sense to their rules of evaluation. The Definition of Standard ML is the essential point of reference for Standard ML. Since its publication in 1990, the implementation technology of the language has advanced enormously and the number of users has grown. The revised edition includes a number of new features, omits little-used features, and corrects mistakes of definition."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "python",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "We used Python to plot the results.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "python",
+          "label": "Python",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Python"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "python",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "We used Python to plot the results."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "opencv",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "OpenCV was used to read the images for the experiment.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "opencv",
+          "label": "OpenCV",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "OpenCV"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "opencv",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "OpenCV was used to read the images for the experiment."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "unknown",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "The team mentioned FIS-ML but provided no expansion or technical description.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "unknown",
+          "label": "FIS-ML",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "FIS-ML"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "unknown",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "The team mentioned FIS-ML but provided no expansion or technical description."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "company",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "Acme is a company announcing a new product; no device design is described.",
+    "expected_kind": "Company",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "company",
+          "label": "Acme",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Acme"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "company",
+          "decision": "reclassify",
+          "kind": "Company",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Acme is a company announcing a new product; no device design is described."
+            }
+          ],
+          "canonical_name": "Acme",
+          "identity_scope": "company"
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "product",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "Nimbus is the product name. The announcement does not describe its implementation.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "product",
+          "label": "Nimbus",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Nimbus"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "product",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "Nimbus is the product name. The announcement does not describe its implementation."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  },
+  {
+    "id": "application",
+    "source_type": "representative excerpt",
+    "reference": null,
+    "text": "CNN for farming is our name for using an existing classifier in agriculture. We describe no changes to its architecture.",
+    "expected_kind": "ConceptCandidate",
+    "extraction": {
+      "entities": [
+        {
+          "local_id": "application",
+          "label": "CNN for farming",
+          "kind": "Technology",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "CNN for farming"
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    "review": {
+      "entity_items": [
+        {
+          "local_id": "application",
+          "decision": "unresolved",
+          "kind": "ConceptCandidate",
+          "reason": "Only a field, language, tool, brand or unexplained name is established; no specific technical mechanism is described.",
+          "evidence": [
+            {
+              "chunk_id": "c1",
+              "quote": "CNN for farming is our name for using an existing classifier in agriculture. We describe no changes to its architecture."
+            }
+          ]
+        }
+      ],
+      "items": []
+    }
+  }
+]

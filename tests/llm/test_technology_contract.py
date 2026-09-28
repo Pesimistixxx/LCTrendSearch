@@ -1,476 +1,379 @@
-"""Technology vertex contract (docs/technology-contract.md): a Technology
-exists only with a source-backed mechanism and function; otherwise the
-mention stays a ConceptCandidate with the reasons.
+"""Semantic gold cases plus adversarial contract tests.
+
+Replay responses are hand-reviewed proposals, not an LLM quality benchmark.
+The expected labels are independent of lexical matching and name length.
 """
 
 import asyncio
+import json
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
-from lctrend.core.models import (
-    Artifact,
-    Chunk,
-    ConceptKind,
-    DocumentEnvelope,
-    DocumentType,
-    SourceRef,
-)
+from lctrend.core.models import ConceptKind, validate_extraction
+from lctrend.extraction.resolver import ConceptRegistry
+from lctrend.graph.store import GraphStore, _concept_from_properties
+from lctrend.graph.technology_migration import technology_dry_run
 from lctrend.llm.client import ReplayProvider
-from lctrend.llm.contracts import Extraction
 from lctrend.llm.pipeline import process_document
-from lctrend.llm.validation import validate_local_extraction
-from tests.llm.test_parties_and_maturity import settings
+from tests.graph.test_concept_identity_store import Transaction
+from tests.llm.test_llm_pipeline import document, settings
 
-NAME = "KV cache offloading"
-MECHANISM = "moves the KV cache of long contexts from GPU memory to DRAM"
-FUNCTION = "serves contexts longer than GPU memory allows"
-TEXT = (
-    f"We present {NAME}, which {MECHANISM} and NVMe tiers. "
-    f"The system {FUNCTION}. Acme Inference developed the {NAME}."
+CASES = json.loads(
+    (
+        Path(__file__).parents[1] / "fixtures/technology_contract.json"
+    ).read_text()
 )
-DEVELOPED = f"Acme Inference developed the {NAME}."
 
 
-def document():
-    return DocumentEnvelope(
-        document_id="doc",
-        document_version_id="version",
-        document_type=DocumentType.REPORT,
-        title="KV cache report",
-        published_at="2026-03-01",
-        source=SourceRef(
-            source_id="fixture",
-            name="fixture",
-            source_type="test",
-            record_id="1",
-        ),
-        artifact=Artifact(
-            uri="memory://fixture", sha256="a" * 64, media_type="text/plain"
-        ),
-        chunks=[Chunk(chunk_id="c1", kind="paragraph", text=TEXT, order=0)],
-    )
-
-
-def technology(**overrides):
-    value = {
-        "local_id": "kv",
-        # A canonical name summarizing the source, not a verbatim quote.
-        "label": "тиринг KV-кэша с выгрузкой контекста в DRAM/NVMe",
-        "kind": "Technology",
-        "source_names": [{"name": NAME, "context": "abstract"}],
-        "definition": "Выгрузка KV-кэша длинных контекстов из памяти GPU "
-        "в DRAM и NVMe.",
-        "technical_mechanism": "перенос KV-кэша между уровнями памяти",
-        "technical_function": "обслуживание контекстов длиннее памяти GPU",
-        "technology_type": "software_system",
-        "boundary": "не любой кэш LLM: только выгрузка KV-кэша по уровням",
-        "support": [
-            {"chunk_id": "c1", "quote": MECHANISM, "supports": ["mechanism"]},
-            {"chunk_id": "c1", "quote": FUNCTION, "supports": ["function"]},
-        ],
-        "evidence": [{"chunk_id": "c1", "quote": NAME}],
-    }
-    value.update(overrides)
-    return value
-
-
-def extraction(entity=None):
-    return {
-        "entities": [
-            entity or technology(),
-            {
-                "local_id": "acme",
-                "label": "Acme Inference",
-                "kind": "Company",
-                "evidence": [{"chunk_id": "c1", "quote": "Acme Inference"}],
-            },
-        ],
-        "claims": [
-            {
-                "claim_id": "developer",
-                "predicate": "developed_by",
-                "roles": {"subject": "kv", "organization": "acme"},
-                "polarity": "affirmed",
-                "modality": "reported",
-                "evidence": [{"chunk_id": "c1", "quote": DEVELOPED}],
-            }
-        ],
-        "context_requests": [],
-    }
-
-
-def validate(entity):
-    notes = []
-    result, issues = validate_local_extraction(
-        document(),
-        Extraction.model_validate(extraction(entity)),
-        {"c1"},
-        notes,
-    )
-    return result.entities[0], issues, notes
-
-
-def test_complete_technology_is_validated_with_a_summarized_name():
-    entity, issues, _ = validate(technology())
-    assert "entity:kv" not in issues
-    assert entity.kind == ConceptKind.TECHNOLOGY
-    assert entity.classification_status == "validated"
-    assert entity.contract_issues == []
-    # The verbatim name becomes identity evidence.
-    assert NAME in entity.aliases
-    assert [span.start for span in entity.support] == [
-        TEXT.index(MECHANISM),
-        TEXT.index(FUNCTION),
-    ]
-
-
-def test_unmet_conditions_keep_a_candidate_with_reasons():
-    entity, issues, notes = validate(
-        technology(
-            technical_mechanism=None,
-            support=[
-                {
-                    "chunk_id": "c1",
-                    "quote": "not in the text",
-                    "supports": ["function"],
-                }
-            ],
-            uncertainty="механизм в тексте не описан",
-        )
-    )
-    assert entity.kind == ConceptKind.CANDIDATE
-    assert entity.classification_status == "proposed"
-    assert set(entity.contract_issues) == {
-        "missing:technical_mechanism",
-        "unsupported:mechanism",
-        "unsupported:function",
-        "model_uncertainty",
-    }
-    assert "entity:kv" not in issues
-    unmet = next(
-        note for note in notes if note["code"] == "technology_contract_unmet"
-    )
-    assert unmet["uncertainty"] == "механизм в тексте не описан"
-    assert any(note["code"] == "support_dropped" for note in notes)
-    # A claim about an undefined technology cannot attach to it.
-    assert any(
-        issue.startswith("role_type_mismatch")
-        for issue in issues["claim:developer"]
-    )
-
-
-@pytest.mark.shipped_technology_contract
-def test_shipped_contract_marks_unmet_technologies_without_demoting_them():
-    # 2026-09-29, live: GigaChat-3-Ultra leaves the contract fields empty on
-    # abstracts and READMEs, so enforcement demoted every technology and
-    # dropped every claim about it. Shipped: reported, not enforced.
-    entity, issues, notes = validate(technology(technical_mechanism=None))
-    assert entity.kind == ConceptKind.TECHNOLOGY
-    assert entity.classification_status == "proposed"
-    assert "missing:technical_mechanism" in entity.contract_issues
-    assert "claim:developer" not in issues
-    assert not any(
-        note["code"] == "technology_contract_unmet" for note in notes
-    )
-
-
-def test_bare_abbreviation_and_phantom_names_are_not_technologies():
-    entity, _, _ = validate(
-        technology(
-            label="KV",
-            source_names=[{"name": "KV"}],
-            evidence=[{"chunk_id": "c1", "quote": "KV"}],
-        )
-    )
-    assert "abbreviation_not_expanded" in entity.contract_issues
-    assert entity.kind == ConceptKind.CANDIDATE
-    entity, issues, notes = validate(
-        technology(source_names=[{"name": "quantum KV teleport"}])
-    )
-    # Neither the summarized label nor a real source name is in the text.
-    assert entity.source_names == []
-    assert "label_not_grounded" in issues["entity:kv"]
-    assert any(note["code"] == "source_name_dropped" for note in notes)
-
-
-def test_invalid_type_and_overlong_field_are_reported():
-    entity, _, _ = validate(
-        technology(technology_type="startup", boundary="word " * 60)
-    )
-    assert {"invalid_technology_type", "too_long:boundary"} <= set(
-        entity.contract_issues
-    )
-
-
-def test_profile_reaches_the_concept_and_the_run_audit():
-    result = asyncio.run(
-        process_document(
-            document(),
-            ReplayProvider(
-                [
-                    extraction(),
-                    {
-                        "items": [
-                            {
-                                "claim_id": "developer",
-                                "decision": "supported",
-                                "reason": "Stated.",
-                            }
-                        ]
-                    },
-                ]
-            ),
-            settings=settings(),
-        )
-    )
-    concept = next(
-        item for item in result.concepts if item.kind == ConceptKind.TECHNOLOGY
-    )
-    profile = concept.profile
-    assert profile["classification_status"] == "validated"
-    assert profile["technology_type"] == "software_system"
-    assert profile["source_names"] == [{"name": NAME, "context": "abstract"}]
-    # Retrospective labels exist and stay empty.
-    assert profile["signal_36m"] is None and profile["trend_36m"] is None
-    assert {tuple(item["supports"]) for item in profile["evidence"]} == {
-        ("mechanism",),
-        ("function",),
-    }
-    assert all(
-        item["document_version_id"] == "version"
-        for item in profile["evidence"]
-    )
-    bindings = result.run.metadata["entity_bindings"]
-    assert any(
-        binding.get("technology_profile") == profile
-        for binding in bindings.values()
-    )
-    assert any(
-        assertion.predicate == "developed_by"
-        for assertion in result.assertions
-    )
-
-
-def test_graph_write_carries_the_profile_to_the_vertex():
-    from lctrend.graph.store import GraphStore, evidence_chunk_ids
-    from tests.llm.test_parties_and_maturity import Transaction
-
-    doc = document()
+def run_case(case, registry=()):
+    doc = document([case["text"]])
+    doc.document_version_id = "version:" + case["id"]
     result = asyncio.run(
         process_document(
             doc,
-            ReplayProvider(
-                [
-                    extraction(),
-                    {
-                        "items": [
-                            {
-                                "claim_id": "developer",
-                                "decision": "supported",
-                                "reason": "Stated.",
-                            }
-                        ]
-                    },
-                ]
-            ),
+            ReplayProvider([case["extraction"], case["review"]]),
+            registry=registry,
             settings=settings(),
         )
     )
-    tx = Transaction()
-    asyncio.run(
-        GraphStore._write_document(
-            tx, doc, kept_chunk_ids=evidence_chunk_ids(result)
-        )
-    )
-    asyncio.run(GraphStore._write_extraction(tx, doc, result))
-    query, parameters = next(
-        (query, parameters)
-        for query, parameters in tx.queries
-        if "MERGE (c:Technology {concept_id" in query
-    )
-    assert "c.classification_status" in query
-    [row] = parameters["rows"]
-    assert row["profile"]["classification_status"] == "validated"
-    assert row["profile_json"] and '"signal_36m":null' in row["profile_json"]
-    # Mention rows do not repeat the profile.
-    assert not any(
-        "profile" in row
-        for query, parameters in tx.queries
-        if "MENTIONS" in query
-        for row in parameters.get("rows", [])
-    )
+    return doc, result
 
 
-def titled_document():
-    """An abstract that never names the method; only the title does."""
-    doc = document()
-    abstract = doc.chunks[0].model_copy(
-        update={"text": TEXT.replace(NAME, "it")}
-    )
-    title = Chunk(
-        chunk_id="c2", kind="title", text=f"{NAME} for long contexts", order=1
-    )
-    return doc.model_copy(update={"chunks": [abstract, title]})
-
-
-def test_title_is_context_of_every_packet_not_a_packet():
-    from lctrend.llm.context import DOCUMENT_CONTEXT, plan_packets
-
-    plan = plan_packets(titled_document(), settings())
-    assert [packet.focus_chunk_ids for packet in plan.packets] == [["c1"]]
-    [packet] = plan.packets
-    assert packet.support_chunk_ids == ["c2"]
-    assert packet.selection_reasons["c2"] == DOCUMENT_CONTEXT
-
-
-def test_a_method_named_only_in_the_title_is_extracted_in_one_call():
-    doc = titled_document()
-    answer = extraction(
-        technology(
-            evidence=[{"chunk_id": "c2", "quote": NAME}],
-            support=[
-                {
-                    "chunk_id": "c1",
-                    "quote": MECHANISM,
-                    "supports": ["mechanism"],
-                },
-                {
-                    "chunk_id": "c1",
-                    "quote": FUNCTION,
-                    "supports": ["function"],
-                },
-            ],
-        )
-    )
-    answer["claims"] = []
-    provider = ReplayProvider([answer, {"items": []}])
-    result = asyncio.run(process_document(doc, provider, settings=settings()))
+@pytest.mark.parametrize("case", CASES, ids=lambda c: c["id"])
+def test_gold_entity_types_and_graph_roundtrip(case):
+    doc, result = run_case(case)
     assert result.run.status == "succeeded"
-    assert len(provider.calls) == 1
-    assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
-    [concept] = [
-        item for item in result.concepts if item.kind == ConceptKind.TECHNOLOGY
+    assert len(result.concepts) == 1
+    concept = result.concepts[0]
+    assert concept.kind.value == case["expected_kind"]
+    assert len(result.entity_assessments) == 1
+    validate_extraction(doc, result)
+    tx = Transaction()
+    asyncio.run(GraphStore._write_extraction(tx, doc, result))
+    rows = [
+        row
+        for q, p in tx.queries
+        if "c.preferred_label = row.preferred_label" in q
+        for row in p["rows"]
     ]
-    assert concept.profile["classification_status"] == "validated"
+    loaded = _concept_from_properties(rows[0])
+    assert loaded == concept
+    if concept.kind == ConceptKind.TECHNOLOGY:
+        assert loaded.technology and loaded.definition
+        assert all(
+            doc.chunks[0].text[s.start : s.end] == s.quote
+            for s in loaded.technology.evidence
+        )
+        assert any("ASSESSED_ENTITY" in q for q, _ in tx.queries)
+    else:
+        assert not any("MERGE (c:Technology" in q for q, _ in tx.queries)
 
 
-def test_missing_name_quote_and_verb_form_are_repaired():
-    doc = titled_document()
-    entity = technology(
-        support=[
-            {"chunk_id": "c1", "quote": MECHANISM, "supports": ["mechanism"]},
-            {"chunk_id": "c1", "quote": FUNCTION, "supports": ["function"]},
-        ]
-    )
-    del entity["evidence"]
-    answer = extraction(entity)
-    answer["claims"][0]["predicate"] = "develop_by"
-    notes = []
-    result, issues = validate_local_extraction(
-        doc, Extraction.model_validate(answer), {"c1", "c2"}, notes
-    )
-    # The name is only in the title: its quote moved there.
-    [span] = result.entities[0].evidence
-    assert (span.chunk_id, span.quote) == ("c2", NAME)
-    assert "entity:kv" not in issues
-    assert result.entities[0].classification_status == "validated"
-    assert any(note["code"] == "name_quote_relocated" for note in notes)
-    claim = Extraction.model_validate(answer).claims[0]
-    claim.predicate = "reports_measurement"
-    from lctrend.llm.validation import _normalize_predicate
-
-    _normalize_predicate(claim, "claim:k", {"reported_measurement": {}}, notes)
-    assert claim.predicate == "reported_measurement"
-
-
-def test_languages_and_libraries_are_candidates_not_technologies():
-    entity, _, notes = validate(
-        technology(label="PyTorch", source_names=[{"name": NAME}])
-    )
-    assert entity.kind == ConceptKind.CANDIDATE
-    assert any(
-        note["code"] == "kind_normalized" and note["to"] == "ConceptCandidate"
-        for note in notes
-    )
-
-
-def test_a_dropped_item_does_not_make_the_document_partial():
-    from lctrend.llm.pipeline import _item_issue
-
-    assert _item_issue({"code": "invalid_items", "stage": "extract"})
-    assert not _item_issue({"code": "call_budget"})
-
-
-@pytest.mark.technology_triage
-def test_triage_turns_products_and_operations_into_candidates():
-    save = technology(
-        local_id="save",
-        label="Save",
-        source_names=[{"name": "Acme Inference"}],
-        evidence=[{"chunk_id": "c1", "quote": "Acme Inference"}],
-    )
-    answer = extraction()
-    answer["entities"].append(save)
-    triage = {
-        "items": [
-            {"id": "t1", "verdict": "technology", "reason": "подход"},
-            {
-                "id": "t2",
-                "verdict": "software_component",
-                "reason": "операция",
-            },
-        ]
-    }
-    review = {
-        "items": [
-            {"claim_id": "developer", "decision": "supported", "reason": "Ok."}
-        ]
-    }
-    provider = ReplayProvider([answer, review, triage])
+def test_completeness_all_concrete_approaches_without_claims_or_whitelist():
+    cases = CASES[:6]
+    text = "\n".join(c["text"] for c in cases)
+    doc = document([text])
+    extraction = {"entities": [c["extraction"]["entities"][0] for c in cases]}
+    review = {"entity_items": [c["review"]["entity_items"][0] for c in cases]}
     result = asyncio.run(
-        process_document(document(), provider, settings=settings())
+        process_document(
+            doc, ReplayProvider([extraction, review]), settings=settings()
+        )
     )
-    technologies = [
-        concept.preferred_label
-        for concept in result.concepts
-        if concept.kind == ConceptKind.TECHNOLOGY
+    assert len(result.concepts) == 6
+    assert all(c.kind == ConceptKind.TECHNOLOGY for c in result.concepts)
+    assert len(result.entity_assessments) == 6
+    assert result.assertions == []
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "missing_review",
+        "missing_field",
+        "foreign_quote",
+        "invented_quote",
+        "stitched",
+        "results_in_definition",
+        "application_only",
+    ],
+)
+def test_bad_definitions_do_not_mint_technology(attack):
+    case = deepcopy(CASES[1])
+    entity = case["extraction"]["entities"][0]
+    review = case["review"]["entity_items"][0]
+    if attack == "missing_review":
+        case["review"]["entity_items"] = []
+    elif attack == "missing_field":
+        entity["technology"]["evidence"][0]["supports_fields"].remove(
+            "mechanism"
+        )
+    elif attack == "foreign_quote":
+        entity["technology"]["evidence"][0]["chunk_id"] = "foreign:c1"
+    elif attack == "invented_quote":
+        entity["technology"]["evidence"][0]["quote"] = (
+            "It uses quantum teleportation."
+        )
+    elif attack == "stitched":
+        review["coherent"] = False
+    elif attack == "results_in_definition":
+        review["definition_only"] = False
+    else:
+        review["adaptation_or_base"] = False
+    _, result = run_case(case)
+    assert all(c.kind != ConceptKind.TECHNOLOGY for c in result.concepts)
+    assert result.entity_assessments[0].decision == "unresolved"
+    assert result.entity_assessments[0].reason
+
+
+def test_variants_share_identity_but_homonyms_do_not():
+    registry = ConceptRegistry()
+    _, first = run_case(CASES[1], registry)
+    variant = deepcopy(CASES[1])
+    variant["id"] = "vit_variant"
+    variant["text"] = variant["text"].replace(
+        "Vision Transformer", "vision-transformer"
+    )
+    entity = variant["extraction"]["entities"][0]
+    entity["label"] = "vision-transformer"
+    entity["evidence"][0]["quote"] = "vision-transformer"
+    entity["technology"]["evidence"][0]["quote"] = variant["text"]
+    variant["review"]["entity_items"][0]["evidence"][0]["quote"] = variant[
+        "text"
     ]
-    assert technologies == ["тиринг KV-кэша с выгрузкой контекста в DRAM/NVMe"]
-    rejected = [
-        binding["technology_profile"]
-        for binding in result.run.metadata["entity_bindings"].values()
-        if binding.get("technology_profile", {}).get("classification_status")
-        == "rejected"
+    _, second = run_case(variant, registry)
+    assert first.concepts[0].concept_id == second.concepts[0].concept_id
+    homonym = deepcopy(CASES[5])
+    homonym["id"] = "fis_optics"
+    # Same source name, different documented meaning.
+    homonym["text"] = (
+        "FIS-ML is an optical pulse detector using a "
+        "matched-lobe interferometer."
+    )
+    profile = homonym["extraction"]["entities"][0]["technology"]
+    profile.update(
+        definition="Optical pulse detection by matched-lobe interference.",
+        function="Detect optical pulses",
+        mechanism="matched-lobe interferometer",
+        boundary="Optical pulse detector",
+        identity_scope="optical detector",
+    )
+    profile["evidence"][0]["quote"] = homonym["text"]
+    review = homonym["review"]["entity_items"][0]
+    review["identity_scope"] = profile["identity_scope"]
+    review["evidence"][0]["quote"] = homonym["text"]
+    _, one = run_case(CASES[5], registry)
+    _, two = run_case(homonym, registry)
+    assert one.concepts[0].concept_id != two.concepts[0].concept_id
+
+
+def test_dry_run_preserves_inputs_and_never_writes_graph(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("dry run must not construct a graph writer")
+
+    monkeypatch.setattr(GraphStore, "__init__", forbidden)
+    doc, _ = run_case(CASES[0])
+    snapshot = {
+        "documents": [
+            {
+                "document": doc.model_dump(mode="json"),
+                "answers": [CASES[0]["extraction"], CASES[0]["review"]],
+            }
+        ]
+    }
+    before = deepcopy(snapshot)
+    plan = asyncio.run(
+        technology_dry_run(snapshot, replay=True, settings=settings())
+    )
+    assert snapshot == before == plan["original_snapshot"]
+    assert plan["graph_writes"] == 0
+    assert plan["summary"] == {"add": 1}
+
+
+def test_consistent_reviews_with_different_reasons_do_not_lose_technology():
+    from lctrend.llm.contracts import EntityReviewItem, Extraction
+    from lctrend.llm.validation import assess_entity, validate_local_extraction
+
+    case = CASES[1]
+    doc = document([case["text"]])
+    local, _ = validate_local_extraction(
+        doc, Extraction.model_validate(case["extraction"]), {"c1"}
+    )
+    first = EntityReviewItem.model_validate(case["review"]["entity_items"][0])
+    second = first.model_copy(
+        update={"reason": "Patch embedding is explicit."}
+    )
+    assessment = assess_entity(
+        doc, local.entities[0], [first, second], {"c1"}, "run:test"
+    )
+    assert assessment.resolved_kind == ConceptKind.TECHNOLOGY
+    second.specific = False
+    assessment = assess_entity(
+        doc, local.entities[0], [first, second], {"c1"}, "run:test"
+    )
+    assert assessment.resolved_kind == ConceptKind.CANDIDATE
+
+
+def test_method_can_become_technology_only_after_definition_review():
+    case = deepcopy(CASES[1])
+    case["extraction"]["entities"][0]["kind"] = "Method"
+    _, result = run_case(case)
+    assert result.concepts[0].kind == ConceptKind.TECHNOLOGY
+    case["review"]["entity_items"] = []
+    _, result = run_case(case)
+    assert result.concepts[0].kind == ConceptKind.CANDIDATE
+
+
+def test_definition_can_use_several_chunks_of_one_source():
+    case = deepcopy(CASES[1])
+    name, mechanism = case["text"].split(". ", 1)
+    doc = document([name + ".", mechanism], shared_stream=True)
+    spans = case["extraction"]["entities"][0]["technology"]["evidence"]
+    fields = spans[0]["supports_fields"]
+    spans[:] = [
+        {
+            "chunk_id": "c1",
+            "quote": name + ".",
+            "supports_fields": ["canonical_name", "function"],
+        },
+        {
+            "chunk_id": "c2",
+            "quote": mechanism,
+            "supports_fields": [
+                f for f in fields if f not in {"canonical_name", "function"}
+            ],
+        },
     ]
-    assert len(rejected) == 1
-    assert "triage:software_component" in rejected[0]["contract_issues"]
-    assert result.run.metadata["technology_triage"] == {
-        "candidates": 2,
-        "judged": 2,
-        "rejected": {"software_component": 1},
+    case["review"]["entity_items"][0]["evidence"] = [
+        {"chunk_id": "c2", "quote": mechanism}
+    ]
+    result = asyncio.run(
+        process_document(
+            doc,
+            ReplayProvider([case["extraction"], case["review"]]),
+            settings=settings(primary_chunks=2),
+        )
+    )
+    assert result.concepts[0].kind == ConceptKind.TECHNOLOGY
+    assert {s.chunk_id for s in result.concepts[0].technology.evidence} == {
+        "c1",
+        "c2",
     }
 
 
-@pytest.mark.technology_triage
-def test_failed_triage_keeps_the_candidates():
-    provider = ReplayProvider(
-        [
-            extraction(),
-            {
-                "items": [
-                    {
-                        "claim_id": "developer",
-                        "decision": "supported",
-                        "reason": "Ok.",
-                    }
-                ]
-            },
+def test_new_profile_does_not_change_search_scores():
+    from tests.ranking.test_search import T, corpus, search_response
+
+    data = corpus()
+    before = search_response(data, "финтех", T)
+    profile = (
+        run_case(CASES[0])[1].concepts[0].technology.model_dump(mode="json")
+    )
+    data.technology_profiles["pay"] = profile
+    after = search_response(data, "финтех", T)
+    # The reader exposes the definition; selection and ranking stay identical.
+    assert before["signals"] and after["signals"]
+    assert [(s["id"], s["score"]) for s in before["signals"]] == [
+        (s["id"], s["score"]) for s in after["signals"]
+    ]
+    assert (
+        next(s for s in after["signals"] if s["id"] == "pay")[
+            "technologyDefinition"
         ]
+        == profile
     )
-    result = asyncio.run(
-        process_document(document(), provider, settings=settings())
+
+
+def test_reviewed_identity_survives_an_explicit_merge():
+    from lctrend.core.models import ConceptName
+
+    _, result = run_case(CASES[1])
+    saved = result.concepts[0].model_copy(deep=True)
+    saved.concept_id = "retained-id-after-reviewed-merge"
+    saved.names.append(
+        ConceptName(
+            name_id="reviewed-name",
+            text="Vision Transformer",
+            normalized_text="vision transformer",
+            status="accepted",
+        )
     )
-    assert any(
-        concept.kind == ConceptKind.TECHNOLOGY for concept in result.concepts
-    )
-    assert result.run.metadata["technology_triage"]["failed_calls"]
+    _, later = run_case(CASES[1], [saved])
+    assert later.concepts[0].concept_id == saved.concept_id
+
+
+def test_legacy_key_migration_skips_reviewed_meanings():
+    from lctrend.graph.migration import plan_key_migration
+
+    _, result = run_case(CASES[1])
+    plan = plan_key_migration(result.concepts)
+    assert plan.updates == plan.merges == []
+
+
+def test_dry_run_cli_cannot_overwrite_its_input(tmp_path):
+    from argparse import Namespace
+
+    from lctrend.cli import _run
+
+    source = tmp_path / "snapshot.json"
+    source.write_text('{"documents": []}')
+    with pytest.raises(ValueError, match="must not overwrite"):
+        _run(
+            Namespace(
+                command="technology-dry-run",
+                input=source,
+                output=source,
+                replay=True,
+            )
+        )
+    assert source.read_text() == '{"documents": []}'
+
+
+def test_short_homonym_with_a_defined_mechanism_is_not_blacklisted():
+    # ML deliberately has a different, explicit meaning in this fixture.
+    case = json.loads(json.dumps(CASES[5]).replace("FIS-ML", "ML"))
+    _, result = run_case(case)
+    assert result.concepts[0].kind == ConceptKind.TECHNOLOGY
+    assert result.concepts[0].technology.mechanism
+
+
+def test_reviewed_explicit_alias_keeps_existing_identity():
+    registry = ConceptRegistry()
+    _, first = run_case(CASES[0], registry)
+    case = deepcopy(CASES[0])
+    entity = case["extraction"]["entities"][0]
+    entity["technology"]["canonical_name"] = "CNN"
+    entity["aliases"] = ["convolutional neural network"]
+    case["review"]["entity_items"][0]["canonical_name"] = "CNN"
+    _, second = run_case(case, registry)
+    assert second.concepts[0].concept_id == first.concepts[0].concept_id
+    assert second.concepts[0].preferred_label == "Convolutional neural network"
+    assert second.mentions[0].declared_aliases == [
+        "convolutional neural network"
+    ]
+
+
+def test_real_chunk_aliases_decode_definition_and_keep_evidence_nodes():
+    from lctrend.graph.store import evidence_chunk_ids
+
+    case = deepcopy(CASES[0])
+    doc = document(["CNN", case["text"]], shared_stream=True)
+    ids = ["chunk:" + "a" * 24, "chunk:" + "b" * 24]
+    for chunk, chunk_id in zip(doc.chunks, ids):
+        chunk.chunk_id = chunk_id
+    entity = case["extraction"]["entities"][0]
+    entity["technology"]["evidence"][0]["chunk_id"] = "c2"
+    review = case["review"]["entity_items"][0]
+    review["evidence"][0]["chunk_id"] = ids[1]
+    result = asyncio.run(process_document(
+        doc,
+        ReplayProvider([case["extraction"], case["review"]]),
+        settings=settings(primary_chunks=2),
+    ))
+    assert result.concepts[0].kind == ConceptKind.TECHNOLOGY
+    assert result.concepts[0].technology.evidence[0].chunk_id == ids[1]
+    validate_extraction(doc, result)
+    assert set(ids) <= evidence_chunk_ids(result)
+    assert result.concepts[0].profile["classification_status"] == "validated"

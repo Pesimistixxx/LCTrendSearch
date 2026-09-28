@@ -36,12 +36,11 @@ def test_duplicates_under_key_v2_are_merged_into_one_target():
     plan = plan_key_migration(concepts, mention_counts=mentions)
     merges = {(item.source, item.target) for item in plan.merges}
     # Most mentions wins among equals; the LLM synonym group is one
-    # concept; the family joins Method and Technology; AI, AM and the
+    # concept; Method and Technology retain their types; AI, AM and the
     # countries stay apart.
     assert merges == {
         ("concept:1", "concept:2"),
         ("concept:3", "concept:4"),
-        ("concept:7", "concept:8"),
     }
     keys = {item.concept_id: item.identity_key for item in plan.updates}
     assert keys["concept:9"] == "iso:IS"
@@ -51,7 +50,7 @@ def test_duplicates_under_key_v2_are_merged_into_one_target():
 
 def test_reviewed_and_canonical_concepts_are_preferred_targets():
     key = "квантов отжиг"
-    canonical = stable_id("concept", "technology", key)
+    canonical = stable_id("concept", "Technology", key)
     concepts = [
         concept("concept:old", "квантового отжига"),
         concept(canonical, "квантовый отжиг"),
@@ -218,7 +217,7 @@ def test_store_counts_forms_and_writes_identities_by_label():
     assert parameters["rows"][0]["identity_key"] == "llm"
 
 
-def test_mention_kinds_retype_a_compound_and_quotes_are_dropped():
+def test_mention_votes_preserve_technical_kind_and_quotes_are_dropped():
     from lctrend.core.models import ConceptName
 
     quote = "ML-236A, ML-236B and ML-236C, new inhibitors of cholesterogenesis"
@@ -247,10 +246,10 @@ def test_mention_kinds_retype_a_compound_and_quotes_are_dropped():
         [stored], kind_counts={"concept:ml": {"Material": 4, "Technology": 1}}
     )
     (update,) = plan.updates
-    assert (update.kind, update.new_kind) == ("Technology", "Material")
+    assert (update.kind, update.new_kind) == ("Technology", None)
     assert [name.text for name in update.names] == ["ml236b"]
     summary = plan.summary(False)
-    assert summary["retyped"] == 1 and summary["names_cleaned"] == 1
+    assert summary["retyped"] == 0 and summary["names_cleaned"] == 1
 
 
 def test_a_reviewed_concept_keeps_its_kind():

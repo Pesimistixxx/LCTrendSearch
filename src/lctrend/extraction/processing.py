@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -10,8 +9,7 @@ from uuid import uuid4
 
 from ..core.config import load_catalog
 from ..core.models import ExtractionResult, ProcessingRun, stable_id
-from ..linking.records import ECONOMIC_TYPES, link_known_technologies
-from ..llm.pipeline import _emit, process_document
+from ..llm.pipeline import process_document
 from .resolver import SemanticDeduplicator
 
 logger = logging.getLogger(__name__)
@@ -120,22 +118,9 @@ async def process_material(
                 metadata={"extraction": "disabled"},
             ),
         )
-    if document.document_type in ECONOMIC_TYPES:
-        # A grant or a vacancy naming a known technology needs no model:
-        # its money is structured and its link is a known name.
-        # Matching against the whole registry is CPU work; keep it off the
-        # event loop that runs the other documents.
-        linked = await asyncio.to_thread(
-            link_known_technologies, document, registry
-        )
-        if linked is not None:
-            logger.info(
-                "%s: linked to %d known technologies without the model",
-                document.document_version_id,
-                len(linked.concepts),
-            )
-            _emit(event, stage="done", status=linked.run.status, model_calls=0)
-            return linked
+    # Registry names are context hints, not document-local identity evidence.
+    # Even economic records need full extraction: a known skill must not
+    # hide new approaches or disambiguation elsewhere in the same record.
     if provider is None:
         from ..llm.client import JsonLLM
 

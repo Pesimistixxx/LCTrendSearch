@@ -50,7 +50,7 @@ def responses():
                 {
                     "local_id": "sensor",
                     "label": "Sensor S",
-                    "kind": "Technology",
+                    "kind": "Method",
                     "evidence": [{"chunk_id": "c1", "quote": "Sensor S"}],
                 },
                 {

@@ -82,7 +82,7 @@ def test_foreign_chunk_cannot_support_current_document_assertion():
     replacement["claims"][0]["evidence"] = [
         {"chunk_id": "foreign", "quote": related()["text"]}
     ]
-    provider = RecordingReplay([first, replacement])
+    provider = RecordingReplay([first, replacement, {"items": []}])
     result = asyncio.run(
         process_document(
             doc,
@@ -96,6 +96,7 @@ def test_foreign_chunk_cannot_support_current_document_assertion():
     assert [item["stage"] for item in provider.payloads] == [
         "extract",
         "extract",
+        "review",
     ]
 
 

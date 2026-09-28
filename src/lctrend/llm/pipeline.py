@@ -59,8 +59,12 @@ from .context import (
     review_batches,
     split_packet,
 )
-from .contracts import Extraction, Review, Triage
-from .validation import validate_local_extraction, validate_review
+from .contracts import Extraction, Review
+from .validation import (
+    assess_entity,
+    validate_local_extraction,
+    validate_review,
+)
 
 logger = logging.getLogger(__name__)
 # Indirection lets offline tests skip real backoff pauses.
@@ -88,9 +92,34 @@ def _prompt(stage: str) -> str:
     return path.read_text(encoding="utf-8-sig")
 
 
-def technology_profile(entity: Any, version_id: str) -> dict | None:
+def technology_profile(
+    entity: Any, version_id: str, assessment=None
+) -> dict | None:
     """The technology contract fields of a validated entity, with the
     quotes that support them (docs/technology-contract.md, section 3)."""
+    if assessment is not None and assessment.technology is not None:
+        profile = assessment.technology
+        return {
+            "classification_status": "validated",
+            "contract_issues": [],
+            "technical_mechanism": profile.mechanism,
+            "technical_function": profile.function,
+            "boundary": profile.boundary,
+            "identity_scope": profile.identity_scope,
+            "source_names": [
+                {"name": span.quote} for span in entity.evidence
+            ],
+            "signal_36m": None,
+            "trend_36m": None,
+            "evidence": [
+                {
+                    **span.model_dump(),
+                    "document_version_id": profile.document_version_id,
+                    "supports": list(span.supports_fields),
+                }
+                for span in profile.evidence
+            ],
+        }
     if entity.classification_status is None:
         return None
     return {
@@ -126,103 +155,6 @@ def technology_profile(entity: Any, version_id: str) -> dict | None:
             }
             for span in entity.support
         ],
-    }
-
-
-def _triage_enabled() -> bool:
-    settings = load_catalog("llm_schema")["technology_contract"].get(
-        "triage", {}
-    )
-    return bool(settings.get("enabled")) and os.getenv(
-        "LCTREND_TECHNOLOGY_TRIAGE", "1"
-    ) not in ("0", "false", "no")
-
-
-async def _triage(document, batches, budget, metadata) -> None:
-    """Sort the document's technology candidates; non-technologies
-    (products, library operations, features, titles, datasets, fields)
-    become ConceptCandidates with classification_status rejected.
-
-    One review call per group of candidates; a failed call keeps them.
-    """
-    contract = load_catalog("llm_schema")["technology_contract"]
-    kinds = set(contract["kinds"])
-    size = int(contract.get("triage", {}).get("max_entities", 40))
-    candidates = {}
-    for packet_id, extraction, _, _ in batches:
-        for entity in extraction.entities:
-            if entity.kind.value in kinds:
-                candidates[f"{packet_id}:{entity.local_id}"] = entity
-    if not candidates:
-        return
-    verdicts: dict[str, Any] = {}
-    failed = []
-    keys = list(candidates)
-    for start in range(0, len(keys), size):
-        group = keys[start : start + size]
-        payload = {
-            "document": {
-                "title": document.title,
-                "document_type": document.document_type.value,
-            },
-            "candidates": [
-                {
-                    "id": f"t{index}",
-                    "label": candidates[key].label,
-                    "kind": candidates[key].kind.value,
-                    **{
-                        field: getattr(candidates[key], name)
-                        for field, name in (
-                            ("definition", "definition"),
-                            ("mechanism", "technical_mechanism"),
-                            ("function", "technical_function"),
-                        )
-                        if getattr(candidates[key], name)
-                    },
-                    "quote": next(
-                        (
-                            span.quote
-                            for span in (
-                                *candidates[key].support,
-                                *candidates[key].evidence,
-                            )
-                        ),
-                        "",
-                    )[:300],
-                }
-                for index, key in enumerate(group, start + 1)
-            ],
-        }
-        try:
-            answer = await budget.call(
-                Triage, _prompt("triage"), payload, "review"
-            )
-        except LLMError as exc:
-            failed.append(exc.code)
-            continue
-        ids = {f"t{index}": key for index, key in enumerate(group, start + 1)}
-        for item in answer.items:
-            if item.id in ids:
-                verdicts[ids[item.id]] = item
-    rejected: dict[str, int] = {}
-    for key, entity in candidates.items():
-        item = verdicts.get(key)
-        if item is None or item.verdict == "technology":
-            continue
-        rejected[item.verdict] = rejected.get(item.verdict, 0) + 1
-        entity.kind = ConceptKind.CANDIDATE
-        entity.classification_status = "rejected"
-        entity.contract_issues = [
-            *entity.contract_issues,
-            "triage:" + item.verdict,
-        ]
-        if item.reason:
-            entity.uncertainty = entity.uncertainty or item.reason
-    metadata["technology_triage"] = {
-        "candidates": len(candidates),
-        "judged": len(verdicts),
-        "rejected": rejected,
-        **({"failed_calls": failed} if failed else {}),
     }
 
 
@@ -470,7 +402,10 @@ class _ChunkAliases:
         data = extraction.model_dump(mode="python")
         for item in [*data["entities"], *data["claims"]]:
             # Technology support quotes cite chunks like evidence does.
-            for span in [*item["evidence"], *item.get("support", [])]:
+            definition = (item.get("technology") or {}).get("evidence", [])
+            for span in [
+                *item["evidence"], *item.get("support", []), *definition
+            ]:
                 span["chunk_id"] = self.back.get(
                     span["chunk_id"].strip(), span["chunk_id"]
                 )
@@ -699,6 +634,7 @@ async def _review(
     budget,
     prompt,
     decisions,
+    entity_reviews,
     metadata,
     trace,
 ):
@@ -763,6 +699,10 @@ async def _review(
                 }
             )
             continue
+        expected = {e["local_id"] for e in payload["extraction"]["entities"]}
+        for item in review.entity_items:
+            if item.local_id in expected:
+                entity_reviews.setdefault(item.local_id, []).append(item)
         decisions.update({item.claim_id: item for item in review.items})
         metadata["issues"].extend(
             {
@@ -779,6 +719,7 @@ async def _review(
                 "stage": "verification",
                 "packet_id": packet_id,
                 "items": review.model_dump()["items"],
+                "entity_items": review.model_dump()["entity_items"],
             }
         )
 
@@ -846,7 +787,7 @@ async def _process_document(
     started = datetime.now(timezone.utc).isoformat()
     run = ProcessingRun(
         run_id=stable_id("run", document.document_version_id, uuid4()),
-        pipeline_version="material-llm/1",
+        pipeline_version="material-llm/2-technology",
         parser="llm_packets",
         started_at=started,
         prompt_hash=stable_id("prompts", json_value(prompts)),
@@ -1174,6 +1115,7 @@ async def _process_document(
                 }
             )
             decisions = {}
+            entity_reviews = {}
             context_pending = _pending_claims(extraction.context_requests)
             if extraction.context_requests:
                 metadata["issues"].append(
@@ -1185,7 +1127,7 @@ async def _process_document(
                         ],
                     }
                 )
-            if valid_claims:
+            if valid_claims or valid_entities:
                 await _review(
                     document,
                     packet.packet_id,
@@ -1196,11 +1138,51 @@ async def _process_document(
                     budget,
                     prompts["review"],
                     decisions,
+                    entity_reviews,
                     metadata,
                     trace,
                 )
+            assessments = {}
+            metadata.setdefault("entity_proposals", []).append(
+                {
+                    "packet_id": packet.packet_id,
+                    "entities": [
+                        e.model_dump(mode="json") for e in valid.entities
+                    ],
+                }
+            )
+            for entity in valid.entities:
+                assessment = assess_entity(
+                    document,
+                    entity,
+                    entity_reviews.get(entity.local_id, []),
+                    visible,
+                    run.run_id,
+                )
+                assessments[entity.local_id] = assessment
+                entity.kind = assessment.resolved_kind
+                if assessment.canonical_name:
+                    entity.label = assessment.canonical_name
+            # A changed entity type can invalidate a previously reviewed role.
+            _, revised_issues = validate_local_extraction(
+                document, valid, visible
+            )
+            for claim in valid.claims:
+                if "claim:" + claim.claim_id in revised_issues:
+                    current = decisions.get(claim.claim_id)
+                    if current is not None and current.decision == "supported":
+                        decisions.pop(claim.claim_id, None)
             batches.append(
-                (order, (packet.packet_id, valid, decisions, context_pending))
+                (
+                    order,
+                    (
+                        packet.packet_id,
+                        valid,
+                        decisions,
+                        context_pending,
+                        assessments,
+                    ),
+                )
             )
             processed.extend(original.focus_chunk_ids)
             # The title every packet reads is covered once a packet is.
@@ -1294,10 +1276,6 @@ async def _process_document(
     batches = [batch for _, batch in sorted(batches, key=lambda i: i[0])]
     failed = [packet_id for _, packet_id in sorted(failed)]
 
-    if batches and _triage_enabled():
-        _emit(event, stage="triage", status="running")
-        await _triage(document, batches, budget, metadata)
-
     # Assemble only source-anchored entities; matching names alone does not
     # dedup evidence.
     _emit(event, stage="assemble", status="running")
@@ -1307,9 +1285,12 @@ async def _process_document(
     definitions: dict[str, str] = {}
     profiles: dict[str, dict] = {}
     claims = []
-    for packet_id, extraction, decisions, pending in batches:
+    assessments_all = {}
+    for packet_id, extraction, decisions, pending, assessments in batches:
         for entity in extraction.entities:
             key = f"{packet_id}:{entity.local_id}"
+            assessment = assessments[entity.local_id]
+            assessments_all[assessment.assessment_id] = assessment
             # The ISO code, not a language-specific name, identifies a
             # country across documents and links it to metadata countries.
             canonical = (
@@ -1318,7 +1299,7 @@ async def _process_document(
                 else entity.label
             )
             profile = technology_profile(
-                entity, document.document_version_id
+                entity, document.document_version_id, assessment
             )
             if profile is not None:
                 profiles[key] = profile
@@ -1333,6 +1314,7 @@ async def _process_document(
                 )
                 mention = Mention(
                     mention_id=mention_id,
+                    entity_assessment=assessment,
                     chunk_id=span.chunk_id,
                     surface_text=span.quote,
                     canonical_text=canonical,
@@ -1575,6 +1557,7 @@ async def _process_document(
         document_version_id=document.document_version_id,
         run=run,
         mentions=list(mentions.values()),
+        entity_assessments=list(assessments_all.values()),
         concepts=concepts,
         resolutions=resolutions,
         assertions=list(assertions.values()),

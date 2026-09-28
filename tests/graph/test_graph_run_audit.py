@@ -197,7 +197,7 @@ def test_incomplete_run_preserves_prior_active_projection(
             Concept(
                 concept_id="technology:staged",
                 preferred_label="Sensor S",
-                kind=ConceptKind.TECHNOLOGY,
+                kind=ConceptKind.METHOD,
             )
         ]
         extraction.mentions = [
@@ -207,7 +207,7 @@ def test_incomplete_run_preserves_prior_active_projection(
                 surface_text="Sensor S",
                 start=0,
                 end=8,
-                type_candidates=[ConceptKind.TECHNOLOGY],
+                type_candidates=[ConceptKind.METHOD],
             )
         ]
         extraction.resolutions = [
@@ -475,7 +475,7 @@ def test_review_history_is_saved_on_each_run_creation_link():
                 Concept(
                     concept_id="tech:shared",
                     preferred_label="Sensor S",
-                    kind=ConceptKind.TECHNOLOGY,
+                    kind=ConceptKind.METHOD,
                 )
             ],
             assertions=[
