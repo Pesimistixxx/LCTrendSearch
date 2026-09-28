@@ -19,7 +19,8 @@ import logging
 import os
 import re
 import tempfile
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
+from concurrent.futures import TimeoutError as FutureTimeout
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -681,19 +682,48 @@ class JobManager:
                 self._save(job)
             return deepcopy(job)
 
-    def close(self, wait: bool = False) -> None:
+    def close(self, wait: bool = False, timeout: float | None = None) -> None:
+        """Stop new documents; with ``wait`` or ``timeout``, settle the rest.
+
+        Running documents may finish within ``timeout`` seconds; after that
+        their jobs are interrupted and recorded as such, so a server stop
+        never leaves a paid document silently "running" (G-4).
+        """
         with self._lock:
             self._closed = True
             for job_id, job in self._jobs.items():
                 if job["status"] in ACTIVE_STATUSES:
                     self.cancel_job(job_id)
             futures = list(self._futures.values())
-        if wait:
+        if timeout is not None:
+            wait = True
+            deadline = monotonic() + max(0.0, timeout)
+            for future in futures:
+                try:
+                    future.result(max(0.0, deadline - monotonic()))
+                except FutureTimeout:
+                    logger.warning("Interrupting a job still running at stop")
+                    future.cancel()
+                except (Exception, CancelledError):
+                    logger.debug("Job ended with an error", exc_info=True)
+            # A cancelled job records "interrupted" on the loop; give that
+            # bookkeeping a moment before the loop stops.
+            settle = monotonic() + 5
+            while monotonic() < settle:
+                with self._lock:
+                    if not any(
+                        job["status"] in ACTIVE_STATUSES
+                        for job in self._jobs.values()
+                    ):
+                        break
+                sleep(0.05)
+        elif wait:
             for future in futures:
                 try:
                     future.result()
                 except Exception:
                     logger.debug("Job ended with an error", exc_info=True)
+        if wait:
             self._stopping = True
             if self._wake is not None:
                 self._loop.loop.call_soon_threadsafe(self._wake.set)

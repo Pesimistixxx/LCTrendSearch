@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 import os
@@ -118,6 +119,17 @@ def _llm_endpoint(provider: str, base_url: str = "") -> tuple:
     profile = catalog.get("gigachat", {}) if provider == "gigachat" else {}
     url = base_url or profile.get("base_url") or catalog.get("base_url", "")
     return provider, (urlsplit(url).hostname or "").casefold()
+
+
+def _shutdown_grace() -> float:
+    """Seconds a stopping server waits for running documents.
+
+    Docker stops a container after 10 s by default, so the default fits.
+    """
+    try:
+        return max(0.0, float(os.getenv("LCTREND_SHUTDOWN_GRACE_SECONDS", 8)))
+    except ValueError:
+        return 8.0
 
 
 def _installed(name: str) -> bool:
@@ -266,8 +278,13 @@ def create_app(
         if crawl_manager is None and app.state.crawls is not None:
             app.state.crawls.close(wait=False)
         if manager is None:
-            logger.info("Stopping job manager")
-            app.state.manager.close(wait=False)
+            # Documents in flight may finish (their model calls are paid);
+            # past the grace period their jobs are recorded as interrupted.
+            grace = _shutdown_grace()
+            logger.info("Stopping job manager (grace %.0f s)", grace)
+            await asyncio.to_thread(
+                app.state.manager.close, wait=True, timeout=grace
+            )
 
     app = FastAPI(title="LCTrend: загрузка материалов", lifespan=lifespan)
     app.add_middleware(

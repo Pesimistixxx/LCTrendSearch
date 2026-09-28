@@ -1130,3 +1130,50 @@ def test_skipped_no_text_run_is_reported_as_no_text(tmp_path):
         assert record["error"]["code"] == "no_text"
     finally:
         instance.close(wait=True)
+
+
+def test_stop_lets_a_running_document_finish_within_the_grace(tmp_path):
+    # G-4: the server stopped at once and the running document's (paid)
+    # result was lost.
+    started = Event()
+
+    def process(doc, **kwargs):
+        started.set()
+        sleep(0.2)
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    job = instance.create_files(files(tmp_path, 1))
+    assert started.wait(5)
+    instance.close(timeout=5)
+    final = json.loads(
+        (tmp_path / "jobs" / job["job_id"] / "job.json").read_text("utf-8")
+    )
+    assert final["documents"][0]["status"] == "succeeded"
+    assert len(instance.fixture_store.writes) == 1
+
+
+def test_stop_past_the_grace_records_the_job_as_interrupted(tmp_path):
+    started, release = Event(), Event()
+
+    def process(doc, **kwargs):
+        started.set()
+        release.wait(10)
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    job = instance.create_files(files(tmp_path, 1))
+    try:
+        assert started.wait(5)
+        instance.close(timeout=0.2)
+        final = json.loads(
+            (tmp_path / "jobs" / job["job_id"] / "job.json").read_text(
+                "utf-8"
+            )
+        )
+        assert final["status"] == "interrupted"
+        document = final["documents"][0]
+        assert document["status"] == "failed"
+        assert document["error"]["code"] == "interrupted"
+    finally:
+        release.set()
