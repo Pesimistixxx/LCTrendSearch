@@ -768,6 +768,66 @@ class GraphStore:
 
         return await merge_concepts(self, source_id, target_id, reason)
 
+    async def read_concept_forms(
+        self,
+    ) -> Tuple[Dict[str, int], Dict[str, Dict[str, int]]]:
+        """Resolved mentions per concept and per canonical form."""
+        query = "\nUNION ALL\n".join(
+            f"MATCH (c:{cypher_identifier(label)})<-[m:MENTIONS]-(:Chunk) "
+            "WHERE c.concept_id IS NOT NULL "
+            "AND coalesce(m.resolution_status, '') <> 'ambiguous' "
+            "RETURN c.concept_id AS concept_id, "
+            "coalesce(m.canonical_text, m.surface_text) AS form, "
+            "count(m) AS mentions"
+            for label in CONCEPT_LABELS
+        )
+        mentions: Dict[str, int] = {}
+        forms: Dict[str, Dict[str, int]] = {}
+        async with self._driver.session(database=self._database) as session:
+            for record in await _records(session, query):
+                row = _data(record)
+                if row.get("form") is None:
+                    continue
+                concept_id, count = row["concept_id"], int(row["mentions"])
+                mentions[concept_id] = mentions.get(concept_id, 0) + count
+                counts = forms.setdefault(concept_id, {})
+                counts[row["form"]] = counts.get(row["form"], 0) + count
+        return mentions, forms
+
+    async def write_concept_identities(self, updates: List[Any]) -> None:
+        """Store key v2 identity keys, form counts and preferred labels."""
+        rows: Dict[str, List[Dict[str, Any]]] = {}
+        for update in updates:
+            rows.setdefault(cypher_identifier(update.kind), []).append(
+                {
+                    "concept_id": update.concept_id,
+                    "identity_key": update.identity_key,
+                    "label_counts_json": json_value(update.label_counts),
+                    "preferred_label": update.preferred_label,
+                }
+            )
+
+        async def write(tx: Any) -> None:
+            for label, items in rows.items():
+                for batch in _batches(items):
+                    await _run(
+                        tx,
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (c:{label} {{concept_id: row.concept_id}})
+                        SET c.identity_key = row.identity_key,
+                            c.key_version = $key_version,
+                            c.label_counts_json = row.label_counts_json,
+                            c.preferred_label = row.preferred_label,
+                            c.name = row.preferred_label
+                        """,
+                        rows=batch,
+                        key_version=KEY_VERSION,
+                    )
+
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(write)
+
     async def read_training_data(
         self,
     ) -> Tuple[

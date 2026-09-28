@@ -452,6 +452,17 @@ def _add_alias(concept: Concept, text: str) -> None:
     )
 
 
+def concept_identity(
+    text: str, kind: ConceptKind, groups: Sequence[AliasGroup] = ()
+) -> Tuple[str, ConceptKind]:
+    """Identity key and kind of a new concept; a synonym group fixes both."""
+    key = identity_key(text, kind)
+    group = _group(key, kind, groups or alias_groups())
+    if group is None or kind == ConceptKind.CANDIDATE:
+        return key, kind
+    return group.canonical, ConceptKind(group.kind)
+
+
 def _observe(
     concept: Concept, mention: Mention, groups: Sequence[AliasGroup]
 ) -> None:
@@ -482,11 +493,7 @@ def _new_concept(
     The same name reaches the same concept_id in any document order and in
     concurrent jobs; a curated synonym group fixes the kind and the key.
     """
-    kind = _mention_kind(mention)
-    key = identity_key(text, kind)
-    group = _group(key, kind, groups)
-    if group is not None:
-        key, kind = group.canonical, ConceptKind(group.kind)
+    key, kind = concept_identity(text, _mention_kind(mention), groups)
     concept_id = stable_id("concept", kind_family(kind), key)
     normalized = normalize_name(mention.surface_text)
     return Concept(
