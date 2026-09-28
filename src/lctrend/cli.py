@@ -17,8 +17,9 @@ from uuid import uuid4
 from .core.aio import resolve
 from .core.config import load_catalog, load_environment
 from .core.logging_config import setup_logging
+from .core.models import stable_id
 from .extraction.processing import process_material, seed_semantic
-from .extraction.resolver import ConceptRegistry
+from .extraction.resolver import ConceptRegistry, context_text
 from .graph.store import GraphStore
 from .graph.subgraphs import sample_subgraph, write_subgraph_rows
 from .graph.temporal import TemporalCorpus
@@ -45,6 +46,7 @@ from .ingest.connectors import (
 from .ingest.fulltext import attach_openalex_fulltext, require_pdf_support
 from .ingest.processed import covers, known_fulltexts, prior_inputs
 from .ingest.snapshots import persist_snapshot as _snapshot
+from .linking.reconcile import reconcile_quietly
 from .taxonomy import (
     TaxonomyConcept,
     build_taxonomy,
@@ -123,6 +125,8 @@ async def _write_ingested_async(
     async with publication or _NoLock():
         if result is not None:
             await resolve(store.write_processed(document, result))
+            # Old claims about the same concepts meet the new ones.
+            await reconcile_quietly(store, [document.document_version_id])
         else:
             await resolve(store.write_document(document))
     if result is not None:
@@ -504,6 +508,156 @@ def _crawl_openalex(
     asyncio.run(crawl())
 
 
+def _crawl_economic(
+    source: str,
+    query: str,
+    limit: int,
+    checkpoint: Path,
+    extract: bool,
+    extractor: str = "llm",
+    workers: int = 1,
+) -> None:
+    """Grants or vacancies of the economic layer (ingest.economic)."""
+    from .ingest.economic import DISCOVERERS, PARSERS, hydrate_hh
+
+    if source not in DISCOVERERS:
+        raise ValueError(f"Unknown economic source {source!r}")
+    query = query.strip()
+    if limit <= 0 or not query:
+        raise ValueError("limit must be positive and query nonempty")
+    if not 1 <= workers <= 16:
+        raise ValueError("workers must be 1..16")
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    state = (
+        json.loads(checkpoint.read_text(encoding="utf-8"))
+        if checkpoint.exists()
+        else {}
+    )
+    if state and (state.get("source"), state.get("query")) != (source, query):
+        raise RuntimeError(
+            "Checkpoint belongs to another crawl: "
+            f"{state.get('source')!r} {state.get('query')!r}"
+        )
+    processed = int(state.get("processed", 0))
+    cursor = state.get("cursor")
+    if state and cursor is None:
+        logger.info("%s crawl %r already finished", source, query)
+        return
+    provider = _provider(extract, extractor)
+
+    def save() -> None:
+        checkpoint.write_text(
+            json.dumps(
+                {
+                    "source": source,
+                    "query": query,
+                    "processed": processed,
+                    "cursor": cursor,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    async def one(item, store, registry, slots, publication) -> bool:
+        async with slots:
+            try:
+                payload = item["payload"]
+                if source == "hh":
+                    payload = await hydrate_hh(payload)
+                raw = json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True
+                ).encode("utf-8")
+                document = _snapshot(PARSERS[source](payload, raw=raw), raw)
+                prior = (
+                    await prior_inputs(store, document.document_version_id)
+                    if extract
+                    else []
+                )
+                if prior and covers(prior, document):
+                    logger.info(
+                        "%s=%s already processed; skipped",
+                        source,
+                        document.source.record_id,
+                    )
+                    return True
+                await _write_ingested_async(
+                    document,
+                    extract,
+                    store,
+                    extractor,
+                    provider,
+                    registry=registry,
+                    publication=publication,
+                )
+                return True
+            except Exception as exc:
+                if type(exc).__module__.startswith("neo4j"):
+                    raise
+                logger.warning(
+                    "%s=%s failed: %s: %s",
+                    source,
+                    item.get("source_id"),
+                    type(exc).__name__,
+                    exc,
+                )
+                logger.debug("Record traceback", exc_info=True)
+                return False
+
+    async def crawl():
+        nonlocal processed, cursor
+        slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
+        crawl_run = _crawl_run(source, query)
+        complete = False
+        async with (
+            _opened(_store()) as store,
+            _crawl_audit(store, crawl_run, checkpoint),
+        ):
+            await resolve(store.ensure_schema())
+            registry = await _job_registry(store, extract)
+            while processed < limit:
+                try:
+                    page = await DISCOVERERS[source](query, cursor)
+                except Exception:
+                    crawl_run["search_failures"] += 1
+                    raise
+                for limitation in page["limitations"]:
+                    logger.warning("%s: %s", source, limitation["message"])
+                items = page["items"][: limit - processed]
+                outcomes = await asyncio.gather(
+                    *(
+                        one(item, store, registry, slots, publication)
+                        for item in items
+                    )
+                )
+                processed += len(items)
+                crawl_run["records_seen"] += len(items)
+                crawl_run["records_ingested"] += outcomes.count(True)
+                crawl_run["failures"] += outcomes.count(False)
+                cursor = page["next_cursor"]
+                complete = page["complete"] and cursor is None
+                save()
+                crawl_run["checkpoint_json"] = checkpoint.read_text(
+                    encoding="utf-8"
+                )
+                await resolve(store.write_crawl_run(dict(crawl_run)))
+                logger.info(
+                    "%s processed=%d/%d total=%s",
+                    source,
+                    processed,
+                    limit,
+                    page["total"],
+                )
+                if cursor is None:
+                    break
+            crawl_run["exhaustive"] = (
+                complete
+                and not state
+                and crawl_run["search_failures"] == 0
+            )
+
+    asyncio.run(crawl())
+
+
 def _env_workers(default: int) -> int:
     """LCTREND_WORKERS, or the default when it is empty or not a number:
     a typo in .env must not break every command, --help included (H-8)."""
@@ -770,6 +924,39 @@ def main() -> None:
         help="Works processed concurrently (LLM, PDF, Neo4j), 1..16",
     )
 
+    economic_command = subparsers.add_parser(
+        "crawl-economic",
+        help="Crawl grants (nih, nsf) or vacancies (trudvsem, hh) of the "
+        "economic layer into Neo4j",
+    )
+    economic_command.add_argument(
+        "source", choices=("nih", "nsf", "trudvsem", "hh")
+    )
+    economic_command.add_argument(
+        "query",
+        help="A phrase; vacancies (trudvsem, hh) are searched in Russian",
+    )
+    economic_command.add_argument("--limit", type=int, default=200)
+    economic_command.add_argument(
+        "--checkpoint",
+        type=Path,
+        help="Resume state (default: one file per source and query in "
+        "artifacts/checkpoints)",
+    )
+    economic_command.set_defaults(extract=True)
+    economic_command.add_argument(
+        "--no-extract", dest="extract", action="store_false"
+    )
+    economic_command.add_argument(
+        "--extractor", choices=EXTRACTORS, default=default_extractor
+    )
+    economic_command.add_argument(
+        "--workers",
+        type=int,
+        default=_env_workers(settings.get("ingestion", {}).get("workers", 1)),
+        help="Records processed concurrently, 1..16",
+    )
+
     pypi_crawl_command = subparsers.add_parser(
         "crawl-pypi", help="Crawl a uniform PyPI sample into Neo4j"
     )
@@ -910,6 +1097,32 @@ def main() -> None:
         "<snapshot>.json)",
     )
 
+    prune_command = subparsers.add_parser(
+        "prune-chunks",
+        help="Remove chunk nodes nothing stands on (no mention, quote, "
+        "evidence or vector); a dry run without --apply",
+    )
+    prune_command.add_argument("--apply", action="store_true")
+    subparsers.add_parser(
+        "reconcile-claims",
+        help="Rebuild CORROBORATES / CONTRADICTS / SHARES_CONTEXT_WITH: "
+        "claims of the whole graph compared by slot",
+    )
+    similar_command = subparsers.add_parser(
+        "similar-rebuild",
+        help="Rebuild SIMILAR_TO: mutual nearest concepts by their stored "
+        "vectors (computed edges without evidence)",
+    )
+    similar_command.add_argument(
+        "--model",
+        help="Embedding model of the vectors (default: the semantic layer's)",
+    )
+    similar_command.add_argument("--k", type=int, help="Neighbours per node")
+    similar_command.add_argument("--min-cosine", type=float)
+    similar_command.add_argument(
+        "--dry-run", action="store_true", help="Count the edges, write none"
+    )
+
     merge_command = subparsers.add_parser(
         "merge-concepts",
         help="Merge a duplicate concept into another of its kind family",
@@ -925,6 +1138,53 @@ def main() -> None:
     )
     migrate_command.add_argument(
         "--apply", action="store_true", help="Write keys and run the merges"
+    )
+
+    kind_command = subparsers.add_parser(
+        "set-concept-kind",
+        help="Review a concept's kind within its family, e.g. a compound "
+        "extracted as a Technology is a Material",
+    )
+    kind_command.add_argument("concept_id")
+    kind_command.add_argument(
+        "kind", choices=["Technology", "Method", "Material"]
+    )
+
+    review_command = subparsers.add_parser(
+        "review-duplicates",
+        help="Review merge candidates with their graph context; merge the "
+        "aliases sources declared (a dry run without --apply)",
+    )
+    review_command.add_argument(
+        "--apply", action="store_true", help="Run the planned merges"
+    )
+    review_command.add_argument(
+        "--merge-above",
+        type=float,
+        help="Also merge semantic candidates with this cross-encoder score "
+        "or more (none by default)",
+    )
+    review_command.add_argument(
+        "--limit", type=int, help="Review at most this many pairs"
+    )
+
+    works_command = subparsers.add_parser(
+        "link-works",
+        help="Group stored documents into works: one paper from OpenAlex, "
+        "a PDF and arXiv, one patent as A1 and B1 (a dry run without "
+        "--apply)",
+    )
+    works_command.add_argument(
+        "--apply", action="store_true", help="Write the works"
+    )
+
+    normalize_command = subparsers.add_parser(
+        "normalize-graph",
+        help="Full country names, one node per company, organization types "
+        "from the catalog (a dry run without --apply)",
+    )
+    normalize_command.add_argument(
+        "--apply", action="store_true", help="Write the changes"
     )
 
     embed_command = subparsers.add_parser(
@@ -978,9 +1238,10 @@ async def _embed_concepts(store, force=False):
     written = 0
     for start in range(0, len(pending), semantic.batch_size):
         batch = pending[start : start + semantic.batch_size]
-        vectors = await asyncio.to_thread(
-            semantic.embed, [row["label"] for row in batch]
-        )
+        texts = [
+            context_text(row["label"], row.get("definition")) for row in batch
+        ]
+        vectors = await asyncio.to_thread(semantic.embed, texts)
         if vectors is None:
             raise RuntimeError(
                 "Embedding endpoint unavailable "
@@ -989,8 +1250,8 @@ async def _embed_concepts(store, force=False):
         await resolve(
             store.write_concept_embeddings(
                 [
-                    {**row, "vector": vector}
-                    for row, vector in zip(batch, vectors)
+                    {**row, "vector": vector, "text": text}
+                    for row, vector, text in zip(batch, vectors, texts)
                 ],
                 model,
             )
@@ -1063,6 +1324,52 @@ def _run(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.command == "set-concept-kind":
+        summary = asyncio.run(
+            _graph(
+                lambda store: resolve(
+                    store.set_concept_kind(args.concept_id, args.kind)
+                )
+            )
+        )
+        print(json.dumps(summary, ensure_ascii=False))
+        return
+
+    if args.command == "review-duplicates":
+        from .graph.review import review_duplicates
+
+        plan = asyncio.run(
+            _graph(
+                lambda store: review_duplicates(
+                    store, args.apply, args.merge_above, args.limit
+                )
+            )
+        )
+        print(
+            json.dumps(plan.summary(args.apply), ensure_ascii=False, indent=2)
+        )
+        return
+
+    if args.command == "link-works":
+        from .graph.works import link_stored_works
+
+        summary = asyncio.run(
+            _graph(lambda store: link_stored_works(store, args.apply))
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "normalize-graph":
+        from .graph.normalize import normalize_graph
+
+        plan = asyncio.run(
+            _graph(lambda store: normalize_graph(store, args.apply))
+        )
+        print(
+            json.dumps(plan.summary(args.apply), ensure_ascii=False, indent=2)
+        )
+        return
+
     if args.command == "embed-concepts":
         summary = asyncio.run(
             _graph(lambda store: _embed_concepts(store, args.force))
@@ -1093,6 +1400,24 @@ def _run(args: argparse.Namespace) -> None:
             args.extractor,
             fulltext=args.fulltext,
             filter=args.filter,
+            workers=args.workers,
+        )
+        return
+
+    if args.command == "crawl-economic":
+        _crawl_economic(
+            args.source,
+            args.query,
+            args.limit,
+            args.checkpoint
+            or Path("artifacts/checkpoints")
+            / (
+                f"{args.source}-"
+                + stable_id("query", args.query.strip().casefold())[-12:]
+                + ".json"
+            ),
+            args.extract,
+            args.extractor,
             workers=args.workers,
         )
         return
@@ -1178,6 +1503,39 @@ def _run(args: argparse.Namespace) -> None:
         )
         for warning in result["warnings"]:
             logger.warning("Backtest: %s", warning)
+        return
+
+    if args.command == "prune-chunks":
+        summary = asyncio.run(
+            _graph(lambda store: store.prune_text_chunks(apply=args.apply))
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "reconcile-claims":
+        from .linking.reconcile import reconcile
+
+        summary = asyncio.run(_graph(reconcile))
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "similar-rebuild":
+        from .extraction.processing import _semantic_deduplicator
+        from .linking.similar import rebuild
+
+        model = args.model or _semantic_deduplicator().embedding_model_name
+        summary = asyncio.run(
+            _graph(
+                lambda store: rebuild(
+                    store,
+                    model,
+                    k=args.k,
+                    min_cosine=args.min_cosine,
+                    dry_run=args.dry_run,
+                )
+            )
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
 
     if args.command == "build-taxonomy":

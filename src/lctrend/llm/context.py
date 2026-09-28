@@ -12,9 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..core.aio import resolve
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope, stable_id
+from ..linking.sections import SKIPPED_REASON, skipped_chunks
 
 SUPPLEMENTAL_PURPOSE = (
     "Supplemental interpretation only; not evidence for this document"
+)
+KNOWN_CONCEPTS_PURPOSE = (
+    "Reference names of concepts already in the graph; reuse a name only "
+    "when the source text names the same thing; never evidence"
 )
 
 
@@ -46,6 +51,9 @@ class PipelineSettings(BaseModel):
     max_retry_delay_seconds: float = Field(
         default=2.0, ge=0, allow_inf_nan=False
     )
+    # Packets of one document processed at once; the provider's concurrent
+    # request limit (keys x workers) caps it.
+    packet_workers: int = Field(default=1, ge=1, le=64)
 
     @model_validator(mode="after")
     def valid_limits(self) -> "PipelineSettings":
@@ -183,6 +191,7 @@ def build_payload(
     settings: PipelineSettings,
     feedback: Optional[List[str]] = None,
     related_context: Optional[List[Dict[str, Any]]] = None,
+    known_concepts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     chunks = _selected(
         document, [*packet.focus_chunk_ids, *packet.support_chunk_ids]
@@ -244,6 +253,18 @@ def build_payload(
             "purpose": SUPPLEMENTAL_PURPOSE,
             "chunks": related_context,
         }
+    if known_concepts:
+        # Optional reference (linking.known): trimmed first, so the packet
+        # keeps the map it was planned with.
+        known = list(known_concepts)
+        payload["known_concepts"] = {
+            "purpose": KNOWN_CONCEPTS_PURPOSE,
+            "concepts": known,
+        }
+        while known and _payload_size(payload) > settings.max_payload_chars:
+            known.pop()
+        if not known:
+            del payload["known_concepts"]
     # The index is navigation, not source evidence. Its bounded reduction is
     # visible; original source chunks, qualifiers and user-supplied metadata
     # are never sliced.
@@ -298,8 +319,9 @@ def _with_neighbors(
     result = packet.model_copy(deep=True)
     omitted = []
     by_id = _index(document)
+    skipped = skipped_chunks(document)
     for chunk_id in _neighbor_ids(document, packet.focus_chunk_ids):
-        if by_id[chunk_id].parse_status == "rejected":
+        if by_id[chunk_id].parse_status == "rejected" or chunk_id in skipped:
             omitted.append(chunk_id)
             continue
         candidate = result.model_copy(deep=True)
@@ -330,12 +352,18 @@ def plan_packets(
                 support_omissions[packet.packet_id] = omitted_support
             focus.clear()
 
+    skipped = skipped_chunks(document)
     for chunk in _ordered(document):
         if not chunk.text.strip() or chunk.parse_status == "rejected":
             omitted.append(chunk.chunk_id)
             reasons[chunk.chunk_id] = (
                 "empty_text" if not chunk.text.strip() else "parse_rejected"
             )
+            continue
+        if chunk.chunk_id in skipped:
+            # A data or administrative section (linking.sections).
+            omitted.append(chunk.chunk_id)
+            reasons[chunk.chunk_id] = SKIPPED_REASON + skipped[chunk.chunk_id]
             continue
         if focus and (
             len(focus) >= settings.primary_chunks

@@ -20,6 +20,8 @@
   "semantic": {"outlier_neighbors": 5},
   "graph": {"betweenness_samples": 256, "seed": 13},
   "subgraph": {"hops": 2, "max_neighbors": 30, "max_nodes": 400},
-  "coverage_families": {"scholarly": "article", "code": "repository", "package_registry": "package", "patent": "patent"},
+  "coverage_families": {"scholarly": "article", "code": "repository", "package_registry": "package", "patent": "patent", "funding": "grant", "labor_market": "job_posting"},
+  "snapshot_percentiles_note": "Rank among the technologies of the same snapshot (0..1) for money and demand: constant dollars remove inflation, the percentile also removes the growth of a whole field, so later snapshots stay in the range the model was trained on.",
+  "snapshot_percentiles": ["funding_amount_usd_real", "grant_amount_usd_real", "grant_amount_last_year_usd_real", "grant_count", "salary_median_usd_real", "job_posting_count"],
   "growth_source_families": {"scholarly": "scholarly", "code": "code", "package_registry": "package", "patent": "patent"}
 }

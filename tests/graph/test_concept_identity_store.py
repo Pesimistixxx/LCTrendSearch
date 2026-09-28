@@ -244,3 +244,114 @@ def test_an_unchanged_vector_keeps_its_observation_date():
     ) in query
     assert query.index("AS unchanged") < query.index("SET")
     assert parameters["model"] == "EmbeddingsGigaR"
+
+
+class VotingTransaction(Transaction):
+    """A stored node with kind votes another job already wrote."""
+
+    def __init__(self, stored, votes):
+        super().__init__(stored)
+        self.votes = votes
+
+    def run(self, query, **parameters):
+        if "RETURN id AS concept_id" in query:
+            self.queries.append((query, parameters))
+            return Result(
+                {
+                    "concept_id": concept_id,
+                    **{
+                        label: label in self.stored.get(concept_id, ())
+                        for label in ("Technology", "Method", "Material")
+                    },
+                    "kind_counts_json": json.dumps(self.votes),
+                }
+                for concept_id in parameters["ids"]
+            )
+        return super().run(query, **parameters)
+
+
+def write_voted(kind, own_votes, stored_votes):
+    document, result = extraction(kind)
+    result.concepts[0].kind_counts = own_votes
+    tx = VotingTransaction({"concept:graphene": ["Technology"]}, stored_votes)
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    return tx.queries
+
+
+def test_most_votes_relabel_a_stored_technology_down_to_a_material():
+    queries = write_voted(
+        ConceptKind.MATERIAL, {"Material": 3}, {"Technology": 1}
+    )
+    relabel = [q for q, _ in queries if "REMOVE c:Technology" in q]
+    assert relabel and "SET c:Material" in relabel[0]
+    query, parameters = next(
+        item for item in queries if "c.preferred_label" in item[0]
+    )
+    assert "MERGE (c:Material {concept_id" in query
+    assert json.loads(parameters["rows"][0]["kind_counts_json"]) == {
+        "Material": 3,
+        "Technology": 1,
+    }
+
+
+def test_votes_another_job_stored_are_not_lost_by_a_stale_copy():
+    # This copy saw one Material mention; the graph already holds three
+    # Technology votes: the node stays a Technology with both counted.
+    queries = write_voted(
+        ConceptKind.MATERIAL, {"Material": 1}, {"Technology": 3}
+    )
+    assert not [q for q, _ in queries if "REMOVE c:" in q]
+    _, parameters = next(
+        item for item in queries if "c.preferred_label" in item[0]
+    )
+    assert json.loads(parameters["rows"][0]["kind_counts_json"]) == {
+        "Material": 1,
+        "Technology": 3,
+    }
+
+
+def test_a_definition_is_written_without_erasing_a_stored_one():
+    document, result = extraction(ConceptKind.MATERIAL)
+    result.concepts[0].definition = "two-dimensional carbon"
+    tx = Transaction({})
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    query, parameters = next(
+        item for item in tx.queries if "c.preferred_label" in item[0]
+    )
+    assert "coalesce(row.definition" in query
+    assert parameters["rows"][0]["definition"] == "two-dimensional carbon"
+
+
+def test_a_declared_alias_candidate_is_stored_for_review():
+    document, result = extraction(ConceptKind.MATERIAL)
+    result.resolutions[0].candidates = [
+        {
+            "concept_id": "concept:other",
+            "kind": "Material",
+            "score": 1.0,
+            "method": "declared_alias",
+            "alias": "G",
+        }
+    ]
+    tx = Transaction({})
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    query, parameters = next(
+        item for item in tx.queries if "POSSIBLY_SAME_AS" in item[0]
+    )
+    assert "coalesce(r.review_status, 'pending')" in query
+    (row,) = parameters["rows"]
+    assert (row["source"], row["target"], row["method"], row["alias"]) == (
+        "concept:graphene",
+        "concept:other",
+        "declared_alias",
+        "G",
+    )
+
+
+def test_a_reviewed_kind_is_not_re_voted():
+    document, result = extraction(ConceptKind.MATERIAL)
+    result.concepts[0].status = "accepted"
+    result.concepts[0].kind_counts = {"Material": 1}
+    tx = VotingTransaction({"concept:graphene": ["Material"]}, {"Technology": 9})
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    assert not [q for q, _ in tx.queries if "REMOVE c:" in q]

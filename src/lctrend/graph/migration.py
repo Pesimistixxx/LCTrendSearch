@@ -2,8 +2,11 @@
 
 Concepts created before key v2 carry mention-derived ids and no identity
 key, and old lemmatization split one name into several concepts. The
-migration recomputes every concept's key, seeds its form counts from its
-mentions, and merges the concepts that key v2 identifies as one:
+migration recomputes every concept's key, seeds its form and kind counts
+from its mentions, settles the kind by those votes (a compound one document
+called a Technology is a Material when most mentions say so), drops quotes
+recorded as observed names, and merges the concepts that key v2 identifies
+as one:
 
 ``lctrend migrate-concept-keys`` prints the plan; ``--apply`` writes the
 keys and runs the merges (``graph.merge``). A second run finds nothing to
@@ -13,22 +16,33 @@ merge. Run it while no ingestion job is writing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from ..core.models import Concept, stable_id
-from ..extraction.lexical import KEY_VERSION, kind_family
-from ..extraction.resolver import _preferred, concept_identity
+from ..core.models import Concept, ConceptName, stable_id
+from ..extraction.lexical import (
+    KEY_VERSION,
+    KIND_RANK,
+    kind_family,
+    settled_kind,
+)
+from ..extraction.resolver import _preferred, concept_identity, observed_name
 
-_KIND_RANK = {"Material": 1, "Method": 2, "Technology": 3}
+_KIND_RANK = KIND_RANK
 
 
 @dataclass
 class IdentityUpdate:
     concept_id: str
+    # The label the node is stored under.
     kind: str
     identity_key: str
     label_counts: Dict[str, int]
     preferred_label: str
+    kind_counts: Dict[str, int] = field(default_factory=dict)
+    # The settled kind when it differs from the stored one.
+    new_kind: Optional[str] = None
+    # The names without recorded quotes, when some were dropped.
+    names: Optional[List[ConceptName]] = None
 
 
 @dataclass
@@ -46,19 +60,51 @@ class MigrationPlan:
     merges: List[ConceptMerge] = field(default_factory=list)
 
     def summary(self, apply: bool) -> Dict[str, Any]:
+        retyped = [item for item in self.updates if item.new_kind]
         return {
             "key_version": KEY_VERSION,
             "apply": apply,
             "concepts": len(self.updates),
+            "retyped": len(retyped),
+            "names_cleaned": sum(
+                item.names is not None for item in self.updates
+            ),
             "merges": len(self.merges),
+            "retype_plan": [
+                {
+                    "concept_id": item.concept_id,
+                    "label": item.preferred_label,
+                    "from": item.kind,
+                    "to": item.new_kind,
+                    "votes": item.kind_counts,
+                }
+                for item in retyped
+            ],
             "merge_plan": [item.__dict__ for item in self.merges],
         }
+
+
+def _without_quotes(concept: Concept) -> Optional[List[ConceptName]]:
+    """The concept's names without unreviewed quotes of its label.
+
+    Before observed names were cut to the label, a whole evidence quote
+    ("ML-236A, ML-236B and ML-236C, new inhibitors of ...") could be
+    recorded as a name. None when nothing is dropped.
+    """
+    kept = [
+        name
+        for name in concept.names
+        if name.status == "accepted"
+        or observed_name(name.text, concept.preferred_label) == name.text
+    ]
+    return kept if len(kept) < len(concept.names) else None
 
 
 def plan_key_migration(
     concepts: Sequence[Concept],
     mention_counts: Mapping[str, int] | None = None,
     form_counts: Mapping[str, Mapping[str, int]] | None = None,
+    kind_counts: Mapping[str, Mapping[str, int]] | None = None,
 ) -> MigrationPlan:
     """Group concepts by (kind family, key v2) and pick one target each.
 
@@ -68,6 +114,7 @@ def plan_key_migration(
     """
     mention_counts = mention_counts or {}
     form_counts = form_counts or {}
+    kind_counts = kind_counts or {}
     plan = MigrationPlan()
     groups: Dict[tuple, List[Concept]] = {}
     for concept in concepts:
@@ -77,6 +124,19 @@ def plan_key_migration(
         counts = dict(form_counts.get(concept.concept_id) or {})
         if not counts:
             counts = dict(concept.label_counts) or {concept.preferred_label: 1}
+        votes = {
+            vote: count
+            for vote, count in (
+                kind_counts.get(concept.concept_id) or concept.kind_counts
+            ).items()
+            if kind_family(vote) == family
+        }
+        # A reviewed concept and a curated synonym group keep their kind.
+        settled = (
+            settled_kind(votes, concept.kind)
+            if votes and concept.status != "accepted" and kind == concept.kind
+            else concept.kind.value
+        )
         plan.updates.append(
             IdentityUpdate(
                 concept_id=concept.concept_id,
@@ -86,6 +146,9 @@ def plan_key_migration(
                 preferred_label=concept.preferred_label
                 if concept.status == "accepted"
                 else _preferred(counts),
+                kind_counts=votes,
+                new_kind=settled if settled != concept.kind.value else None,
+                names=_without_quotes(concept),
             )
         )
     for (family, key), members in sorted(groups.items()):
@@ -125,7 +188,11 @@ async def apply_key_migration(
 
     concepts = await resolve(store.read_concepts())
     mention_counts, form_counts = await resolve(store.read_concept_forms())
-    plan = plan_key_migration(concepts, mention_counts, form_counts)
+    reader = getattr(store, "read_concept_kinds", None)
+    kind_counts = await resolve(reader()) if reader else {}
+    plan = plan_key_migration(
+        concepts, mention_counts, form_counts, kind_counts
+    )
     if not apply:
         return plan
     # Keys and counts first: a merge combines the targets' updated counts.

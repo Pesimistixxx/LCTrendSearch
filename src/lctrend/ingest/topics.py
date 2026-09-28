@@ -15,21 +15,28 @@ from pydantic import BaseModel, ConfigDict, Field
 MAX_TOPICS = 30
 MAX_QUERY_CHARS = 120
 
-SYSTEM = """You plan literature searches for a technology-scouting system
-that looks for weak signals of emerging technologies (for a bank's
-technology radar). Given a direction, propose distinct search queries for
-the OpenAlex scholarly API and GitHub search.
+SYSTEM = """You plan bulk literature crawls for a technology knowledge
+graph. The goal is coverage: each query should pull as many relevant
+papers from the OpenAlex scholarly API and repositories from GitHub search
+as possible. Given a direction, propose distinct search queries.
 
 Rules:
-- Each query is 2-6 words in English, a concrete technology, method or
-  material (e.g. "sodium-ion battery anode", "retrieval-augmented
-  generation"), not a whole field ("artificial intelligence") and not a
-  sentence.
-- Prefer emerging and specific sub-topics over established broad ones.
+- Each query is 1-4 words in English and names a broad, well-established
+  field or major sub-field with a large body of literature and code (e.g.
+  "machine learning", "computer vision", "natural language processing",
+  "reinforcement learning", "robotics", "computer networks"). Never a
+  narrow niche, a specific product, an application to one industry, or a
+  combination of two fields ("homomorphic encryption finance" is wrong).
+- If the direction is itself a field (e.g. "ML"), return its main
+  sub-fields; if it is "any" / "любое" / very general, return the major
+  domains of computer science and engineering.
+- Order from the largest and most central field to smaller ones; pick
+  the canonical names, not exotic or speculative ones.
 - Queries must not duplicate each other or the topics in "exclude", even
   as synonyms or abbreviations.
-- "why" is one short sentence in Russian: why the topic may be a signal.
-- Return exactly "count" topics unless the direction is too narrow.
+- "why" is one short sentence in Russian: what the field covers.
+- Return exactly "count" topics unless the direction has fewer
+  sub-fields.
 Return JSON: {"topics": [{"query": "...", "why": "..."}]}"""
 
 

@@ -16,6 +16,7 @@
     "catalog_note": "Strongest first. GigaChat-3-Ultra (15.07.2026) is available only to individuals on Freemium; paid plans receive 402/403/404 and fall through to GigaChat-2-Max. First-generation names GigaChat/GigaChat-Pro/GigaChat-Max are redirected by Sber to the -2 models.",
     "base_url": "https://api.giga.chat/v1",
     "auth_url": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+    "model_fallback": {"exhausted_statuses": [402], "unavailable_statuses": [403, 404], "note": "403 and 404: the model is outside this key's plan (catalog_note); the model is retired for this key, the key keeps its other models."},
     "scope": "GIGACHAT_API_PERS",
     "token_refresh_margin_seconds": 60,
     "max_concurrent_requests": 1,

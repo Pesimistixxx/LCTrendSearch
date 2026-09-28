@@ -22,8 +22,27 @@ def isolated_log_file(monkeypatch, tmp_path):
     # Offline tests never call the embeddings API; tests of the semantic
     # layer inject a fake deduplicator.
     monkeypatch.setenv("DEDUP_IN_LLM", "0")
+    # A developer's .env (loaded into the process by CLI tests) must never
+    # reach offline tests: its key pool, provider or Docker-only CA paths.
+    for name in (
+        "GIGACHAT_KEYS_FILE",
+        "LLM_PROVIDER",
+        "GIGACHAT_CA_BUNDLE_FILE",
+        "LLM_CA_BUNDLE_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     yield
     for name in ("lctrend", "frontend.server"):
         logger = logging.getLogger(name)
         remove_handlers(logger)
         logger.propagate = True
+
+
+@pytest.fixture(autouse=True)
+def forget_embedding_keys():
+    """Which keys embed is process-wide; each test starts from nothing."""
+    from lctrend.llm.client import reset_key_knowledge
+
+    reset_key_knowledge()
+    yield
+    reset_key_knowledge()

@@ -56,11 +56,16 @@ SCHOLARLY, CODE, PACKAGE, PATENT = (
     "package_registry",
     "patent",
 )
+# The economic layer (ingest.economic): money and demand, not
+# implementation outcomes.
+FUNDING, LABOR_MARKET = "funding", "labor_market"
 FAMILY_BY_TYPE = {
     "article": SCHOLARLY,
     "repository": CODE,
     "package": PACKAGE,
     "patent": PATENT,
+    "grant": FUNDING,
+    "job_posting": LABOR_MARKET,
 }
 
 
@@ -89,12 +94,28 @@ def _json(value: object) -> Dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _facts(value: object) -> Tuple[Dict[str, Any], ...]:
+    if not value:
+        return ()
+    try:
+        loaded = json.loads(str(value)) if isinstance(value, str) else value
+    except ValueError:
+        return ()
+    if not isinstance(loaded, list):
+        return ()
+    return tuple(item for item in loaded if isinstance(item, dict))
+
+
 def _tuple(value: object) -> Tuple[str, ...]:
     return tuple(str(item) for item in value or () if item is not None)
 
 
 @dataclass(frozen=True)
 class Version:
+    # The work the version is a copy of (graph.works): an OpenAlex record,
+    # its PDF and its preprint are versions of one work, so a technology
+    # seen in all three is seen in one document. Graphs without works use
+    # the document itself.
     document_id: str
     version_id: str
     document_type: str
@@ -122,6 +143,11 @@ class Version:
     undated: bool = False
     # Dated metric observations of this unchanged content, oldest first.
     metric_history: Tuple[Tuple[date, Dict[str, float]], ...] = ()
+    # Structured money of the record (ingest.economic): grant awards,
+    # salary offers, with nominal and constant-dollar amounts.
+    economic_facts: Tuple[Dict[str, Any], ...] = ()
+    # The stored Document of this source, when it differs from the work.
+    source_document_id: Optional[str] = None
 
     def metrics_known_at(
         self, cutoff: date
@@ -402,8 +428,9 @@ class TemporalCorpus:
                 skipped += 1
                 continue
             document_type = str(row.get("document_type") or "")
+            work_id = str(row.get("work_id") or row["document_id"])
             version = Version(
-                document_id=str(row["document_id"]),
+                document_id=work_id,
                 version_id=str(row["version_id"]),
                 document_type=document_type,
                 family=str(
@@ -436,14 +463,22 @@ class TemporalCorpus:
                 as_known=as_known,
                 undated=version_date is None,
                 metric_history=_metric_history(row),
+                economic_facts=_facts(row.get("economic_facts_json")),
+                source_document_id=(
+                    str(row["document_id"])
+                    if str(row["document_id"]) != work_id
+                    else None
+                ),
             )
             self.versions[version.version_id] = version
             self.document_versions.setdefault(version.document_id, []).append(
                 version
             )
-            if row.get("title") or row.get("url"):
+            info = self.document_info.get(version.document_id) or {}
+            if not info.get("url") and (row.get("title") or row.get("url")):
+                # A work shows the first of its copies that has a link.
                 self.document_info[version.document_id] = {
-                    "title": row.get("title"),
+                    "title": row.get("title") or info.get("title"),
                     "url": row.get("url"),
                 }
         for versions in self.document_versions.values():

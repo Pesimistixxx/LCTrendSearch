@@ -4,7 +4,7 @@
     "baseline": "BASELINE", "application": "APPLICATION", "metric": "METRIC", "material": "MATERIAL",
     "organization": "ORGANIZATION", "country": "COUNTRY", "parent": "PARENT", "domain": "DOMAIN", "market": "MARKET"
   },
-  "organization_relationships": {"owner": "OWNED_BY", "applicant": "APPLIED_BY", "funder": "FUNDED_BY"},
+  "organization_relationships": {"owner": "OWNED_BY", "applicant": "APPLIED_BY", "funder": "FUNDED_BY", "grant_recipient": "AWARDED_TO", "employer": "POSTED_BY"},
   "organization_labels": {"university": "University", "company": "Company"},
   "projection_note": "Each projection turns a reviewed, affirmed, reported/observed assertion into a direct edge carrying its evidence, run and date.",
   "projections": {
@@ -21,6 +21,8 @@
     "tested_in": {"relationship": "TESTED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]},
     "deployed_in": {"relationship": "DEPLOYED_IN", "source_role": "subject", "target_role": "country", "source_kinds": ["Technology", "Method", "Material"], "target_kinds": ["Country"]}
   },
+  "chunk_nodes": "evidence",
+  "chunk_nodes_note": "evidence: only chunks with a mention, a claim quote, economic evidence or an evidence vector become :Chunk nodes; the full text stays in the raw snapshot and ProcessingRun.input_chunk_ids lists what a run read. all: every chunk (the full-text search_graph then covers all text). An import without extraction (--no-extract, web mode none) writes no chunks, so the extractor's related context (search_graph) sees text of processed documents only. A chunk detached on republish stays while a superseded claim still cites it. lctrend prune-chunks removes text-only chunks of an existing graph; irreversible, back up Neo4j first.",
   "maturity_predicate": "reports_maturity_stage",
   "maturity_stage_rank": {"concept": 1, "laboratory_validation": 2, "prototype": 3, "pilot": 4, "commercial_deployment": 5, "mass_adoption": 6}
 }

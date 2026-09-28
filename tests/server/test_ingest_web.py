@@ -685,3 +685,28 @@ def test_neo4j_readiness_is_reused_between_polls(monkeypatch):
     monkeypatch.setattr(app_module, "NEO4J_STATUS_TTL_SECONDS", 0.0)
     app_module._neo4j_ready()
     assert len(checks) == 2
+
+
+def test_llm_stats_endpoint_serves_timing_without_secrets(api):
+    from lctrend.llm.stats import STATS
+
+    client, _, _ = api
+    STATS.reset()
+    STATS.register("main", 2)
+    STATS.record(
+        {
+            "key": "main",
+            "stage": "extract",
+            "status": "ok",
+            "queue_ms": 1200,
+            "duration_ms": 30000,
+            "tokens": {"prompt_tokens": 5000, "completion_tokens": 2400},
+        }
+    )
+    stats = client.get("/api/llm/stats").json()
+    assert stats["capacity"] == 2
+    assert stats["keys"]["main"]["totals"]["calls"] == 1
+    extract = stats["stages"]["extract"]
+    assert extract["request_ms_p50"] == 30000
+    assert extract["queue_ms_p50"] == 1200
+    assert extract["output_tokens_per_request_second"] == 80.0

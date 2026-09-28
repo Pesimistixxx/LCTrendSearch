@@ -107,8 +107,12 @@ async def request(
     headers: Optional[Dict[str, str]] = None,
     *,
     max_bytes: Optional[int] = None,
+    method: str = "GET",
+    json_body: Optional[Dict[str, Any]] = None,
 ) -> httpx.Response:
-    """GET with retries; the body is read (and bounded by ``max_bytes``)."""
+    """GET (or an idempotent search POST) with retries; the body is read
+    (and bounded by ``max_bytes``).
+    """
     settings = load_catalog("sources")["http"]
     request_headers = {"User-Agent": settings["user_agent"]}
     request_headers.update(headers or {})
@@ -126,7 +130,7 @@ async def request(
             delay: Optional[float] = None
             try:
                 async with client.stream(
-                    "GET", url, headers=request_headers
+                    method, url, headers=request_headers, json=json_body
                 ) as response:
                     if response.is_success:
                         body = bytearray()
@@ -171,7 +175,8 @@ async def request(
                 delay = min(cap, base * 2 ** (attempt - 1))
                 delay += random.uniform(0, delay / 4)
             logger.warning(
-                "GET %s failed (%s), retry %d/%d in %.1fs",
+                "%s %s failed (%s), retry %d/%d in %.1fs",
+                method,
                 _host(url),
                 reason,
                 attempt,
@@ -183,11 +188,18 @@ async def request(
 
 
 async def fetch_json(
-    url: str, headers: Optional[Dict[str, str]] = None
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    logger.debug("GET %s", url)
+    """GET a JSON document, or POST ``json_body`` to a search endpoint."""
+    method = "GET" if json_body is None else "POST"
+    logger.debug("%s %s", method, url)
     response = await request(
-        url, {"Accept": "application/json", **(headers or {})}
+        url,
+        {"Accept": "application/json", **(headers or {})},
+        method=method,
+        json_body=json_body,
     )
     return json.loads(response.content.decode("utf-8"))
 

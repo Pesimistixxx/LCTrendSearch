@@ -1,6 +1,9 @@
 CREATE CONSTRAINT source_id IF NOT EXISTS FOR (n:Source) REQUIRE n.source_id IS UNIQUE;
 CREATE CONSTRAINT document_id IF NOT EXISTS FOR (n:Document) REQUIRE n.document_id IS UNIQUE;
 CREATE CONSTRAINT document_version_id IF NOT EXISTS FOR (n:DocumentVersion) REQUIRE n.document_version_id IS UNIQUE;
+CREATE CONSTRAINT work_id IF NOT EXISTS FOR (n:Work) REQUIRE n.work_id IS UNIQUE;
+CREATE CONSTRAINT work_key IF NOT EXISTS FOR (n:WorkKey) REQUIRE n.key IS UNIQUE;
+CREATE INDEX document_work IF NOT EXISTS FOR (n:Document) ON (n.work_id);
 CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (n:Chunk) REQUIRE n.chunk_id IS UNIQUE;
 CREATE CONSTRAINT contributor_id IF NOT EXISTS FOR (n:Contributor) REQUIRE n.contributor_id IS UNIQUE;
 CREATE CONSTRAINT organization_id IF NOT EXISTS FOR (n:Organization) REQUIRE n.organization_id IS UNIQUE;
@@ -38,6 +41,8 @@ CREATE INDEX targets_market_version IF NOT EXISTS FOR ()-[r:TARGETS_MARKET]-() O
 CREATE INDEX manufactured_in_version IF NOT EXISTS FOR ()-[r:MANUFACTURED_IN]-() ON (r.document_version_id);
 CREATE INDEX tested_in_version IF NOT EXISTS FOR ()-[r:TESTED_IN]-() ON (r.document_version_id);
 CREATE INDEX deployed_in_version IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.document_version_id);
+CREATE CONSTRAINT economic_fact_id IF NOT EXISTS FOR (n:EconomicFact) REQUIRE n.fact_id IS UNIQUE;
+CREATE INDEX economic_fact_category IF NOT EXISTS FOR (n:EconomicFact) ON (n.category);
 CREATE CONSTRAINT crawl_run_id IF NOT EXISTS FOR (n:CrawlRun) REQUIRE n.crawl_id IS UNIQUE;
 CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.node_id IS UNIQUE;
 CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);

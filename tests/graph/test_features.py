@@ -77,7 +77,10 @@ def test_only_factual_affirmative_confirmed_economics_contribute_to_amounts():
     assert row["economic_planned_count"] == 1
     assert row["economic_hypothetical_count"] == 1
     assert row["economic_negated_count"] == 1
-    assert row["funding_amount_usd"] == 7
+    # 7 USD of 2020 in dollars of the base year (money.json).
+    assert row["funding_amount_usd_real"] == pytest.approx(
+        7 * 321.962 / 258.856, rel=1e-3
+    )
 
 
 def test_supported_performance_forecasts_do_not_count_as_realized_gains():
@@ -99,7 +102,7 @@ def test_supported_performance_forecasts_do_not_count_as_realized_gains():
         view, date(2021, 1, 1), ["reported", "observed"], 3
     )
     assert row["performance_gain_evidence"] == 1
-    assert row["funding_amount_usd"] is None
+    assert row["funding_amount_usd_real"] is None
     assert row["economic_signal_recency_days"] is None
 
 

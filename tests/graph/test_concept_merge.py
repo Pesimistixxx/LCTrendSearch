@@ -221,3 +221,69 @@ def test_cli_merge_command_calls_the_store(monkeypatch):
     )
     cli.main()
     assert calls == [("concept:b", "concept:a", "duplicate")]
+
+
+def test_a_merge_sums_kind_votes_and_keeps_a_definition():
+    target = concept(
+        "concept:a",
+        "ML-236B",
+        kind=ConceptKind.TECHNOLOGY,
+        kind_counts={"Technology": 1},
+    )
+    source = concept(
+        "concept:b",
+        "compactin",
+        kind=ConceptKind.MATERIAL,
+        kind_counts={"Material": 4},
+        definition="HMG-CoA reductase inhibitor",
+    )
+    merged = merged_concept(target, source)
+    assert merged.kind == ConceptKind.MATERIAL
+    assert merged.kind_counts == {"Technology": 1, "Material": 4}
+    assert merged.definition == "HMG-CoA reductase inhibitor"
+
+
+def test_set_concept_kind_relabels_within_the_family_and_accepts():
+    from lctrend.graph import merge as merge_module
+
+    queries = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def execute_write(self, callback):
+            class Tx:
+                async def run(self, query, **parameters):
+                    queries.append((query, parameters))
+
+                    class Done:
+                        async def consume(self):
+                            return None
+
+                    return Done()
+
+            return await callback(Tx())
+
+    store = GraphStore.__new__(GraphStore)
+    store._database = "neo4j"
+    store._driver = type("D", (), {"session": lambda self, **_: Session()})()
+
+    async def found(_, ids):
+        return {"c:ml": (concept("c:ml", "ML-236B"), "provisional")}
+
+    original = merge_module.read_concepts_by_id
+    merge_module.read_concepts_by_id = found
+    try:
+        summary = asyncio.run(store.set_concept_kind("c:ml", "Material"))
+        with pytest.raises(ValueError):
+            asyncio.run(store.set_concept_kind("c:ml", "Company"))
+    finally:
+        merge_module.read_concepts_by_id = original
+    assert summary["to"] == "Material"
+    (query, parameters), = queries
+    assert "REMOVE c:Technology" in query and "SET c:Material" in query
+    assert "c.status = 'accepted'" in query

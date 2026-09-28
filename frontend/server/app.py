@@ -293,6 +293,9 @@ def _status() -> dict:
                 if provider_name == "gigachat"
                 else "LLM_API_KEY"
             )
+            # A key pool file replaces the single GigaChat key.
+            or provider_name == "gigachat"
+            and os.getenv("GIGACHAT_KEYS_FILE")
         ),
         "message": "Настройте подключение модели",
     }
@@ -565,6 +568,14 @@ def create_app(
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/api/llm/stats")
+    def llm_stats():
+        """Model request timing per key and stage since the server started:
+        request and queue percentiles, output speed, keys busy now."""
+        from lctrend.llm.stats import STATS
+
+        return STATS.snapshot()
 
     @app.get("/api/ingest/status")
     def status():

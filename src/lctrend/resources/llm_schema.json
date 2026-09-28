@@ -29,6 +29,9 @@
   "country_code_pattern": "^[A-Z]{2}$",
   "grounded_label_kinds_note": "Kinds whose label is a name the source itself writes: it must occur, up to case and inflection, in an evidence quote or chunk (label_not_grounded otherwise). Descriptive kinds (Metric, Task, Problem, ApplicationContext, ConceptCandidate) are named in the model's own words and are not checked.",
   "grounded_label_kinds": ["Technology", "Method", "Material", "Organization", "Company", "University", "Country", "Domain", "MarketSegment"],
+  "organization_kinds": ["Organization", "Company", "University"],
+  "organization_kind_note": "The kind of a named organization is decided by the organization catalog (sources.json known names, legal forms, university markers) before the model's guess: Samsung is a Company whatever the model says. An organization label must be a proper name: without a capital letter it is a group of people ('third parties', 'developers'); with a personal title it is a person.",
+  "person_title_pattern": "^(?i:dr|prof|mr|mrs|ms|sir|др|проф|г-н|г-жа)\\.?\\s",
   "predicates": {
     "targets_problem": {
       "required_roles": ["subject", "problem"], "allowed_roles": ["subject", "problem"],

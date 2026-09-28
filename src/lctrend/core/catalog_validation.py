@@ -27,6 +27,8 @@ CATALOG_NAMES = (
     "taxonomy",
     "countries",
     "ranking",
+    "generic_terms",
+    "money",
 )
 KINDS = {kind.value for kind in ConceptKind}
 DOCUMENT_TYPES = {kind.value for kind in DocumentType}
@@ -100,6 +102,42 @@ def _patterns(value: Any, path: str) -> None:
 def _identifier(value: Any, path: str) -> None:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _text(value, path)):
         _fail(path, "invalid Cypher identifier")
+
+
+def _vocabulary(catalog: Mapping) -> None:
+    _strings(catalog.get("openalex", []), "generic_terms.openalex")
+    for group, terms in _mapping(
+        catalog.get("curated", {}), "generic_terms.curated"
+    ).items():
+        _strings(terms, "generic_terms.curated." + group)
+    _strings(catalog.get("fillers", []), "generic_terms.fillers")
+
+
+def _money(catalog: Mapping) -> None:
+    base = _number(
+        _required(catalog, "base_year", "money"),
+        "money.base_year",
+        1900,
+        integer=True,
+    )
+    deflator = _mapping(
+        _required(catalog, "deflator", "money"), "money.deflator"
+    )
+    if str(base) not in deflator:
+        _fail("money.deflator", f"no value for base_year {base}")
+    for year, value in deflator.items():
+        if not re.fullmatch(r"\d{4}", year):
+            _fail("money.deflator." + year, "must be a year")
+        _number(value, "money.deflator." + year, 1e-9)
+    for currency, years in _mapping(
+        _required(catalog, "fx", "money"), "money.fx"
+    ).items():
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            _fail("money.fx." + currency, "must be an ISO 4217 code")
+        for year, value in _mapping(years, "money.fx." + currency).items():
+            if not re.fullmatch(r"\d{4}", year):
+                _fail(f"money.fx.{currency}.{year}", "must be a year")
+            _number(value, f"money.fx.{currency}.{year}", 1e-12)
 
 
 def _sources(catalog: Mapping) -> None:
@@ -701,6 +739,8 @@ def validate_catalogs(catalogs: Optional[Mapping[str, Any]] = None) -> None:
     for code in set(names) - set(codes):
         _fail("countries.names." + code, "not an assigned ISO code")
     try:
+        _vocabulary(catalogs["generic_terms"])
+        _money(catalogs["money"])
         _sources(catalogs["sources"])
         _extraction(catalogs["extraction"])
         _pipeline(catalogs["pipeline"])

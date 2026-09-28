@@ -9,6 +9,7 @@ when a model has no tokens left or is not available to the account.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -18,7 +19,6 @@ import threading
 import weakref
 from collections import deque
 from collections.abc import Mapping, Sequence
-from contextlib import AsyncExitStack
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -35,6 +35,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from ..core.config import load_catalog
+from .stats import STATS
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -49,39 +50,57 @@ CALL_LOG: ContextVar[Optional[list]] = ContextVar("llm_call_log", default=None)
 MAX_RETAINED_CALLS = 2000
 
 
-# One request limit per provider endpoint for the whole process: the CLI,
-# the web job loop, the resolver's own client and embedding threads all
-# count against LLM_MAX_CONCURRENCY together (B-10).
-_PROCESS_LIMITS: Dict[Tuple[str, str, int], threading.BoundedSemaphore] = {}
+# One request limit per provider endpoint and key for the whole process: the
+# CLI, the web job loop, the resolver's own client and embedding threads all
+# count against LLM_MAX_CONCURRENCY together (B-10). Each key of a KeyPool
+# has its own limit: providers count concurrent streams per account.
+_PROCESS_LIMITS: Dict[
+    Tuple[str, str, str, int], threading.BoundedSemaphore
+] = {}
 _PROCESS_LIMITS_LOCK = threading.Lock()
 
 
+# Which keys embed, which have no embeddings package: known once per
+# process, because the semantic layer and the extraction build separate
+# pools from one keys file. Keyed like the limits, by the key's hash.
+_EMBEDDING_KEYS: Dict[Tuple[str, str, str], bool] = {}
+
+
+def _embedding_key(member: Any) -> Tuple[str, str, str]:
+    return (member.provider, member.base_url, member._key_id)
+
+
+def reset_key_knowledge() -> None:
+    """Forget which keys embed (tests, or after new packages are bought)."""
+    with _PROCESS_LIMITS_LOCK:
+        _EMBEDDING_KEYS.clear()
+
+
 def _process_limit(
-    provider: str, base_url: str, limit: int
+    provider: str, base_url: str, key_id: str, limit: int
 ) -> threading.BoundedSemaphore:
     with _PROCESS_LIMITS_LOCK:
-        key = (provider, base_url, limit)
+        key = (provider, base_url, key_id, limit)
         if key not in _PROCESS_LIMITS:
             _PROCESS_LIMITS[key] = threading.BoundedSemaphore(limit)
         return _PROCESS_LIMITS[key]
 
 
-class _RequestSlot:
-    """Hold one process-wide request slot without blocking the event loop.
+async def _take_slot(semaphore: threading.BoundedSemaphore) -> int:
+    """Hold one process-wide request slot; returns the wait in ms.
 
-    A thread semaphore works across loops and threads; polling it keeps a
-    cancelled waiter from ever owning a slot it cannot release.
+    A thread semaphore works across loops and threads; polling it without
+    blocking the event loop keeps a cancelled waiter from ever owning a
+    slot it cannot release.
     """
-
-    def __init__(self, semaphore: threading.BoundedSemaphore) -> None:
-        self.semaphore = semaphore
-
-    async def __aenter__(self) -> None:
-        while not self.semaphore.acquire(blocking=False):
+    queued = perf_counter()
+    STATS.wait(1)
+    try:
+        while not semaphore.acquire(blocking=False):
             await asyncio.sleep(0.01)
-
-    async def __aexit__(self, *_: Any) -> None:
-        self.semaphore.release()
+    finally:
+        STATS.wait(-1)
+    return round((perf_counter() - queued) * 1000)
 
 
 def _record(calls: Any, call: Dict[str, Any]) -> None:
@@ -105,19 +124,39 @@ class Provider(Protocol):
 
 
 def _log_call(call: Dict[str, Any]) -> None:
-    """Log the call summary only: prompts and answers may hold source text."""
-    logger.debug(
-        "LLM call provider=%s stage=%s model=%s status=%s code=%s "
-        "cache_hit=%s tokens=%s duration_ms=%s",
-        call.get("provider"),
-        call.get("stage"),
-        call.get("model"),
-        call.get("status"),
-        call.get("error_code"),
-        call.get("cache_hit"),
-        call.get("tokens"),
-        call.get("duration_ms"),
+    """Log the call summary only: prompts and answers may hold source text.
+
+    Chat calls are logged at INFO with their timing (queue: waiting for a
+    free key; request: the provider's answer); embeddings, fast and
+    frequent, at DEBUG unless they are slow.
+    """
+    tokens = call.get("tokens") or {}
+    duration = (call.get("duration_ms") or 0) / 1000
+    output = tokens.get("completion_tokens") or 0
+    slow_embedding = call.get("stage") == "embed" and duration >= 5
+    level = (
+        logging.INFO
+        if call.get("stage") != "embed" or slow_embedding
+        else logging.DEBUG
     )
+    logger.log(
+        level,
+        "LLM %s %s key=%s model=%s queue=%.1fs request=%.1fs "
+        "in=%s (cached %s) out=%s%s%s",
+        call.get("stage"),
+        call.get("status")
+        + (f"/{call['error_code']}" if call.get("error_code") else ""),
+        call.get("key") or "default",
+        call.get("model"),
+        (call.get("queue_ms") or 0) / 1000,
+        duration,
+        tokens.get("prompt_tokens", "-"),
+        tokens.get("precached_prompt_tokens", 0),
+        output or "-",
+        f" ({output / duration:.0f} tok/s)" if output and duration else "",
+        " cache_hit" if call.get("cache_hit") else "",
+    )
+    STATS.record(call)
 
 
 class LLMError(RuntimeError):
@@ -129,10 +168,13 @@ class LLMError(RuntimeError):
         message: str,
         retryable: bool = False,
         retry_after: Optional[float] = None,
+        status: Optional[int] = None,
     ):
         self.code = code
         self.retryable = retryable
         self.retry_after = retry_after
+        # The HTTP status of the provider's answer, when there was one.
+        self.status = status
         super().__init__(f"{code}: {message}")
 
 
@@ -377,8 +419,13 @@ class JsonLLM:
         stage_models: Optional[Mapping[str, str]] = None,
         config: Optional[Mapping[str, Any]] = None,
         provider: Optional[str] = None,
+        scope: Optional[str] = None,
+        max_concurrency: Optional[int] = None,
+        key_name: Optional[str] = None,
     ):
         catalog = dict(load_catalog("llm") if config is None else config)
+        # Names this key in call audits and model events of a KeyPool.
+        self.key_name = key_name
         self.provider = (
             (
                 provider
@@ -485,7 +532,10 @@ class JsonLLM:
                 "GIGACHAT_AUTH_URL",
             )
             self.scope = (
-                os.getenv("GIGACHAT_SCOPE") or self.config.get("scope") or ""
+                scope
+                or os.getenv("GIGACHAT_SCOPE")
+                or self.config.get("scope")
+                or ""
             ).strip()
             if not self.scope:
                 raise LLMError("configuration", "Set GIGACHAT_SCOPE")
@@ -638,8 +688,10 @@ class JsonLLM:
         self._balance_checked = -math.inf
         self.transport = transport
         self.calls: deque = deque(maxlen=MAX_RETAINED_CALLS)
-        concurrency = os.getenv("LLM_MAX_CONCURRENCY") or self.config.get(
-            "max_concurrent_requests", 1
+        concurrency = (
+            max_concurrency
+            or os.getenv("LLM_MAX_CONCURRENCY")
+            or self.config.get("max_concurrent_requests", 1)
         )
         try:
             self.max_concurrency = int(concurrency)
@@ -650,6 +702,13 @@ class JsonLLM:
                 "configuration",
                 "max_concurrent_requests must be a positive integer",
             )
+        STATS.register(self.key_name or "default", self.max_concurrency)
+        # Keys share nothing: a hash, not the secret, tells their limits apart.
+        self._key_id = (
+            sha256(self._api_key.encode("utf-8")).hexdigest()[:16]
+            if self._api_key
+            else ""
+        )
         # asyncio primitives belong to one event loop; the CLI, the web job
         # loop and embedding threads may each use this client.
         self._loop_state: weakref.WeakKeyDictionary = (
@@ -693,8 +752,31 @@ class JsonLLM:
         return value
 
     @classmethod
-    def from_environment(cls, **kwargs: Any) -> JsonLLM:
-        """Environment values are read at construction; secrets not logged."""
+    def from_environment(cls, **kwargs: Any) -> Any:
+        """Environment values are read at construction; secrets not logged.
+
+        With GIGACHAT_KEYS_FILE set, a GigaChat provider is a KeyPool of
+        every key in that file instead of the single GIGACHAT_CREDENTIALS.
+        """
+        path = os.getenv("GIGACHAT_KEYS_FILE", "").strip()
+        provider = (
+            kwargs.get("provider")
+            or os.getenv("LLM_PROVIDER")
+            or load_catalog("llm").get("provider")
+            or ""
+        ).strip().lower()
+        if path and provider == "gigachat" and "api_key" not in kwargs:
+            return KeyPool.from_file(path, **kwargs)
+        # Why no pool: a single key serves every request of this provider.
+        if not path:
+            reason = "GIGACHAT_KEYS_FILE is not set"
+        elif provider != "gigachat":
+            reason = f"LLM_PROVIDER is {provider or 'empty'}, not gigachat"
+        else:
+            reason = "an explicit api_key was passed"
+        _log_once(
+            logging.INFO, "LLM single key, no key pool: %s", reason
+        )
         return cls(**kwargs)
 
     def _route_ladders(self, routes: Any, ladder: list) -> None:
@@ -766,6 +848,7 @@ class JsonLLM:
                 {
                     "model": model,
                     "event": reason,
+                    **({"key": self.key_name} if self.key_name else {}),
                     **details,
                     "at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -821,6 +904,7 @@ class JsonLLM:
                 "auth_error",
                 f"GigaChat authorization returned HTTP {response.status_code}",
                 retryable,
+                status=response.status_code,
             )
         try:
             data = response.json()
@@ -969,17 +1053,16 @@ class JsonLLM:
             + tokens["completion_tokens"] * rates[1]
         ) / 1_000_000
 
-    async def _open(self, stack: AsyncExitStack) -> httpx.AsyncClient:
+    def _limit(self) -> threading.BoundedSemaphore:
         # The limit bounds concurrent requests to the provider (GigaChat
         # personal accounts allow a single stream) across the process.
-        await stack.enter_async_context(
-            _RequestSlot(
-                _process_limit(
-                    self.provider, self.base_url, self.max_concurrency
-                )
-            )
+        return _process_limit(
+            self.provider, self.base_url, self._key_id, self.max_concurrency
         )
-        return await stack.enter_async_context(self._client())
+
+    def available(self, route: str) -> bool:
+        """Whether a model of this route still has tokens on this key."""
+        return any(m not in self.retired for m in self.ladders[route])
 
     async def generate(
         self,
@@ -990,23 +1073,66 @@ class JsonLLM:
         stage: str = "extract",
     ) -> T:
         _stage(stage)
+        slot = self._limit()
+        queue_ms = await _take_slot(slot)
+        try:
+            return await self._generate(
+                schema, system, payload, stage, queue_ms
+            )
+        finally:
+            slot.release()
+
+    async def _generate(
+        self,
+        schema: Type[T],
+        system: str,
+        payload: Dict[str, Any],
+        stage: str,
+        queue_ms: int = 0,
+    ) -> T:
+        """One request; the caller holds this key's request slot."""
         route = self._route(stage, payload)
-        async with AsyncExitStack() as stack:
-            client = await self._open(stack)
-            while True:
-                try:
-                    model = await self._select(stage, client, route)
-                    return await self._attempt(
-                        client, schema, system, payload, stage, model, route
-                    )
-                except LLMError as exc:
-                    if exc.code not in (
-                        "model_exhausted",
-                        "model_unavailable",
-                    ):
-                        raise
-                    # Retired for every route: its token package is shared.
-                    self._retire(model, exc.code, stage=stage, route=route)
+        key = self.key_name or "default"
+        STATS.begin(key)
+        try:
+            async with self._client() as client:
+                return await self._ladder(
+                    client, schema, system, payload, stage, route, queue_ms
+                )
+        finally:
+            STATS.end(key)
+
+    async def _ladder(
+        self,
+        client: httpx.AsyncClient,
+        schema: Type[T],
+        system: str,
+        payload: Dict[str, Any],
+        stage: str,
+        route: str,
+        queue_ms: int,
+    ) -> T:
+        """The request down the model ladder while models run out."""
+        while True:
+            try:
+                model = await self._select(stage, client, route)
+                return await self._attempt(
+                    client,
+                    schema,
+                    system,
+                    payload,
+                    stage,
+                    model,
+                    route,
+                    queue_ms,
+                )
+            except LLMError as exc:
+                if exc.code not in ("model_exhausted", "model_unavailable"):
+                    raise
+                # Retired for every route: its token package is shared.
+                self._retire(model, exc.code, stage=stage, route=route)
+                # The wait for a slot belongs to the first attempt only.
+                queue_ms = 0
 
     async def _attempt(
         self,
@@ -1017,6 +1143,7 @@ class JsonLLM:
         stage: str,
         model: str,
         route: str = "",
+        queue_ms: int = 0,
     ) -> T:
         route = route or stage
         schema_json = schema.model_json_schema()
@@ -1029,6 +1156,7 @@ class JsonLLM:
             )
         system_message = (
             system + "\n\nReturn exactly one JSON object. No Markdown. "
+            "Write compact JSON on one line, without indentation. "
             "The JSON object must match this schema:\n" + _json(schema_json)
         )
         body: Dict[str, Any] = {
@@ -1069,6 +1197,7 @@ class JsonLLM:
             "stage": stage,
             "route": route,
             "model": model,
+            **({"key": self.key_name} if self.key_name else {}),
             "ladder_position": self.ladders[route].index(model),
             "schema": schema.__name__,
             "prompt_sha256": _hash(body["messages"]),
@@ -1076,6 +1205,7 @@ class JsonLLM:
             "cache_hit": False,
             "tokens": {},
             "estimated_cost_usd": None,
+            "queue_ms": queue_ms,
             "status": "started",
         }
         _record(self.calls, call)
@@ -1157,6 +1287,7 @@ class JsonLLM:
                     _retry_after(response.headers.get("Retry-After"))
                     if retryable
                     else None,
+                    status=response.status_code,
                 )
             try:
                 data = response.json()
@@ -1258,6 +1389,27 @@ class JsonLLM:
         texts = list(texts)
         if not texts:
             return []
+        slot = self._limit()
+        queue_ms = await _take_slot(slot)
+        try:
+            return await self._embed(texts, model, queue_ms)
+        finally:
+            slot.release()
+
+    async def _embed(
+        self, texts: list, model: str, queue_ms: int = 0
+    ) -> list[list[float]]:
+        """One embedding request; the caller holds this key's slot."""
+        key = self.key_name or "default"
+        STATS.begin(key)
+        try:
+            return await self._embed_request(texts, model, queue_ms)
+        finally:
+            STATS.end(key)
+
+    async def _embed_request(
+        self, texts: list, model: str, queue_ms: int
+    ) -> list[list[float]]:
         started = perf_counter()
         call: Dict[str, Any] = {
             "provider": "gigachat"
@@ -1265,17 +1417,18 @@ class JsonLLM:
             else "json_llm",
             "stage": "embed",
             "model": model,
+            **({"key": self.key_name} if self.key_name else {}),
             "inputs": len(texts),
             "cache_hit": False,
             "tokens": {},
             "estimated_cost_usd": None,
+            "queue_ms": queue_ms,
             "status": "started",
         }
         _record(self.calls, call)
         body = {"model": model, "input": texts}
         try:
-            async with AsyncExitStack() as stack:
-                client = await self._open(stack)
+            async with self._client() as client:
                 response = await client.post(
                     self.base_url + "/embeddings",
                     headers=await self._headers(client),
@@ -1301,6 +1454,7 @@ class JsonLLM:
                     _retry_after(response.headers.get("Retry-After"))
                     if retryable
                     else None,
+                    status=response.status_code,
                 )
             try:
                 data = response.json()
@@ -1397,6 +1551,432 @@ class JsonLLM:
                     temporary.unlink(missing_ok=True)
                 except OSError:
                     call["cache_write_failed"] = True
+
+
+_LOGGED_ONCE: set = set()
+_LOGGED_ONCE_LOCK = threading.Lock()
+
+
+def _log_once(level: int, message: str, *args: Any) -> None:
+    """Log a configuration line once per distinct text: providers are built
+    per request, so a repeated line would flood the log."""
+    text = message % args
+    with _LOGGED_ONCE_LOCK:
+        if text in _LOGGED_ONCE:
+            return
+        _LOGGED_ONCE.add(text)
+    logger.log(level, "%s", text)
+
+
+def _client_id(credentials: str) -> str:
+    """client_id of a GigaChat authorization key (base64 of id:secret)."""
+    try:
+        decoded = base64.b64decode(credentials, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    client_id, separator, _ = decoded.partition(":")
+    return client_id.strip() if separator else ""
+
+
+def load_keys(path: Any) -> list[Dict[str, Any]]:
+    """Enabled keys of a GIGACHAT_KEYS_FILE; errors never quote secrets.
+
+    Fields follow the GigaChat API project settings: ``client_id``,
+    ``auth_key`` (the Authorization key, base64 of
+    ``client_id:client_secret``; ``credentials`` is an alias) or
+    ``client_secret`` instead of it, and ``scope`` (overrides
+    GIGACHAT_SCOPE). ``workers`` is how many requests the key may run at
+    once.
+    """
+    try:
+        data = json.loads(
+            Path(path).expanduser().read_text(encoding="utf-8-sig")
+        )
+    except (OSError, ValueError):
+        raise LLMError(
+            "configuration", "Cannot read GIGACHAT_KEYS_FILE as JSON"
+        ) from None
+    entries = data.get("keys") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        raise LLMError(
+            "configuration", "GIGACHAT_KEYS_FILE must contain a keys list"
+        )
+    keys: list[Dict[str, Any]] = []
+    for position, entry in enumerate(entries, 1):
+        if not isinstance(entry, dict):
+            raise LLMError(
+                "configuration", f"Key {position} must be an object"
+            )
+        if entry.get("enabled", True) is False:
+            _log_once(
+                logging.WARNING,
+                "LLM key pool: key %d (%s) skipped: \"enabled\": false in %s",
+                position,
+                entry.get("name") or "unnamed",
+                Path(path).expanduser().resolve(),
+            )
+            continue
+        client_id = str(entry.get("client_id") or "").strip()
+        secret = str(entry.get("client_secret") or "").strip()
+        credentials = str(
+            entry.get("auth_key") or entry.get("credentials") or ""
+        ).strip()
+        if not credentials and _client_id(secret):
+            # An Authorization key pasted into client_secret.
+            credentials = secret
+        elif not credentials and client_id and secret:
+            credentials = base64.b64encode(
+                f"{client_id}:{secret}".encode("utf-8")
+            ).decode("ascii")
+        if not credentials:
+            raise LLMError(
+                "configuration",
+                f"Key {position} needs auth_key, or client_id "
+                "and client_secret",
+            )
+        embedded = _client_id(credentials)
+        if not embedded:
+            raise LLMError(
+                "configuration",
+                f"Key {position} auth_key is not a GigaChat Authorization key",
+            )
+        if client_id and embedded != client_id:
+            raise LLMError(
+                "configuration",
+                f"Key {position} auth_key belongs to another client_id",
+            )
+        workers = entry.get("workers", 1)
+        if isinstance(workers, bool) or not isinstance(workers, int) or (
+            workers < 1
+        ):
+            raise LLMError(
+                "configuration",
+                f"Key {position} workers must be a positive integer",
+            )
+        scope = entry.get("scope")
+        if scope is not None and not isinstance(scope, str):
+            raise LLMError(
+                "configuration", f"Key {position} scope must be a string"
+            )
+        name = str(entry.get("name") or embedded[:8] or f"key-{position}")
+        if any(key["credentials"] == credentials for key in keys):
+            raise LLMError(
+                "configuration", f"Key {position} ({name}) is listed twice"
+            )
+        keys.append(
+            {
+                "name": name,
+                "credentials": credentials,
+                "workers": workers,
+                "scope": scope or None,
+            }
+        )
+    if not keys:
+        raise LLMError(
+            "configuration", "GIGACHAT_KEYS_FILE has no enabled keys"
+        )
+    return keys
+
+
+# A rate-limited key rests this long when the answer names no
+# Retry-After, doubling while it keeps answering 429, up to the maximum.
+KEY_COOLDOWN_SECONDS = 5.0
+KEY_COOLDOWN_MAX_SECONDS = 60.0
+
+
+def rate_limited(exc: Exception) -> bool:
+    """The provider refused the request (HTTP 429): no model work done."""
+    return getattr(exc, "status", None) == 429
+
+
+def rejected_key(exc: Exception) -> bool:
+    """The key itself is refused: HTTP 401 after the one token renewal,
+    or an authorization failure that no retry fixes. A 403 is not: for
+    GigaChat it means a model outside the key's plan (llm.json
+    gigachat.model_fallback), which retires that model only."""
+    return getattr(exc, "status", None) == 401 or (
+        getattr(exc, "code", None) == "auth_error"
+        and not getattr(exc, "retryable", False)
+    )
+
+
+class KeyPool:
+    """Several provider keys behind one provider.
+
+    Each key is a JsonLLM with its own OAuth token, token balance, retired
+    models and request limit (``workers``: requests the account runs at
+    once). A request takes the first free slot of a key whose route still
+    has a model with tokens, so N keys serve N times as many requests at
+    once. A key whose models run out passes the request to the other keys.
+    A key answering HTTP 429 rests (Retry-After, else a doubling pause) and
+    the request moves to another key at once, so one rate-limited account
+    neither fails requests nor spends the caller's retries.
+
+    Embeddings are a separate package: a key without it (402, or the model
+    outside its plan) is remembered and skipped for embeddings. Once the
+    pool knows which keys embed, chat leaves them to embeddings while
+    another key can chat, so the semantic layer does not queue behind
+    extraction on the only key that embeds.
+    """
+
+    demo = False
+
+    def __init__(self, members: Sequence[JsonLLM]):
+        self.members = list(members)
+        if not self.members:
+            raise LLMError("configuration", "KeyPool needs at least one key")
+        first = self.members[0]
+        self.provider, self.base_url = first.provider, first.base_url
+        self.ladders = first.ladders
+        self.short_packet_chars = first.short_packet_chars
+        self.max_concurrency = sum(m.max_concurrency for m in self.members)
+        # One audit for the pool: documents slice these by offset.
+        self.calls: deque = deque(maxlen=MAX_RETAINED_CALLS)
+        self.model_events: list[Dict[str, Any]] = []
+        for member in self.members:
+            member.calls, member.model_events = self.calls, self.model_events
+        self._next = 0
+        # Key index -> monotonic time it may be used again, and its pause.
+        self._resting: Dict[int, float] = {}
+        self._pause: Dict[int, float] = {}
+        # Keys refused for the run (revoked or expired credentials).
+        self._rejected: set = set()
+
+    @classmethod
+    def from_file(cls, path: Any, **kwargs: Any) -> KeyPool:
+        kwargs["provider"] = kwargs.get("provider") or "gigachat"
+        pool = cls(
+            [
+                JsonLLM(
+                    api_key=key["credentials"],
+                    scope=key["scope"],
+                    max_concurrency=key["workers"],
+                    key_name=key["name"],
+                    **kwargs,
+                )
+                for key in load_keys(path)
+            ]
+        )
+        logger.info(
+            "LLM key pool: %d keys, %d concurrent requests",
+            len(pool.members),
+            pool.max_concurrency,
+        )
+        # Which keys and limits: client_id prefixes only, never secrets.
+        _log_once(
+            logging.INFO,
+            "LLM key pool from %s: %s",
+            Path(path).expanduser().resolve(),
+            ", ".join(
+                f"{m.key_name}(client {_client_id(m._api_key)[:8]}, "
+                f"workers {m.max_concurrency}, scope {m.scope})"
+                for m in pool.members
+            ),
+        )
+        if len(pool.members) == 1:
+            _log_once(
+                logging.WARNING,
+                "LLM key pool has a single enabled key: every request goes "
+                "through %s; enable more keys in %s",
+                pool.members[0].key_name,
+                Path(path).expanduser().resolve(),
+            )
+        return pool
+
+    @property
+    def models(self) -> Dict[str, Optional[str]]:
+        """Model each route would use now on the first key that has one."""
+        return {
+            route: next(
+                (
+                    member.models[route]
+                    for member in self.members
+                    if member.models[route]
+                ),
+                None,
+            )
+            for route in self.ladders
+        }
+
+    def _embeds(self, member: JsonLLM) -> Optional[bool]:
+        """True: this key embeds; False: it has no embeddings; None: not
+        known yet (process-wide, see _EMBEDDING_KEYS)."""
+        return _EMBEDDING_KEYS.get(_embedding_key(member))
+
+    def _learn_embeddings(self, member: JsonLLM, embeds: bool) -> None:
+        with _PROCESS_LIMITS_LOCK:
+            _EMBEDDING_KEYS[_embedding_key(member)] = embeds
+
+    def _awake(self, member: JsonLLM) -> bool:
+        return self._resting.get(self.members.index(member), 0) <= monotonic()
+
+    def _rest(self, member: JsonLLM, exc: LLMError) -> None:
+        index = self.members.index(member)
+        if rejected_key(exc):
+            self._rejected.add(index)
+            logger.warning(
+                "Key %s is refused (%s); not used again in this run",
+                member.key_name,
+                exc.code,
+            )
+            return
+        pause = exc.retry_after or min(
+            self._pause.get(index, KEY_COOLDOWN_SECONDS / 2) * 2,
+            KEY_COOLDOWN_MAX_SECONDS,
+        )
+        self._pause[index] = pause
+        logger.info(
+            "Key %s is rate limited (HTTP 429); resting %.0fs",
+            member.key_name,
+            pause,
+        )
+        self._resting[index] = monotonic() + pause
+
+    def _rested(self, member: JsonLLM) -> None:
+        self._pause.pop(self.members.index(member), None)
+
+    async def _acquire(
+        self, usable: Any
+    ) -> Optional[Tuple[JsonLLM, threading.BoundedSemaphore, int]]:
+        """A free slot of a usable key and the wait for it in ms, or None
+        when no key is usable. A rate-limited key waits for its pause to
+        end; a refused one is skipped, and a pool of refused keys fails at
+        once instead of waiting.
+
+        Polling never blocks the loop, and a cancelled waiter holds nothing.
+        """
+        queued = perf_counter()
+        STATS.wait(1)
+        try:
+            while True:
+                if len(self._rejected) == len(self.members):
+                    raise LLMError(
+                        "auth_error",
+                        "Every key of the pool is refused (credentials "
+                        "revoked or expired)",
+                    )
+                start = self._next % len(self.members)
+                order = [
+                    member
+                    for member in self.members[start:] + self.members[:start]
+                    if self.members.index(member) not in self._rejected
+                ]
+                candidates = [member for member in order if usable(member)]
+                if not candidates:
+                    return None
+                candidates = [m for m in candidates if self._awake(m)]
+                for member in candidates:
+                    slot = member._limit()
+                    if slot.acquire(blocking=False):
+                        # The next request starts with the following key.
+                        self._next = self.members.index(member) + 1
+                        waited = round((perf_counter() - queued) * 1000)
+                        return member, slot, waited
+                await asyncio.sleep(0.01)
+        finally:
+            STATS.wait(-1)
+
+    async def generate(
+        self,
+        schema: Type[T],
+        system: str,
+        payload: Dict[str, Any],
+        *,
+        stage: str = "extract",
+    ) -> T:
+        _stage(stage)
+        route = self.members[0]._route(stage, payload)
+        limited = 0
+
+        def usable(member: JsonLLM) -> bool:
+            if not member.available(route):
+                return False
+            if self._embeds(member) is not True:
+                return True
+            # An embedding key chats only when no other key could.
+            return not any(
+                self._embeds(other) is not True
+                and index not in self._rejected
+                and other.available(route)
+                for index, other in enumerate(self.members)
+            )
+
+        while True:
+            held = await self._acquire(usable)
+            if held is None:
+                raise LLMError(
+                    "models_exhausted",
+                    f"Every key is out of tokens for the {route} route",
+                )
+            member, slot, queue_ms = held
+            try:
+                answer = await member._generate(
+                    schema, system, payload, stage, queue_ms
+                )
+                self._rested(member)
+                return answer
+            except LLMError as exc:
+                if (rate_limited(exc) or rejected_key(exc)) and len(
+                    self.members
+                ) > 1:
+                    # Another key takes it; every key limited in turn is
+                    # the caller's retry.
+                    self._rest(member, exc)
+                    limited += 1
+                    if limited >= len(self.members):
+                        raise
+                    continue
+                # This key has no model left; the others may still have.
+                if exc.code != "models_exhausted":
+                    raise
+            finally:
+                slot.release()
+
+    async def embed(
+        self, texts: Sequence[str], model: str
+    ) -> list[list[float]]:
+        texts = list(texts)
+        if not texts:
+            return []
+        limited = 0
+        while True:
+            held = await self._acquire(
+                lambda member: self._embeds(member) is not False
+            )
+            if held is None:
+                raise LLMError(
+                    "models_exhausted",
+                    "No key of the pool has embeddings (HTTP 402/403/404)",
+                )
+            member, slot, queue_ms = held
+            try:
+                vectors = await member._embed(texts, model, queue_ms)
+                self._rested(member)
+                self._learn_embeddings(member, True)
+                return vectors
+            except LLMError as exc:
+                if exc.status in (
+                    *member.exhausted_statuses,
+                    *member.unavailable_statuses,
+                ):
+                    # This account has no embeddings; the others may.
+                    self._learn_embeddings(member, False)
+                    logger.info(
+                        "Key %s has no embeddings (HTTP %s); not asked again",
+                        member.key_name,
+                        exc.status,
+                    )
+                    continue
+                if len(self.members) < 2 or not (
+                    rate_limited(exc) or rejected_key(exc)
+                ):
+                    raise
+                self._rest(member, exc)
+                limited += 1
+                if limited >= len(self.members):
+                    raise
+            finally:
+                slot.release()
 
 
 class ReplayProvider:

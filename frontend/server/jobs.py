@@ -32,6 +32,7 @@ from uuid import uuid4
 from lctrend.core import aio
 from lctrend.core.models import DocumentEnvelope, ExtractionResult
 from lctrend.ingest.processed import covers, known_fulltexts, prior_inputs
+from lctrend.linking.reconcile import reconcile_quietly
 
 logger = logging.getLogger(__name__)
 
@@ -598,8 +599,10 @@ class JobManager:
     ) -> dict:
         """Process discovered records without repeating discovery."""
         payloads = list(payloads)
+        from lctrend.ingest.economic import PARSERS as ECONOMIC
+
         if (
-            source not in {"openalex", "github", "pypi"}
+            source not in {"openalex", "github", "pypi", *ECONOMIC}
             or not 1 <= len(payloads) <= 100
         ):
             raise ValueError("Expected 1..100 supported source records")
@@ -612,6 +615,7 @@ class JobManager:
             )
             source_id = str(
                 metadata.get("id")
+                or metadata.get("appl_id")
                 or metadata.get("full_name")
                 or metadata.get("name")
                 or index
@@ -619,6 +623,8 @@ class JobManager:
             title = str(
                 metadata.get("title")
                 or metadata.get("display_name")
+                or metadata.get("project_title")
+                or metadata.get("job-name")
                 or metadata.get("full_name")
                 or metadata.get("name")
                 or source_id
@@ -1289,14 +1295,21 @@ class JobManager:
                     from lctrend.ingest.connectors import fetch_pypi
 
                     source = await fetch_pypi(source["name"])
+                elif job["source"] == "hh" and "description" not in source:
+                    from lctrend.ingest.economic import hydrate_hh
+
+                    source = await hydrate_hh(source)
 
                 raw = json.dumps(
                     source, ensure_ascii=False, sort_keys=True
                 ).encode("utf-8")
+                from lctrend.ingest.economic import PARSERS as ECONOMIC
+
                 document = {
                     "openalex": parse_openalex,
                     "github": parse_github,
                     "pypi": parse_pypi,
+                    **ECONOMIC,
                 }[job["source"]](source, raw=raw)
                 if self._snapshot_writer is None:
                     from lctrend.ingest.snapshots import persist_snapshot
@@ -1515,6 +1528,12 @@ class JobManager:
                     await aio.call(store.write_document, document)
                 else:
                     await aio.call(store.write_processed, document, result)
+                    # Old claims about the same concepts meet the new ones
+                    # (linking.reconcile); a failure never fails the
+                    # document.
+                    await reconcile_quietly(
+                        store, [document.document_version_id]
+                    )
             status = (
                 result.run.status
                 if result.run.status in {"succeeded", "partial", "failed"}

@@ -7,11 +7,13 @@ from __future__ import annotations
 import re
 from collections import Counter
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..core.config import load_catalog
-from ..core.models import Chunk, DocumentEnvelope
+from ..core.models import Chunk, ConceptKind, DocumentEnvelope
 from ..core.numbers import parse_number
+from ..core.organizations import organization_type
 from ..extraction.lexical import lexical_tokens
 from ..extraction.resolver import alias_names
 from .contracts import Extraction, Review, SourceSpan
@@ -165,6 +167,82 @@ def _names_in(names: Iterable[str], texts: Iterable[str]) -> bool:
     return False
 
 
+# A declared alias stands next to the name it renames: "compactin
+# (ML-236B)", "ML-236B, also known as compactin".
+_ALIAS_WINDOW = 160
+_ALIAS_MAX_TOKENS = 8
+# A definition says what the entity is, in a phrase, not a paragraph.
+_DEFINITION_MAX_WORDS = 30
+_DEFINED_KINDS = {"Technology", "Method", "Material"}
+
+
+def _alias_issue(
+    alias: str, entity: Any, windows: List[str], family_kind: str
+) -> Optional[str]:
+    tokens = lexical_tokens(alias)
+    if not tokens:
+        return "empty"
+    if tokens == lexical_tokens(entity.label):
+        return "same_as_label"
+    if len(tokens) > _ALIAS_MAX_TOKENS:
+        return "too_long"
+    if family_kind in _DEFINED_KINDS and generic_technology(alias):
+        return "generic_term"
+    if not _names_in([alias], windows):
+        return "not_next_to_label"
+    return None
+
+
+def _check_entity_context(
+    entity: Any,
+    key: str,
+    chunks: Dict[str, Chunk],
+    notes: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Keep the aliases and the definition the source supports.
+
+    An alias must be written in the chunk next to an occurrence of the
+    entity; one that is not, or that is only the label or an umbrella
+    term, is dropped with an audit note instead of failing the entity.
+    """
+    windows = [
+        chunks[span.chunk_id].text[
+            max(0, (span.start or 0) - _ALIAS_WINDOW) : (
+                span.end or len(chunks[span.chunk_id].text)
+            )
+            + _ALIAS_WINDOW
+        ]
+        for span in entity.evidence
+        if span.chunk_id in chunks
+    ]
+    kept = []
+    for alias in dict.fromkeys(item.strip() for item in entity.aliases):
+        issue = _alias_issue(alias, entity, windows, entity.kind.value)
+        if issue is None:
+            kept.append(alias)
+        elif notes is not None:
+            notes.append(
+                {
+                    "item": key,
+                    "code": "alias_dropped",
+                    "alias": alias,
+                    "reason": issue,
+                }
+            )
+    entity.aliases = kept
+    if entity.definition is not None:
+        definition = " ".join(entity.definition.split())
+        if (
+            entity.kind.value not in _DEFINED_KINDS
+            or not definition
+            or len(definition.split()) > _DEFINITION_MAX_WORDS
+        ):
+            if definition and notes is not None:
+                notes.append({"item": key, "code": "definition_dropped"})
+            definition = None
+        entity.definition = definition
+
+
 def _entity_refs(value: Any) -> Iterable[Any]:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -189,6 +267,138 @@ def _currency_grounded(currency: str, raw: str, aliases: dict) -> bool:
         if re.search(left + re.escape(alias) + right, raw, re.IGNORECASE):
             return True
     return False
+
+
+@lru_cache(maxsize=1)
+def _generic_vocabulary() -> Tuple[
+    frozenset, Dict[str, List[Tuple[str, ...]]]
+]:
+    """Filler tokens and generic phrases by their first token, longest
+    first (generic_terms.json plus the domain names of sources.json).
+    """
+    catalog = load_catalog("generic_terms")
+    terms = [
+        *catalog.get("openalex", []),
+        *(
+            term
+            for group in catalog.get("curated", {}).values()
+            for term in group
+        ),
+        *(domain["name"] for domain in load_catalog("sources")["domains"]),
+    ]
+    fillers = frozenset(
+        token
+        for word in catalog.get("fillers", [])
+        for token in lexical_tokens(word)
+    )
+    phrases: Dict[str, List[Tuple[str, ...]]] = {}
+    for term in terms:
+        phrase = tuple(
+            token for token in lexical_tokens(term) if token not in fillers
+        )
+        if phrase and phrase not in phrases.get(phrase[0], []):
+            phrases.setdefault(phrase[0], []).append(phrase)
+    for group in phrases.values():
+        group.sort(key=len, reverse=True)
+    return fillers, phrases
+
+
+def generic_technology(label: str) -> bool:
+    """Whether a label names only an umbrella field or industry ("machine
+    learning methods", "Artificial intelligence (AI)", "финтех"), not a
+    technology.
+
+    The label's identity-key tokens, fillers removed, must be covered
+    entirely by generic terms; one specific word ("transformer", "graph")
+    keeps it a technology. Two generic terms written together are a
+    compound name ("battery management"), not two fields; only a filler
+    word between them ("AI in healthcare") keeps them generic. An
+    abbreviation in parentheses repeats the name and is ignored.
+    """
+    fillers, phrases = _generic_vocabulary()
+    all_tokens = lexical_tokens(re.sub(r"\([^()]*\)", " ", label))
+    # Specific tokens with their position among all tokens.
+    tokens = [
+        (token, position)
+        for position, token in enumerate(all_tokens)
+        if token not in fillers
+    ]
+    if not all_tokens:
+        return False
+    index = 0
+    while index < len(tokens):
+        size = next(
+            (
+                len(phrase)
+                for phrase in phrases.get(tokens[index][0], ())
+                if tuple(
+                    item[0] for item in tokens[index : index + len(phrase)]
+                )
+                == phrase
+            ),
+            0,
+        )
+        if not size:
+            return False
+        if index and tokens[index][1] == tokens[index - 1][1] + 1:
+            return False
+        index += size
+    return True
+
+
+_ORGANIZATION_KINDS = {"company": "Company", "university": "University"}
+
+
+def _normalize_kinds(
+    extraction: Extraction,
+    schema: Dict[str, Any],
+    add,
+    notes: Optional[List[Dict[str, Any]]],
+) -> Dict[str, str]:
+    """Deterministic kinds before any reference check; returns the kinds
+    the model reported for the entities whose kind changed.
+
+    An umbrella field is a Domain, not a technology of the radar. A named
+    organization takes its kind from the organization catalog (Samsung is
+    a Company whatever the model guessed); a group of people or a person
+    is not an organization.
+    """
+    technology_kinds = {"Technology", "Method", "Material"}
+    organization_kinds = set(schema.get("organization_kinds", []))
+    title = schema.get("person_title_pattern")
+    reported: Dict[str, str] = {}
+    for entity in extraction.entities:
+        key = "entity:" + entity.local_id
+        kind = entity.kind.value
+        target = None
+        if kind in technology_kinds and generic_technology(entity.label):
+            target = "Domain"
+        elif kind in organization_kinds:
+            label = entity.label.strip()
+            cased = [
+                char
+                for char in label
+                if char.isalpha() and char.lower() != char.upper()
+            ]
+            if (title and re.search(title, label)) or (
+                cased and not any(char.isupper() for char in cased)
+            ):
+                add(key, "organization_not_named")
+                continue
+            target = _ORGANIZATION_KINDS.get(organization_type(label, ""))
+        if target and target != kind:
+            entity.kind = ConceptKind(target)
+            reported[entity.local_id] = kind
+            if notes is not None:
+                notes.append(
+                    {
+                        "item": key,
+                        "code": "kind_normalized",
+                        "from": kind,
+                        "to": target,
+                    }
+                )
+    return reported
 
 
 def validate_local_extraction(
@@ -227,15 +437,15 @@ def validate_local_extraction(
     def add(key: str, issue: str) -> None:
         issues.setdefault(key, []).append(issue)
 
+    reported_kinds = _normalize_kinds(result, schema, add, notes)
+
     def anchor_spans(
         key: str, spans: List[SourceSpan], first_occurrence: bool = False
     ) -> List[SourceSpan]:
         anchored = []
         for span in spans:
             try:
-                value, note = _anchor(
-                    span, chunks, visible, first_occurrence
-                )
+                value, note = _anchor(span, chunks, visible, first_occurrence)
             except ValueError as exc:
                 add(key, str(exc))
                 anchored.append(span.model_copy(deep=True))
@@ -280,19 +490,26 @@ def validate_local_extraction(
             for span in entity.evidence
             for text in (
                 span.quote,
-                chunks[span.chunk_id].text
-                if span.chunk_id in chunks
-                else "",
+                chunks[span.chunk_id].text if span.chunk_id in chunks else "",
             )
         ]
         if (
             entity.kind.value in grounded_kinds
             and entity.label.strip()
             and not _names_in(
-                alias_names(entity.label, entity.kind.value), grounding
+                [
+                    *alias_names(entity.label, entity.kind.value),
+                    # Synonyms curated for the kind the model reported.
+                    *alias_names(
+                        entity.label,
+                        reported_kinds.get(entity.local_id, entity.kind.value),
+                    ),
+                ],
+                grounding,
             )
         ):
             add(key, "label_not_grounded")
+        _check_entity_context(entity, key, chunks, notes)
 
     for claim in result.claims:
         key = "claim:" + claim.claim_id

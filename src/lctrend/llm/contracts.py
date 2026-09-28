@@ -103,7 +103,11 @@ class LocalEntity(LocalModel):
     local_id: str = Field(min_length=1)
     label: str = Field(min_length=1)
     kind: ConceptKind
+    # What the source says the entity is (Technology, Method, Material).
     definition: Optional[str] = None
+    # Other names the source itself equates with the label: an abbreviation
+    # or code in parentheses, "also known as".
+    aliases: List[str] = Field(default_factory=list)
     # ISO 3166-1 alpha-2 for Country entities only; it canonicalizes
     # "Germany"/"Германия"/"German" to one concept across documents.
     country_code: Optional[str] = None

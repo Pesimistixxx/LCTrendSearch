@@ -216,3 +216,81 @@ def test_store_counts_forms_and_writes_identities_by_label():
     assert "MATCH (c:Method {concept_id: row.concept_id})" in query
     assert parameters["key_version"] == "lexical-key/2"
     assert parameters["rows"][0]["identity_key"] == "llm"
+
+
+def test_mention_kinds_retype_a_compound_and_quotes_are_dropped():
+    from lctrend.core.models import ConceptName
+
+    quote = "ML-236A, ML-236B and ML-236C, new inhibitors of cholesterogenesis"
+    stored = Concept(
+        concept_id="concept:ml",
+        kind=T,
+        preferred_label="ML-236B",
+        names=[
+            ConceptName(
+                name_id="n1",
+                text=quote,
+                normalized_text=quote.casefold(),
+                name_kind="observed",
+                status="provisional",
+            ),
+            ConceptName(
+                name_id="n2",
+                text="ml236b",
+                normalized_text="ml236b",
+                name_kind="observed",
+                status="provisional",
+            ),
+        ],
+    )
+    plan = plan_key_migration(
+        [stored], kind_counts={"concept:ml": {"Material": 4, "Technology": 1}}
+    )
+    (update,) = plan.updates
+    assert (update.kind, update.new_kind) == ("Technology", "Material")
+    assert [name.text for name in update.names] == ["ml236b"]
+    summary = plan.summary(False)
+    assert summary["retyped"] == 1 and summary["names_cleaned"] == 1
+
+
+def test_a_reviewed_concept_keeps_its_kind():
+    stored = concept("concept:1", "ML-236B", status="accepted")
+    plan = plan_key_migration(
+        [stored], kind_counts={"concept:1": {"Material": 9}}
+    )
+    assert plan.updates[0].new_kind is None
+
+
+def test_store_reads_mention_kinds_and_relabels_retyped_concepts():
+    from lctrend.graph.migration import IdentityUpdate
+
+    store, queries = graph_store(
+        [
+            {"concept_id": "c1", "kind": "Material", "mentions": 3},
+            {"concept_id": "c1", "kind": "Technology", "mentions": 1},
+        ]
+    )
+    assert asyncio.run(store.read_concept_kinds()) == {
+        "c1": {"Material": 3, "Technology": 1}
+    }
+    queries.clear()
+    asyncio.run(
+        store.write_concept_identities(
+            [
+                IdentityUpdate(
+                    "c1",
+                    "Technology",
+                    "ml 236 b",
+                    {"ML-236B": 4},
+                    "ML-236B",
+                    kind_counts={"Material": 3, "Technology": 1},
+                    new_kind="Material",
+                )
+            ]
+        )
+    )
+    relabel = [q for q, _ in queries if "REMOVE c:Technology" in q]
+    assert relabel and "SET c:Material" in relabel[0]
+    rows = next(p for q, p in queries if "c.identity_key" in q)["rows"]
+    assert rows[0]["kind_counts_json"] == '{"Material":3,"Technology":1}'
+    assert rows[0]["names_json"] is None

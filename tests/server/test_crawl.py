@@ -808,3 +808,42 @@ def test_failed_seed_metadata_does_not_break_a_later_duplicate_page(tmp_path):
         assert processed == ["new", "linked-package"]
     finally:
         instance.close(wait=True)
+
+
+def test_batch_is_hydrated_concurrently_and_one_failure_stays_local(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("frontend.server.crawl.default_workers", lambda: 4)
+    lock, running, peak = RLock(), [0], [0]
+
+    def hydrate(record):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        sleep(0.05)
+        with lock:
+            running[0] -= 1
+        if record["source_id"] == "broken":
+            raise RuntimeError("card unavailable")
+        return {"name": record["source_id"], "description": "text"}
+
+    names = ["a", "b", "broken", "c"]
+    instance = manager(
+        tmp_path,
+        hydrator=hydrate,
+        discoverers={
+            "hh": lambda *args: page(
+                [item("hh", name, payload={}) for name in names]
+            )
+        },
+    )
+    try:
+        final = finish(instance, instance.create("Sensors"))
+        assert peak[0] > 1
+        assert final["counts"]["parsed"] == 3
+        assert final["counts"]["failed"] == 1
+        [(source, payloads)] = instance.job_manager.calls
+        assert source == "hh"
+        assert [payload["name"] for payload in payloads] == ["a", "b", "c"]
+    finally:
+        instance.close(wait=True)

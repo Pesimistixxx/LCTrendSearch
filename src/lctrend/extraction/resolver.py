@@ -22,6 +22,7 @@ import numpy as np
 from ..core.config import load_catalog
 from ..core.models import (
     AMBIGUOUS_COLLISION_METHOD,
+    DECLARED_ALIAS_METHOD,
     SEMANTIC_CANDIDATE_METHOD,
     Concept,
     ConceptKind,
@@ -30,7 +31,13 @@ from ..core.models import (
     ResolutionDecision,
     stable_id,
 )
-from .lexical import identity_key, kind_family, lexical_key
+from .lexical import (
+    identity_key,
+    kind_family,
+    lexical_key,
+    lexical_tokens,
+    settled_kind,
+)
 
 
 # Names repeat across documents; the caches keep resolution linear in the
@@ -48,6 +55,36 @@ def normalize_name(value: str) -> str:
 
 def lemmatize_name(value: str) -> str:
     return lexical_key(value)
+
+
+def context_text(label: str, definition: Optional[str] = None) -> str:
+    """The text a concept is embedded and compared as: its name and, when a
+    source says what it is, that definition. A bare code ("ML-236B") says
+    nothing about its meaning; "ML-236B: inhibitor of cholesterol
+    synthesis" does.
+    """
+    definition = " ".join((definition or "").split())
+    return f"{label}: {definition}" if definition else label
+
+
+def concept_text(concept: Concept) -> str:
+    return context_text(concept.preferred_label, concept.definition)
+
+
+# A quote is evidence, not a name: a surface text longer than the label it
+# contains, or longer than any name, is recorded as the label.
+_NAME_MAX_TOKENS = 8
+
+
+def observed_name(surface: str, canonical: Optional[str] = None) -> str:
+    """The name a mention adds to its concept."""
+    canonical = canonical or surface
+    tokens, label = lexical_tokens(surface), lexical_tokens(canonical)
+    if len(tokens) > _NAME_MAX_TOKENS or (
+        len(tokens) > len(label) and set(label) <= set(tokens)
+    ):
+        return canonical
+    return surface
 
 
 def _alias_keys(value: str, kind: object = None) -> frozenset[str]:
@@ -149,11 +186,28 @@ class SemanticDeduplicator:
         self.seeded_model = self.embedding_model_name
         return added
 
+    def cached_vector(self, text: str) -> Optional[List[float]]:
+        """The unit vector of a text already embedded or seeded, without a
+        request; None when it is not in the cache."""
+        return self._cache.get(normalize_name(text))
+
     def available(self) -> bool:
         return (
             self.failure is None
             or monotonic() - self._failed_at >= SEMANTIC_RETRY_SECONDS
         )
+
+    def _transient(self, exc: Exception) -> bool:
+        """Every key rate limited (HTTP 429) is a busy moment, not a broken
+        layer: this call goes without vectors, the next one tries again.
+        Switching the layer off would resolve the next minutes lexically
+        and leave provisional duplicates behind."""
+        from ..llm.client import rate_limited
+
+        if not rate_limited(exc):
+            return False
+        logger.info("Embeddings rate limited; this call goes without them")
+        return True
 
     def _fail(self, exc: Exception) -> None:
         self.failure = type(exc).__name__
@@ -180,6 +234,8 @@ class SemanticDeduplicator:
                 self._embed(texts) if cache else self._embed_uncached(texts)
             )
         except Exception as exc:
+            if self._transient(exc):
+                return None
             self._fail(exc)
             return None
         self.failure = None
@@ -214,8 +270,9 @@ class SemanticDeduplicator:
         if self._embedder is None:
             from ..llm.client import JsonLLM
 
-            # Reuses GIGACHAT_CREDENTIALS, scope, base URL and CA bundle.
-            self._embedder = JsonLLM(provider="gigachat")
+            # Reuses GIGACHAT_CREDENTIALS (or the GIGACHAT_KEYS_FILE pool),
+            # scope, base URL and CA bundle.
+            self._embedder = JsonLLM.from_environment(provider="gigachat")
         from ..core.aio import resolve, run_sync
         from ..llm.client import LLMError
 
@@ -317,6 +374,8 @@ class SemanticDeduplicator:
         try:
             result = self._best_match(text, concepts)
         except Exception as exc:
+            if self._transient(exc):
+                return None, 0.0, 0.0
             self._fail(exc)
             return None, 0.0, 0.0
         self.failure = None
@@ -326,7 +385,7 @@ class SemanticDeduplicator:
         self, text: str, concepts: Sequence[Concept]
     ) -> Tuple[Optional[Concept], float, float]:
         source, *targets = self._embed(
-            [text, *(concept.preferred_label for concept in concepts)]
+            [text, *(concept_text(concept) for concept in concepts)]
         )
         # One matrix product over the registry instead of a Python loop
         # per concept (C-8); vectors are unit length, so dot = cosine.
@@ -340,7 +399,7 @@ class SemanticDeduplicator:
         if self.decision_failure is not None:
             return None, cosine, 0.0
         try:
-            decision = self._decision_score(text, concept.preferred_label)
+            decision = self._decision_score(text, concept_text(concept))
         except Exception as exc:
             self.decision_failure = type(exc).__name__
             logger.warning(
@@ -404,15 +463,6 @@ def _group(
         ),
         None,
     )
-
-
-# Within the Technology family the concept kind is the highest kind any
-# mention reported, so it does not depend on the order of documents.
-_KIND_RANK = {
-    ConceptKind.MATERIAL: 1,
-    ConceptKind.METHOD: 2,
-    ConceptKind.TECHNOLOGY: 3,
-}
 
 
 def _preferred(counts: Dict[str, int]) -> str:
@@ -528,8 +578,24 @@ def _compatible(mention: Mention, concept: Concept) -> bool:
     ) in {kind_family(kind) for kind in mention.type_candidates}
 
 
-def _add_alias(concept: Concept, text: str) -> None:
+def _add_alias(
+    concept: Concept,
+    text: str,
+    name_kind: str = "observed",
+    status: str = "provisional",
+) -> None:
     normalized = normalize_name(text)
+    if not normalized:
+        return
+    for index, name in enumerate(concept.names):
+        if name.normalized_text != normalized:
+            continue
+        if status == "accepted" and name.status != "accepted":
+            # A name the source declared is no longer only observed.
+            concept.names[index] = name.model_copy(
+                update={"name_kind": name_kind, "status": status}
+            )
+        return
     if normalized in {normalize_name(alias) for alias in _aliases(concept)}:
         return
     concept.names.append(
@@ -537,10 +603,18 @@ def _add_alias(concept: Concept, text: str) -> None:
             name_id=stable_id("name", concept.concept_id, normalized),
             text=text,
             normalized_text=normalized,
-            name_kind="observed",
-            status="provisional",
+            name_kind=name_kind,
+            status=status,
         )
     )
+
+
+def _seed_kind_counts(concept: Concept) -> Dict[str, int]:
+    """Kind counts of a concept stored before they were kept: its mentions
+    so far are counted under its current kind."""
+    return dict(concept.kind_counts) or {
+        concept.kind.value: max(1, sum(concept.label_counts.values()))
+    }
 
 
 def concept_identity(
@@ -557,23 +631,30 @@ def concept_identity(
 def _observe(
     concept: Concept, mention: Mention, groups: Sequence[AliasGroup]
 ) -> None:
-    """Record a resolved mention: its name, its form count and its kind."""
-    _add_alias(concept, mention.surface_text)
+    """Record a resolved mention: its name, its form count, its kind and
+    what the source says the concept is."""
+    _add_alias(
+        concept, observed_name(mention.surface_text, mention.canonical_text)
+    )
+    if not concept.definition and mention.definition:
+        concept.definition = mention.definition
     if concept.status == "accepted":
         return
+    kinds = _seed_kind_counts(concept)
     counts = concept.label_counts or {concept.preferred_label: 1}
     form = mention.canonical_text or mention.surface_text
     counts[form] = counts.get(form, 0) + 1
     concept.label_counts = counts
     concept.preferred_label = _preferred(counts)
     kind = _mention_kind(mention)
+    if kind_family(kind) != kind_family(concept.kind):
+        return
+    kinds[kind.value] = kinds.get(kind.value, 0) + 1
+    concept.kind_counts = kinds
     key = concept.identity_key or identity_key(concept.preferred_label)
-    if (
-        _group(key, concept.kind, groups) is None
-        and _KIND_RANK.get(kind, 0) > _KIND_RANK.get(concept.kind, 0)
-        and kind_family(kind) == kind_family(concept.kind)
-    ):
-        concept.kind = kind
+    # A curated synonym group fixes the kind.
+    if _group(key, concept.kind, groups) is None:
+        concept.kind = ConceptKind(settled_kind(kinds, concept.kind))
 
 
 def _new_concept(
@@ -586,24 +667,93 @@ def _new_concept(
     """
     key, kind = concept_identity(text, _mention_kind(mention), groups)
     concept_id = stable_id("concept", kind_family(kind), key)
-    normalized = normalize_name(mention.surface_text)
+    name = observed_name(mention.surface_text, text)
+    normalized = normalize_name(name)
     return Concept(
         concept_id=concept_id,
         kind=kind,
         preferred_label=text,
+        definition=mention.definition,
         status="provisional",
         identity_key=key,
         label_counts={text: 1},
+        kind_counts={_mention_kind(mention).value: 1},
         names=[
             ConceptName(
                 name_id=stable_id("name", concept_id, normalized),
-                text=mention.surface_text,
+                text=name,
                 normalized_text=normalized,
                 name_kind="observed",
                 status="provisional",
             )
         ],
     )
+
+
+def _matches(
+    text: str,
+    mention: Mention,
+    concepts: ConceptIndex,
+    groups: Sequence[AliasGroup],
+) -> List[Concept]:
+    return [
+        concept
+        for concept in concepts.matches(text, groups, _mention_kind(mention))
+        if _compatible(mention, concept)
+    ]
+
+
+def _declared_matches(
+    mention: Mention, concepts: ConceptIndex, groups: Sequence[AliasGroup]
+) -> List[Concept]:
+    """Concepts named by the aliases the source declared for the mention."""
+    found: Dict[str, Concept] = {}
+    for alias in mention.declared_aliases:
+        for concept in _matches(alias, mention, concepts, groups):
+            found.setdefault(concept.concept_id, concept)
+    return list(found.values())
+
+
+def _declare(
+    concept: Concept,
+    mention: Mention,
+    concepts: ConceptIndex,
+    groups: Sequence[AliasGroup],
+) -> List[Dict[str, object]]:
+    """Give the concept the names its source equates with it.
+
+    A declared alias becomes an accepted name, so later documents that use
+    only that name resolve here. An alias that already names another
+    concept is not taken over: the pair becomes a merge candidate.
+    """
+    candidates: List[Dict[str, object]] = []
+    family = kind_family(concept.kind)
+    for alias in mention.declared_aliases:
+        named = [
+            other
+            for other in concepts.matches(alias, groups)
+            if other.concept_id != concept.concept_id
+        ]
+        if any(kind_family(other.kind) != family for other in named):
+            # "lovastatin (Merck)": a name of a company is not a name of a
+            # compound, whatever the parentheses suggest.
+            continue
+        others = [other for other in named if _compatible(mention, other)]
+        if others:
+            candidates += [
+                {
+                    "concept_id": other.concept_id,
+                    "kind": other.kind.value,
+                    "score": 1.0,
+                    "method": DECLARED_ALIAS_METHOD,
+                    "alias": alias,
+                }
+                for other in others
+            ]
+            continue
+        _add_alias(concept, alias, name_kind="declared", status="accepted")
+    concepts.add(concept)
+    return candidates
 
 
 def resolve_mentions(
@@ -636,7 +786,10 @@ def resolve_mentions(
     if isinstance(semantic, SemanticDeduplicator) and semantic.available():
         embedded = set(load_catalog("resolver")["semantic"]["embedded_kinds"])
         names = [
-            mention.canonical_text or mention.surface_text
+            context_text(
+                mention.canonical_text or mention.surface_text,
+                mention.definition,
+            )
             for mention in mentions
             if any(kind.value in embedded for kind in mention.type_candidates)
         ]
@@ -647,13 +800,14 @@ def resolve_mentions(
 
     for mention in mentions:
         canonical_text = mention.canonical_text or mention.surface_text
-        deterministic = [
-            concept
-            for concept in concepts.matches(
-                canonical_text, groups, _mention_kind(mention)
-            )
-            if _compatible(mention, concept)
-        ]
+        deterministic = _matches(canonical_text, mention, concepts, groups)
+        method = "normalized_lemma_or_explicit_alias"
+        if not deterministic:
+            # "compactin (ML-236B)": a name the source equates with this one
+            # identifies the concept when the label alone does not.
+            declared = _declared_matches(mention, concepts, groups)
+            if len(declared) == 1:
+                deterministic, method = declared, DECLARED_ALIAS_METHOD
         resolution_id = stable_id(
             "resolution", mention.mention_id, "cascade-v1"
         )
@@ -672,7 +826,16 @@ def resolve_mentions(
         if len(deterministic) == 1:
             concept = deterministic[0]
             _observe(concept, mention, groups)
-            concepts.add(concept)
+            if method == DECLARED_ALIAS_METHOD:
+                # The source equated its label with a name of the concept:
+                # the label names it from now on too.
+                _add_alias(
+                    concept,
+                    canonical_text,
+                    name_kind="declared",
+                    status="accepted",
+                )
+            declared_candidates = _declare(concept, mention, concepts, groups)
             touched[concept.concept_id] = concept
             decisions.append(
                 ResolutionDecision(
@@ -680,9 +843,14 @@ def resolve_mentions(
                     mention_id=mention.mention_id,
                     status="accepted",
                     concept_id=concept.concept_id,
-                    method="normalized_lemma_or_explicit_alias",
+                    method=method,
+                    candidates=declared_candidates,
                     score=1.0,
-                    basis=["deterministic alias match"],
+                    basis=[
+                        "alias declared by the source"
+                        if method == DECLARED_ALIAS_METHOD
+                        else "deterministic alias match"
+                    ],
                     review_status="not_required",
                 )
             )
@@ -714,7 +882,7 @@ def resolve_mentions(
         semantic_candidate = None
         if semantic is not None:
             match, cosine, model_score = semantic.best_match(
-                canonical_text,
+                context_text(canonical_text, mention.definition),
                 [
                     concept
                     for concept in concepts
@@ -761,6 +929,7 @@ def resolve_mentions(
             _observe(existing, mention, groups)
             concept = existing
         concepts.add(concept)
+        declared_candidates = _declare(concept, mention, concepts, groups)
         touched[concept_id] = concept
         decisions.append(
             ResolutionDecision(
@@ -771,7 +940,10 @@ def resolve_mentions(
                 method=SEMANTIC_CANDIDATE_METHOD
                 if semantic_candidate
                 else "new_provisional",
-                candidates=[semantic_candidate] if semantic_candidate else [],
+                candidates=[
+                    *([semantic_candidate] if semantic_candidate else []),
+                    *declared_candidates,
+                ],
                 score=semantic_candidate["score"]
                 if semantic_candidate
                 else None,

@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 KEY_VERSION = "lexical-key/2"
 
@@ -168,19 +168,61 @@ def country_code(value: str) -> Optional[str]:
     return None
 
 
-# One technology can be reported as a Technology, a Method or a Material;
-# identity must not depend on which one a document chose.
+# One technology can be reported as a Technology, a Method or a Material,
+# one organization as an Organization, a Company or a University; identity
+# must not depend on which one a document chose.
 _FAMILIES = {
     "Technology": "technology",
     "Method": "technology",
     "Material": "technology",
+    "Organization": "organization",
+    "Company": "organization",
+    "University": "organization",
 }
+# Tie-break of kinds within a family. An organization takes the highest
+# kind any mention reported: a named company or university is more than an
+# untyped organization.
+KIND_RANK = {
+    "Material": 1,
+    "Method": 2,
+    "Technology": 3,
+    "Organization": 1,
+    "University": 2,
+    "Company": 3,
+}
+# Technology, Method and Material are different things, not one thing named
+# more or less precisely: the kind most mentions reported wins, so one
+# document calling a compound a Technology does not relabel it for good.
+VOTED_FAMILIES = frozenset({"technology"})
 
 
 def kind_family(kind: object) -> str:
     """The identity family of a concept kind; other kinds are their own."""
     value = str(getattr(kind, "value", kind))
     return _FAMILIES.get(value, value)
+
+
+def settled_kind(counts: Mapping[str, int], current: object) -> str:
+    """The kind of a concept from its mentions' kinds.
+
+    A voted family takes its most reported kind, an organization its
+    highest; ties go to the higher rank, so the result does not depend on
+    the order of documents. Kinds of another family are ignored.
+    """
+    current = str(getattr(current, "value", current))
+    family = kind_family(current)
+    kinds = {
+        str(getattr(kind, "value", kind)): count
+        for kind, count in counts.items()
+        if count > 0 and kind_family(kind) == family
+    }
+    if not kinds:
+        return current
+    if family in VOTED_FAMILIES:
+        return max(
+            kinds, key=lambda kind: (kinds[kind], KIND_RANK.get(kind, 0))
+        )
+    return max(kinds, key=lambda kind: KIND_RANK.get(kind, 0))
 
 
 def identity_key(value: str, kind: object = None) -> str:

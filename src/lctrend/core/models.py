@@ -22,6 +22,10 @@ SEMANTIC_CANDIDATE_METHOD = "new_provisional_semantic_candidate"
 # Several concepts share the identity key of a mention; it is linked to all
 # of them as ambiguous until they are merged.
 AMBIGUOUS_COLLISION_METHOD = "deterministic_alias_collision"
+# A name the source itself equates with the mention's ("compactin
+# (ML-236B)"): it resolves the mention, and when it already names another
+# concept the pair is a merge candidate.
+DECLARED_ALIAS_METHOD = "declared_alias"
 
 
 class DocumentType(str, Enum):
@@ -115,6 +119,37 @@ class Domain(BaseModel):
     external_ids: List[ExternalId] = Field(default_factory=list)
 
 
+class EconomicFact(BaseModel):
+    """A structured money fact of a source record, not of text: a grant
+    award, a salary offer. It belongs to the whole document, so every
+    technology the document mentions is touched by it; the organizations
+    are the document's own (recipient, employer, funder).
+    """
+
+    fact_id: str
+    # grant_award, salary_offer, ...
+    category: str
+    amount: Optional[float] = None
+    # Upper bound of a range ("from 100 000 to 150 000"); amount is the
+    # lower bound, or the only value.
+    amount_max: Optional[float] = None
+    currency: Optional[str] = None
+    # total, per_year, per_month
+    period: str = "total"
+    # The date the money refers to: award, fiscal year, vacancy posting.
+    observed_at: Optional[str] = None
+    recipient_organization_id: Optional[str] = None
+    payer_organization_id: Optional[str] = None
+    # The record field the amount was read from.
+    source_field: Optional[str] = None
+    # Constant dollars of real_base_year (core.money); None when the
+    # currency or the year is unknown.
+    amount_usd_real: Optional[float] = None
+    amount_max_usd_real: Optional[float] = None
+    real_base_year: Optional[int] = None
+    real_status: Optional[str] = None
+
+
 class Chunk(BaseModel):
     chunk_id: str
     kind: str
@@ -153,6 +188,7 @@ class DocumentEnvelope(BaseModel):
     countries: List[Country] = Field(default_factory=list)
     domains: List[Domain] = Field(default_factory=list)
     chunks: List[Chunk] = Field(default_factory=list)
+    economic_facts: List[EconomicFact] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     metrics: Dict[str, float] = Field(default_factory=dict)
     coverage: str = "metadata_only"
@@ -196,6 +232,9 @@ class Concept(BaseModel):
     # Resolved mentions per canonical form; the most frequent form is the
     # preferred label of a concept that has not been reviewed.
     label_counts: Dict[str, int] = Field(default_factory=dict)
+    # Resolved mentions per reported kind; the kind of the concept is
+    # settled from them (extraction.lexical.settled_kind).
+    kind_counts: Dict[str, int] = Field(default_factory=dict)
 
 
 class Mention(BaseModel):
@@ -210,6 +249,12 @@ class Mention(BaseModel):
     discourse_role: str = "unknown"
     confidence: Optional[float] = None
     status: str = "candidate"
+    # What the source says the entity is; context for semantic matching and
+    # review, never identity evidence.
+    definition: Optional[str] = None
+    # Other names the source itself equates with this one ("compactin
+    # (ML-236B)"), checked against the chunk; they are identity evidence.
+    declared_aliases: List[str] = Field(default_factory=list)
 
 
 class EvidenceSpan(BaseModel):

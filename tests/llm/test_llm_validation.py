@@ -536,3 +536,184 @@ def test_grouped_thousands_read_as_the_economics_parser_reads_them():
         number = raw.removesuffix(" mW")
         assert float(parse_number(number)) == right
         assert amount_value(number, {}) == right
+
+
+def entity(local_id, label, kind, quote=None):
+    return LocalEntity(
+        local_id=local_id,
+        label=label,
+        kind=kind,
+        evidence=[SourceSpan(chunk_id="c1", quote=quote or label)],
+    )
+
+
+def test_umbrella_field_becomes_a_domain_and_keeps_only_domain_claims():
+    # Feedback: the radar found "ML" and "NLP" instead of concrete
+    # technologies such as transformer-based NER.
+    text = (
+        "Transformer-based NER is a machine learning method used in "
+        "natural language processing."
+    )
+    doc = document(text)
+    payload = Extraction(
+        entities=[
+            entity("ner", "Transformer-based NER", ConceptKind.TECHNOLOGY),
+            entity("ml", "machine learning method", ConceptKind.METHOD),
+            entity(
+                "nlp", "natural language processing", ConceptKind.TECHNOLOGY
+            ),
+        ],
+        claims=[
+            LocalClaim(
+                claim_id="uses",
+                predicate="uses_method",
+                roles={"subject": "ner", "method": "ml"},
+                polarity="affirmed",
+                modality="reported",
+                evidence=[SourceSpan(chunk_id="c1", quote=text)],
+            ),
+            LocalClaim(
+                claim_id="domain",
+                predicate="belongs_to_domain",
+                roles={"subject": "ner", "domain": "nlp"},
+                polarity="affirmed",
+                modality="reported",
+                evidence=[SourceSpan(chunk_id="c1", quote=text)],
+            ),
+        ],
+    )
+    notes = []
+    result, issues = validate_local_extraction(doc, payload, ["c1"], notes)
+    kinds = {item.local_id: item.kind for item in result.entities}
+    assert kinds == {
+        "ner": ConceptKind.TECHNOLOGY,
+        "ml": ConceptKind.DOMAIN,
+        "nlp": ConceptKind.DOMAIN,
+    }
+    assert "claim:uses" in issues
+    assert "claim:domain" not in issues
+    assert {note["item"] for note in notes} >= {"entity:ml", "entity:nlp"}
+
+
+def test_organization_kind_comes_from_the_catalog_and_names_are_required():
+    text = "Samsung, third parties and Dr Paulson use the sensor."
+    doc = document(text)
+    payload = Extraction(
+        entities=[
+            entity("samsung", "Samsung", ConceptKind.ORGANIZATION),
+            entity("parties", "third parties", ConceptKind.ORGANIZATION),
+            entity("person", "Dr Paulson", ConceptKind.ORGANIZATION),
+        ]
+    )
+    result, issues = validate_local_extraction(doc, payload, ["c1"])
+    kinds = {item.local_id: item.kind for item in result.entities}
+    assert kinds["samsung"] == ConceptKind.COMPANY
+    assert "entity:samsung" not in issues
+    assert issues["entity:parties"] == ["organization_not_named"]
+    assert issues["entity:person"] == ["organization_not_named"]
+
+
+@pytest.mark.parametrize(
+    "label,generic",
+    [
+        # Umbrella fields and industries of any area (generic_terms.json).
+        ("Artificial intelligence (AI) algorithms", True),
+        ("методы машинного обучения", True),
+        ("финтех", True),
+        ("биотехнологии", True),
+        ("Oncology", True),
+        ("AI in healthcare", True),
+        # One specific word, or two fields written as one compound name.
+        ("transformers in NLP", False),
+        ("графовые нейронные сети", False),
+        ("CRISPR-Cas9 gene editing", False),
+        ("battery management system", False),
+        ("Multi-access edge computing (MEC)", False),
+        ("retrieval-augmented generation", False),
+    ],
+)
+def test_umbrella_fields_of_every_area_are_not_technologies(label, generic):
+    from lctrend.llm.validation import generic_technology
+
+    assert generic_technology(label) is generic
+
+
+def compound(aliases=(), definition=None, kind=ConceptKind.MATERIAL):
+    text = (
+        "Penicillium citrinum produces compactin (ML-236B), a new inhibitor "
+        "of cholesterogenesis. " + "Unrelated filler text. " * 20 + "ML-236C."
+    )
+    doc = document(text)
+    return doc, Extraction(
+        entities=[
+            LocalEntity(
+                local_id="e1",
+                label="compactin",
+                kind=kind,
+                aliases=list(aliases),
+                definition=definition,
+                evidence=[SourceSpan(chunk_id="c1", quote="compactin")],
+            )
+        ]
+    )
+
+
+def test_declared_aliases_must_stand_next_to_the_label():
+    doc, payload = compound(
+        ["ML-236B", "ML-236C", "compactin", "fungal metabolite"]
+    )
+    notes = []
+    result, issues = validate_local_extraction(doc, payload, ["c1"], notes)
+    assert issues == {}
+    assert result.entities[0].aliases == ["ML-236B"]
+    dropped = {
+        note["alias"]: note["reason"]
+        for note in notes
+        if note["code"] == "alias_dropped"
+    }
+    assert dropped == {
+        "ML-236C": "not_next_to_label",
+        "compactin": "same_as_label",
+        "fungal metabolite": "not_next_to_label",
+    }
+    # The model's answer itself is not edited.
+    assert len(payload.entities[0].aliases) == 4
+
+
+def test_an_umbrella_term_is_not_an_alias():
+    doc = document("Graph neural networks (machine learning) detect fraud.")
+    payload = Extraction(
+        entities=[
+            LocalEntity(
+                local_id="e1",
+                label="graph neural networks",
+                kind=ConceptKind.TECHNOLOGY,
+                aliases=["machine learning"],
+                evidence=[
+                    SourceSpan(chunk_id="c1", quote="Graph neural networks")
+                ],
+            )
+        ]
+    )
+    notes = []
+    result, _ = validate_local_extraction(doc, payload, ["c1"], notes)
+    assert result.entities[0].aliases == []
+    assert notes[-1]["reason"] == "generic_term"
+
+
+def test_a_definition_is_a_short_phrase_of_a_technology_kind():
+    doc, payload = compound(definition="  inhibitor of\ncholesterol  synthesis ")
+    result, _ = validate_local_extraction(doc, payload, ["c1"])
+    assert result.entities[0].definition == (
+        "inhibitor of cholesterol synthesis"
+    )
+    doc, payload = compound(definition="word " * 40)
+    notes = []
+    result, _ = validate_local_extraction(doc, payload, ["c1"], notes)
+    assert result.entities[0].definition is None
+    assert {"item": "entity:e1", "code": "definition_dropped"} in notes
+    doc, payload = compound(
+        definition="a research institute", kind=ConceptKind.ORGANIZATION
+    )
+    result, _ = validate_local_extraction(doc, payload, ["c1"])
+    assert result.entities[0].definition is None

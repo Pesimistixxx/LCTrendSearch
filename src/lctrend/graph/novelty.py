@@ -78,6 +78,11 @@ def _relations(snapshot: SnapshotView):
             yield source, event
 
 
+COMPUTED_RELATIONS = frozenset(
+    {"SIMILAR_TO", "SHARES_CONTEXT_WITH", "CORROBORATES", "CONTRADICTS"}
+)
+
+
 def technology_graph(snapshot: SnapshotView) -> Dict[str, set]:
     """Snapshot technology adjacency; shared documents create one edge."""
     graph = {key: set() for key in sorted(snapshot.technologies)}
@@ -91,6 +96,11 @@ def technology_graph(snapshot: SnapshotView) -> Dict[str, set]:
             graph[right].add(left)
     for source, event in _relations(snapshot):
         data = event.data
+        # Computed links (linking.similar, linking.reconcile) are not
+        # reported relations: a dense layer would drive PageRank and
+        # betweenness.
+        if data.get("relation") in COMPUTED_RELATIONS:
+            continue
         target = data.get("target_id")
         technology = (
             data.get("relation") == "SUBTECHNOLOGY_OF"

@@ -13,11 +13,14 @@
     "max_map_entries": 60,
     "max_retries": 4,
     "retry_delay_seconds": 2.0,
-    "max_retry_delay_seconds": 60.0
+    "max_retry_delay_seconds": 60.0,
+    "packet_workers": 8
   },
   "metadata_fields": ["description", "summary", "version", "license", "full_name", "country_status", "parser", "parse_warnings", "text_encoding"],
   "navigation_locator_fields": ["path", "json_pointer", "xpath", "part", "element_path", "release_id", "tag", "page", "self_ref", "source_start", "source_end", "section_heading", "section_role"],
   "section_roles": {
+    "data_description": "^\\W*(?:(?:[a-h]|[ivx]+|\\d+(?:\\.\\d+)*)(?:[.)]\\s*|\\s+))?(?:data(?:\\s+(?:sources?|sets?|collection|description|and\\s+(?:samples?|variables|measures)))?|datasets?|samples?(?:\\s+(?:selection|description|construction))?|survey\\s+design(?:\\s+and\\s+samples?)?|descriptive\\s+statistics|variables?(?:\\s+and\\s+measures)?|данные|исходные\\s+данные|описание\\s+данных|источники\\s+данных|выборка)\\s*(?:[:.]|$)",
+    "administrative": "^\\W*(?:(?:[a-h]|[ivx]+|\\d+(?:\\.\\d+)*)(?:[.)]\\s*|\\s+))?(?:author\\s+contributions?|competing\\s+interests?|conflicts?\\s+of\\s+interests?|declaration\\s+of\\s+competing\\s+interests?|data\\s+availability(?:\\s+statement)?|code\\s+availability|ethics\\s+(?:approval|statement)|supplementary\\s+(?:materials?|information)|вклад\\s+авторов|конфликт\\s+интересов)\\b",
     "abstract": "^\\W*(?:\\d+\\.?\\s*)?(?:abstract|summary|аннотация|реферат)\\b",
     "problem_statement": "\\b(?:problem statement|problem formulation|постановка задачи|постановка проблемы)\\b",
     "economics": "\\b(?:economic evaluation|cost analysis|financial analysis|экономическая оценка|финансовый анализ|оценка стоимости)\\b",
@@ -29,6 +32,34 @@
     "results": "\\b(?:results?|evaluation|experiments?|findings|performance|результат\\w*|эксперимент\\w*|оценка качества|валидация)\\b",
     "discussion": "\\b(?:discussion|analysis|обсуждение|анализ)\\b",
     "method": "\\b(?:methods?|methodology|approach|materials|experimental setup|model|architecture|design|метод\\w*|подход|материалы|методика|методология)\\b"
+  },
+  "linking": {
+    "note": "The linking layer (lctrend.linking). skipped_section_roles: chunks of these section_roles (from the heading, or a heading that opens the chunk) never reach the model; a document made only of them is read whole. known_concepts: registry concepts a packet names (lexical) or resembles (cosine of a chunk and a cached concept vector), sent as reference names.",
+    "skipped_section_roles": ["data_description", "administrative"],
+    "known_concepts": {
+      "enabled": true,
+      "limit": 15,
+      "kinds": ["Technology", "Method", "Material", "Task", "Problem", "ApplicationContext"],
+      "semantic": true,
+      "semantic_min_cosine": 0.55,
+      "max_chunk_chars": 2000,
+      "max_names": 3,
+      "max_definition_chars": 160
+    },
+    "similar": {
+      "note": "SIMILAR_TO (lctrend similar-rebuild): mutual k-nearest concepts of one kind family by cosine of stored vectors; computed edges without evidence, excluded from structural graph metrics.",
+      "k": 8,
+      "min_cosine": 0.7,
+      "kinds": ["Technology", "Method", "Material"]
+    },
+    "reconcile": {
+      "note": "After publication the document's accepted claims are compared with the graph's (lctrend.linking.reconcile): one slot = predicate + concepts in roles + normalized qualifiers; CORROBORATES / CONTRADICTS link claims of other works; SHARES_CONTEXT_WITH links technologies stated in min_shared identical contexts (partners other than countries and domains). reconcile-claims rebuilds the whole layer.",
+      "on_ingest": true,
+      "min_shared": 2,
+      "ignored_qualifiers": ["trl"],
+      "excluded_partner_kinds": ["Country", "Domain"],
+      "max_context_members": 200
+    }
   },
   "file_formats": {
     ".txt": {"adapter": "text", "media_type": "text/plain"},

@@ -37,6 +37,10 @@ from ..core.models import (
     SourceRef,
     stable_id,
 )
+from ..core.organizations import (
+    organization_identity,
+    source_organization_type,
+)
 from .snapshots import snapshot_bytes
 
 ADAPTER_VERSION = "local-files/1"
@@ -845,22 +849,29 @@ def _sidecar_parties(
     sidecar: Dict[str, Any],
 ) -> Tuple[List[Contributor], List[Organization], List[Country], List[Domain]]:
     organizations: Dict[str, Organization] = {}
+    # Affiliations name organizations as the sidecar writes them.
+    by_name: Dict[str, str] = {}
     for item in sidecar.get("organizations") or []:
         item = {"name": item} if isinstance(item, str) else item
         if not item.get("name"):
             continue
-        organization_id = stable_id("organization", "local", item["name"])
+        organization_type = source_organization_type(
+            item["name"], item.get("type")
+        )
+        organization_id, name = organization_identity(
+            item["name"], organization_type, "local", item["name"]
+        )
+        by_name[item["name"]] = organization_id
         code = (item.get("country") or "").upper() or None
         organizations[organization_id] = Organization(
             organization_id=organization_id,
-            name=item["name"],
-            organization_type=item.get("type") or "other",
+            name=name,
+            organization_type=organization_type,
             country_code=code
             if code and re.fullmatch(r"[A-Z]{2}", code)
             else None,
             role=item.get("role") or "associated",
         )
-    by_name = {item.name: key for key, item in organizations.items()}
     contributors = []
     for item in sidecar.get("authors") or []:
         item = {"name": item} if isinstance(item, str) else item

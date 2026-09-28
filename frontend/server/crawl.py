@@ -6,6 +6,7 @@ Extraction and the domain graph remain in the existing parser and Neo4j.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -44,6 +45,12 @@ async def _hydrate(item):
         return await fetch_github(item["source_id"], os.getenv("GITHUB_TOKEN"))
     if item["source"] == "pypi":
         return item.get("payload") or await fetch_pypi(item["source_id"])
+    if item["source"] == "hh":
+        from lctrend.ingest.economic import hydrate_hh
+
+        # A search item has a snippet; the card has the description.
+        payload = item.get("payload") or {"id": item["source_id"]}
+        return payload if "description" in payload else await hydrate_hh(payload)
     return item["payload"]
 
 
@@ -141,11 +148,22 @@ class CrawlManager:
                 "ALTER TABLE crawls ADD COLUMN max_per_source INTEGER"
             )
         self._db.commit()
-        self._discoverers = (
-            discoverers
-            if discoverers is not None
-            else {"openalex": discover_openalex, "github": discover_github}
-        )
+        if discoverers is None:
+            from lctrend.ingest.economic import DISCOVERERS
+
+            available = {
+                "openalex": discover_openalex,
+                "github": discover_github,
+                # The economic layer: grants and vacancies.
+                **DISCOVERERS,
+            }
+            selected = load_catalog("sources").get(
+                "crawl_sources", ["openalex", "github"]
+            )
+            discoverers = {
+                name: available[name] for name in selected if name in available
+            }
+        self._discoverers = discoverers
         self._hydrator = hydrator or _hydrate
         self._pypi_discoverer = (
             pypi_discoverer or discover_pypi_from_github_payload
@@ -850,6 +868,25 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 ),
             )
 
+    def _hydration_failed(self, record, exc):
+        error = _error(exc, "parse")
+        error["message"] = (
+            "Не удалось загрузить содержимое материала из источника."
+        )
+        self._material_status(record["material_id"], "failed", error)
+
+    async def _hydrate_batch(self, items):
+        """Payloads of the items, or their exceptions, in their order."""
+        slots = asyncio.Semaphore(default_workers())
+
+        async def one(item):
+            async with slots:
+                return await aio.call(self._hydrator, item)
+
+        return await asyncio.gather(
+            *(one(item) for item in items), return_exceptions=True
+        )
+
     def _process_pending(self, crawl_id):
         with self._lock, self._db:
             first = self._db.execute(
@@ -886,6 +923,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 if claimed.rowcount:
                     records.append(record)
         ready, payloads, cached_results = [], [], []
+        claimed = []
         for record in records:
             if self._paused[crawl_id].is_set():
                 self._material_status(record["material_id"], "pending")
@@ -906,14 +944,33 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                         ),
                         (record["material_id"],),
                     )
-                self._set_state(
-                    crawl_id, "running", f"hydration:{record['source']}"
-                )
-                payload = (
-                    self._await(self._hydrator, item)
-                    if cached is None and not record["hydrated"]
-                    else item["payload"]
-                )
+            except Exception as exc:
+                self._hydration_failed(record, exc)
+                continue
+            claimed.append((record, item, cached))
+        if claimed:
+            self._set_state(
+                crawl_id, "running", f"hydration:{claimed[0][0]['source']}"
+            )
+        # A batch is hydrated concurrently: one request per vacancy or
+        # repository, one after another, made the batch wait on the network.
+        hydrated = self._await(
+            self._hydrate_batch,
+            [
+                item
+                for record, item, cached in claimed
+                if cached is None and not record["hydrated"]
+            ],
+        )
+        for record, item, cached in claimed:
+            payload = (
+                hydrated.pop(0)
+                if cached is None and not record["hydrated"]
+                else item["payload"]
+            )
+            try:
+                if isinstance(payload, BaseException):
+                    raise payload
                 with self._lock, self._db:
                     self._db.execute(
                         (
@@ -937,11 +994,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 payloads.append(payload)
                 cached_results.append(cached)
             except Exception as exc:
-                error = _error(exc, "parse")
-                error["message"] = (
-                    "Не удалось загрузить содержимое материала из источника."
-                )
-                self._material_status(record["material_id"], "failed", error)
+                self._hydration_failed(record, exc)
         if not ready:
             return True
         if self._paused[crawl_id].is_set():

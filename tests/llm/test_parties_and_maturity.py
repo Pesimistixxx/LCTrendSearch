@@ -11,7 +11,7 @@ from lctrend.core.models import (
     DocumentType,
     SourceRef,
 )
-from lctrend.graph.store import GraphStore
+from lctrend.graph.store import GraphStore, evidence_chunk_ids
 from lctrend.llm.client import ReplayProvider
 from lctrend.llm.context import PipelineSettings
 from lctrend.llm.contracts import Extraction
@@ -257,7 +257,12 @@ def test_graph_write_uses_labels_batches_and_links_text_countries():
         )
     )
     tx = Transaction()
-    asyncio.run(GraphStore._write_document(tx, doc))
+    # As write_processed does: the chunks the extraction stands on.
+    asyncio.run(
+        GraphStore._write_document(
+            tx, doc, kept_chunk_ids=evidence_chunk_ids(result)
+        )
+    )
     asyncio.run(GraphStore._write_extraction(tx, doc, result))
     queries = [query for query, _ in tx.queries]
     # Every concept match is labeled, so it can use the concept_id constraint.

@@ -24,13 +24,12 @@ from ..core.models import (
     json_value,
     stable_id,
 )
-from ..extraction.lexical import kind_family
+from ..extraction.lexical import kind_family, settled_kind
 from ..extraction.resolver import _preferred, normalize_name
 
 logger = logging.getLogger(__name__)
 
 MERGE_METHOD = "concept_merge"
-_KIND_RANK = {"Material": 1, "Method": 2, "Technology": 3}
 # Keyed relationships are re-created with MERGE on their key, so a link the
 # target already has is updated instead of duplicated.
 _EVIDENCE = (
@@ -65,18 +64,23 @@ def merged_concept(target: Concept, source: Concept) -> Concept:
         source.label_counts or {source.preferred_label: 1}
     ).items():
         counts[form] = counts.get(form, 0) + count
-    kind = max(
-        [target.kind.value, source.kind.value],
-        key=lambda value: (_KIND_RANK.get(value, 0), value == target.kind),
-    )
+    kinds: Dict[str, int] = {}
+    for concept in (target, source):
+        for kind, count in (
+            concept.kind_counts or {concept.kind.value: 1}
+        ).items():
+            kinds[kind] = kinds.get(kind, 0) + count
+    kind = settled_kind(kinds, target.kind)
     return target.model_copy(
         update={
             "kind": ConceptKind(kind),
             "names": names,
             "label_counts": counts,
+            "kind_counts": kinds,
             "preferred_label": target.preferred_label
             if target.status == "accepted"
             else _preferred(counts),
+            "definition": target.definition or source.definition,
             "identity_key": target.identity_key or source.identity_key,
         },
         deep=True,
@@ -221,6 +225,8 @@ async def _merge(
             t.normalized_aliases = $normalized_aliases,
             t.preferred_label = $preferred_label, t.name = $preferred_label,
             t.label_counts_json = $label_counts_json,
+            t.kind_counts_json = $kind_counts_json,
+            t.definition = coalesce(t.definition, $definition),
             t.identity_key = $identity_key,
             t.first_seen_at = CASE
                 WHEN s.first_seen_at IS NULL THEN t.first_seen_at
@@ -253,6 +259,8 @@ async def _merge(
         ),
         preferred_label=merged.preferred_label,
         label_counts_json=json_value(merged.label_counts),
+        kind_counts_json=json_value(merged.kind_counts),
+        definition=merged.definition,
         identity_key=merged.identity_key,
     )
     await _run(

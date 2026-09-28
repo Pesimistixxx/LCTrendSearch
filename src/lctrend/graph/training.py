@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import math
+from bisect import bisect_left, bisect_right
 from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -449,6 +450,7 @@ def _snapshot_features(snapshot, view, config):
         config["reliability_tier_max"],
     )
     relations = f.relation_features(view)
+    covered = snapshot.corpus.covered_families(cutoff, view.technology_id)
     confirmed_volume = (
         sum(item.family in (CODE, PACKAGE, PATENT) for item in view.documents)
         + relations["commercial_user_count"]
@@ -466,12 +468,14 @@ def _snapshot_features(snapshot, view, config):
             config["speculative_modalities"],
             confirmed_volume,
         ),
+        **f.claim_slot_features(view, config["factual_modalities"]),
         **economic,
+        **f.economic_layer_features(view, cutoff, covered),
         **f.maturity_features(view, snapshot, stages, patent_families),
         **f.quality_features(view),
         **f.coverage_features(
             view,
-            snapshot.corpus.covered_families(cutoff, view.technology_id),
+            covered,
             config["coverage_families"],
         ),
         "source_count": len(
@@ -523,6 +527,10 @@ def _feature_schema(config):
         + [
             "feature_missingness_count",
             "data_completeness_score",
+        ]
+        + [
+            f"{column}_snapshot_pct"
+            for column in config.get("snapshot_percentiles", [])
         ]
     )
 
@@ -582,7 +590,32 @@ def build_snapshot_rows(
                 **features,
             }
         )
+    _snapshot_percentiles(rows, config.get("snapshot_percentiles", []))
     return rows
+
+
+def _snapshot_percentiles(rows: List[Dict[str, object]], columns) -> None:
+    """Rank of a value among the technologies of the same snapshot.
+
+    Constant dollars remove inflation, not the growth of a whole field:
+    a percentile within T compares a technology with its contemporaries,
+    which carries over to snapshots the model has never seen.
+    """
+    for column in columns:
+        values = sorted(
+            float(row[column])
+            for row in rows
+            if isinstance(row.get(column), (int, float))
+            and not isinstance(row.get(column), bool)
+        )
+        for row in rows:
+            value = row.get(column)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                row[f"{column}_snapshot_pct"] = None
+                continue
+            below = bisect_left(values, float(value))
+            equal = bisect_right(values, float(value)) - below
+            row[f"{column}_snapshot_pct"] = (below + 0.5 * equal) / len(values)
 
 
 def _future_outcomes(

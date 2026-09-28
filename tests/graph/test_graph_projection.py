@@ -559,7 +559,8 @@ def test_document_write_cost_does_not_grow_with_its_parties():
         asyncio.run(GraphStore._write_document(tx, document))
         counts.append(len(tx.queries))
     assert counts[0] == counts[1]
-    assert counts[1] <= 15
+    # 15 for the document, 2 for its work (graph.works).
+    assert counts[1] <= 17
 
 
 def test_extraction_write_cost_does_not_grow_with_its_concepts():

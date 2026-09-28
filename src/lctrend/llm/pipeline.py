@@ -11,10 +11,12 @@ import inspect
 import json
 import logging
 import os
+import re
 from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -38,9 +40,15 @@ from ..extraction.economics import (
     economic_evidence_from_assertions,
     extract_economic_evidence,
 )
-from ..extraction.resolver import ConceptRegistry, resolve_mentions
+from ..extraction.resolver import (
+    ConceptRegistry,
+    concept_text,
+    resolve_mentions,
+)
 from ..ingest.processed import fulltext_sha256
-from .client import CALL_LOG, LLMError, Provider
+from ..linking import known as known_layer
+from ..linking.sections import SKIPPED_REASON
+from .client import CALL_LOG, LLMError, Provider, rate_limited
 from .context import (
     ContextBudgetError,
     PipelineSettings,
@@ -152,7 +160,7 @@ async def _concept_embeddings(
     chosen = [concept for concept in concepts if concept.kind.value in kinds]
     vectors = (
         await asyncio.to_thread(
-            embed, [concept.preferred_label for concept in chosen]
+            embed, [concept_text(concept) for concept in chosen]
         )
         if chosen
         else []
@@ -263,6 +271,114 @@ def _pending_claims(requests) -> Any:
     )
 
 
+CHUNK_ID = re.compile(r"chunk:[0-9a-f]{24}")
+
+
+class _ChunkAliases:
+    """Short names of the document's chunk IDs in extraction requests.
+
+    A chunk ID ("chunk:" and 24 hex digits) costs about 20 output tokens and
+    every evidence span repeats it; "c12" costs two. Requests carry the
+    aliases, and answers are mapped back before any validation. Documents
+    with other ID forms (fixtures) keep their IDs.
+    """
+
+    def __init__(self, document: DocumentEnvelope):
+        ids = [chunk.chunk_id for chunk in document.chunks]
+        usable = bool(ids) and all(CHUNK_ID.fullmatch(cid) for cid in ids)
+        self.forward = (
+            {cid: f"c{number}" for number, cid in enumerate(ids, 1)}
+            if usable
+            else {}
+        )
+        self.back = {alias: cid for cid, alias in self.forward.items()}
+
+    def _text(self, value: str) -> str:
+        if value in self.forward:
+            return self.forward[value]
+        if "chunk:" not in value:
+            return value
+        # Feedback strings quote chunk IDs inside JSON text.
+        return CHUNK_ID.sub(
+            lambda match: self.forward.get(match.group(0), match.group(0)),
+            value,
+        )
+
+    def encode(self, value: Any) -> Any:
+        if not self.forward:
+            return value
+        if isinstance(value, dict):
+            return {
+                self._text(key) if isinstance(key, str) else key: self.encode(
+                    item
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self.encode(item) for item in value]
+        if isinstance(value, str):
+            return self._text(value)
+        return value
+
+    def decode(self, extraction: Extraction) -> Extraction:
+        """The answer with real chunk IDs; unknown names stay for the
+        validator to reject."""
+        if not self.back:
+            return extraction
+        data = extraction.model_dump(mode="python")
+        for item in [*data["entities"], *data["claims"]]:
+            for span in item["evidence"]:
+                span["chunk_id"] = self.back.get(
+                    span["chunk_id"].strip(), span["chunk_id"]
+                )
+        for request in data["context_requests"]:
+            if request["tool"] == "read_chunk":
+                request["argument"] = self.back.get(
+                    request["argument"].strip(), request["argument"]
+                )
+        return Extraction.model_validate(data)
+
+
+def _packet_workers(provider: Provider, settings: PipelineSettings) -> int:
+    """Packets of one document processed at once: never more than the
+    provider serves concurrently (1 for a single GigaChat key)."""
+    capacity = getattr(provider, "max_concurrency", 1)
+    if isinstance(capacity, bool) or not isinstance(capacity, int):
+        capacity = 1
+    return max(1, min(settings.packet_workers, capacity))
+
+
+def _timing(calls: list, wall_seconds: float, workers: int) -> dict:
+    """Where a document's time went: model requests, waiting for a free
+    key, and the rest (context, validation, resolution, embeddings)."""
+    chat = [call for call in calls if call.get("stage") != "embed"]
+
+    def seconds(rows, field):
+        return round(sum(row.get(field) or 0 for row in rows) / 1000, 1)
+
+    def tokens(rows, field):
+        return sum((row.get("tokens") or {}).get(field) or 0 for row in rows)
+
+    stages = {}
+    for stage in sorted({call.get("stage") for call in calls} - {None}):
+        rows = [call for call in calls if call.get("stage") == stage]
+        stages[stage] = {
+            "calls": len(rows),
+            "request_seconds": seconds(rows, "duration_ms"),
+            "queue_seconds": seconds(rows, "queue_ms"),
+            "completion_tokens": tokens(rows, "completion_tokens"),
+        }
+    return {
+        "wall_seconds": round(wall_seconds, 1),
+        "packet_workers": workers,
+        "request_seconds": seconds(chat, "duration_ms"),
+        "queue_seconds": seconds(calls, "queue_ms"),
+        "prompt_tokens": tokens(chat, "prompt_tokens"),
+        "completion_tokens": tokens(chat, "completion_tokens"),
+        "stages": stages,
+    }
+
+
 class _Budget:
     def __init__(
         self,
@@ -342,6 +458,10 @@ class _Budget:
                         "code": exc.code,
                     }
                 )
+                if rate_limited(exc):
+                    # Refused before any model work: retries after HTTP 429
+                    # must not spend the document's call budget.
+                    self.used -= 1
                 _emit(
                     self.event,
                     stage=stage,
@@ -535,6 +655,7 @@ async def _process_document(
 ) -> ExtractionResult:
     """Return an auditable extraction with explicit partial coverage."""
     settings = settings or PipelineSettings.from_catalog()
+    clock = perf_counter()
     prompts = {stage: _prompt(stage) for stage in ("extract", "review")}
     trace: list[dict] = []
     metadata: dict = {
@@ -606,13 +727,61 @@ async def _process_document(
             "support_omissions": plan.support_omissions,
         }
     )
+    aliases = _ChunkAliases(document)
+    # Reference names from the registry per packet (linking.known).
+    if not isinstance(registry, (ConceptRegistry, list, tuple)):
+        registry = list(registry)
+    known = (
+        await asyncio.to_thread(
+            known_layer.KnownConcepts.for_registry, registry, semantic
+        )
+        if known_layer.enabled()
+        else None
+    )
+    by_chunk = {chunk.chunk_id: chunk for chunk in document.chunks}
+
+    async def known_for(packet) -> list:
+        if not known:
+            return []
+        found = await asyncio.to_thread(
+            known.lookup,
+            [by_chunk[chunk_id].text for chunk_id in packet.focus_chunk_ids],
+        )
+        trace.append(
+            {
+                "stage": "known_concepts",
+                "packet_id": packet.packet_id,
+                "concepts": [
+                    [item["match"], item["kind"], item["label"]]
+                    for item in found
+                ],
+            }
+        )
+        return found
+
+    async def extract(payload):
+        return aliases.decode(
+            await budget.call(
+                Extraction,
+                prompts["extract"],
+                aliases.encode(payload),
+                "extract",
+                reserve=1,
+            )
+        )
+
+    # Packets run concurrently when the provider serves several requests
+    # (a key pool); results keep the plan order, and the halves of a split
+    # packet take its place.
     processed, failed = [], []
     batches = []
-    queue = deque(plan.packets)
-    packet_number = 0
-    while queue:
-        original = queue.popleft()
-        packet_number += 1
+    queue = deque(
+        ((position,), item) for position, item in enumerate(plan.packets)
+    )
+    running: set = set()
+    workers = _packet_workers(provider, settings)
+
+    async def run_packet(order: tuple, original, packet_number: int) -> None:
         _emit(
             event,
             stage="packet",
@@ -622,7 +791,7 @@ async def _process_document(
             total_packets=packet_number + len(queue),
         )
         if budget.used + 2 > budget.limit:
-            failed.append(original.packet_id)
+            failed.append((order, original.packet_id))
             metadata["issues"].append(
                 {"packet_id": original.packet_id, "code": "call_budget"}
             )
@@ -637,16 +806,15 @@ async def _process_document(
                 "Packet %s skipped: model call budget exhausted",
                 original.packet_id,
             )
-            continue
+            return
         packet = original
         related_context = []
         try:
-            extraction = await budget.call(
-                Extraction,
-                prompts["extract"],
-                build_payload(document, packet, settings),
-                "extract",
-                reserve=1,
+            known_concepts = await known_for(packet)
+            extraction = await extract(
+                build_payload(
+                    document, packet, settings, known_concepts=known_concepts
+                )
             )
             trace.append(
                 {
@@ -659,7 +827,9 @@ async def _process_document(
             # early packet's context rounds must not starve the rest. A
             # budget below that minimum cannot cover all packets anyway.
             reserved = (
-                2 * len(queue) if budget.limit >= 2 * len(plan.packets) else 0
+                2 * (len(queue) + len(running) - 1)
+                if budget.limit >= 2 * len(plan.packets)
+                else 0
             )
             for context_round in range(settings.max_context_rounds):
                 if (
@@ -734,6 +904,7 @@ async def _process_document(
                             json.dumps(outcomes, ensure_ascii=False),
                         ],
                         related_context=expanded_related,
+                        known_concepts=known_concepts,
                     )
                 except ContextBudgetError:
                     metadata["issues"].append(
@@ -744,13 +915,7 @@ async def _process_document(
                     )
                     break
                 try:
-                    extraction_with_context = await budget.call(
-                        Extraction,
-                        prompts["extract"],
-                        next_payload,
-                        "extract",
-                        reserve=1,
-                    )
+                    extraction_with_context = await extract(next_payload)
                 except LLMError as exc:
                     # The first answer is valid and anchored in the packet
                     # it saw; its context request stays unresolved (B-7).
@@ -866,7 +1031,7 @@ async def _process_document(
                     trace,
                 )
             batches.append(
-                (packet.packet_id, valid, decisions, context_pending)
+                (order, (packet.packet_id, valid, decisions, context_pending))
             )
             processed.extend(original.focus_chunk_ids)
             _emit(
@@ -886,7 +1051,14 @@ async def _process_document(
             if halves:
                 # The answer hit the output limit: retry in two halves
                 # instead of losing the whole packet (B-6).
-                queue.extendleft(reversed(halves))
+                queue.extendleft(
+                    reversed(
+                        [
+                            (order + (half,), item)
+                            for half, item in enumerate(halves)
+                        ]
+                    )
+                )
                 metadata["issues"].append(
                     {
                         "packet_id": original.packet_id,
@@ -898,7 +1070,7 @@ async def _process_document(
                     "Packet %s hit the output limit; split in two",
                     original.packet_id,
                 )
-                continue
+                return
             logger.warning(
                 "Packet %s failed: %s",
                 original.packet_id,
@@ -907,7 +1079,7 @@ async def _process_document(
             logger.debug(
                 "Packet %s traceback", original.packet_id, exc_info=True
             )
-            failed.append(original.packet_id)
+            failed.append((order, original.packet_id))
             metadata["issues"].append(
                 {
                     "packet_id": original.packet_id,
@@ -921,6 +1093,32 @@ async def _process_document(
                 packet_id=original.packet_id,
                 code=getattr(exc, "code", type(exc).__name__),
             )
+
+    packet_number = 0
+    try:
+        while queue or running:
+            while queue and len(running) < workers:
+                order, original = queue.popleft()
+                packet_number += 1
+                running.add(
+                    asyncio.create_task(
+                        run_packet(order, original, packet_number)
+                    )
+                )
+            done, _ = await asyncio.wait(
+                running, return_when=asyncio.FIRST_COMPLETED
+            )
+            running.difference_update(done)
+            for task in done:
+                task.result()
+    finally:
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+    batches = [batch for _, batch in sorted(batches, key=lambda i: i[0])]
+    failed = [packet_id for _, packet_id in sorted(failed)]
+
     # Assemble only source-anchored entities; matching names alone does not
     # dedup evidence.
     _emit(event, stage="assemble", status="running")
@@ -957,6 +1155,8 @@ async def _process_document(
                     end=span.end,
                     type_candidates=[entity.kind],
                     mention_role="entity",
+                    definition=entity.definition,
+                    declared_aliases=entity.aliases,
                 )
                 mentions.setdefault(mention_id, mention)
                 ids.append(mention_id)
@@ -1112,11 +1312,20 @@ async def _process_document(
             }
         )
     covered = set(processed)
+    # Data and administrative sections were read by the plan and skipped on
+    # purpose (linking.sections); they do not make the run partial.
+    skipped_sections = sorted(
+        chunk_id
+        for chunk_id, reason in plan.omitted_reasons.items()
+        if reason.startswith(SKIPPED_REASON)
+    )
+    decided = covered | set(skipped_sections)
     metadata["coverage"] = {
         "total_chunks": len(document.chunks),
         "processed_focus_chunk_ids": sorted(covered),
+        "skipped_section_chunk_ids": skipped_sections,
         "unprocessed_chunk_ids": [
-            c.chunk_id for c in document.chunks if c.chunk_id not in covered
+            c.chunk_id for c in document.chunks if c.chunk_id not in decided
         ],
         "omitted_chunk_ids": plan.omitted_chunk_ids,
         "failed_packet_ids": failed,
@@ -1157,7 +1366,7 @@ async def _process_document(
         "skipped_no_text"
         if not document.chunks
         else "succeeded"
-        if len(covered) == len(document.chunks) and not blocking
+        if len(decided) == len(document.chunks) and not blocking
         else ("partial" if covered else "failed")
     )
     embeddings, embedding_model = await _concept_embeddings(
@@ -1184,14 +1393,26 @@ async def _process_document(
         embedding_model=embedding_model,
     )
     validate_extraction(document, result)
+    timing = _timing(
+        list(metadata["provider_calls"]), perf_counter() - clock, workers
+    )
+    metadata["timing"] = timing
     logger.info(
-        "%s: run %s, chunks %d/%d, model calls %d, issues %d",
+        "%s: run %s, chunks %d/%d, model calls %d, issues %d; "
+        "%.1fs total: model requests %.1fs, waiting for a key %.1fs, "
+        "%d packets x %d at once, out %d tok",
         document.document_version_id,
         run.status,
         len(covered),
         len(document.chunks),
         budget.used,
         len(metadata["issues"]),
+        timing["wall_seconds"],
+        timing["request_seconds"],
+        timing["queue_seconds"],
+        len(plan.packets),
+        workers,
+        timing["completion_tokens"],
     )
     _emit(
         event,

@@ -12,8 +12,12 @@ from collections import Counter
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ..core.money import to_real_usd
+from ..linking.reconcile import slot_of_row
 from .temporal import (
     CODE,
+    FUNDING,
+    LABOR_MARKET,
     PACKAGE,
     PATENT,
     SCHOLARLY,
@@ -442,6 +446,75 @@ def credibility_features(
     }
 
 
+def claim_slot_features(
+    view: TechnologyView, factual: Sequence[str]
+) -> Row:
+    """Agreement and conflict of independent sources on one claim (F05).
+
+    Accepted claims are grouped by slot (linking.reconcile.slot_of_row:
+    predicate + concepts in roles + conditions, polarity aside; computed
+    from the row, so a merge of concepts is followed) and, in a
+    slot, by independent source (independence_groups). A source whose
+    factual claims are all affirmed supports the slot, all negated refutes
+    it, both is mixed and counts in neither. A slot is comparable with two
+    unambiguous sources. Conflict of a slot is 2 min(P, N) / (P + N); the
+    technology keeps the strongest one, so a single critical conflict is
+    not averaged away, and the refutation share over comparable slots.
+    No comparable slot leaves both unknown, not zero.
+    """
+    versions = view_versions(view)
+    sources = independence_groups(versions.values())
+    outcomes: Dict[str, Dict[str, set]] = {}
+    for event in view.assertions:
+        claim = event.data
+        key = slot_of_row(claim)
+        if (
+            not key
+            or claim.get("status") != "accepted"
+            or claim.get("modality") not in factual
+            or claim.get("polarity") not in ("affirmed", "negated")
+        ):
+            continue
+        version_id = claim.get("version_id")
+        version = versions.get(version_id)
+        source = (
+            sources.get(version_id) or f"document:{version.document_id}"
+            if version is not None
+            else f"version:{version_id}"
+        )
+        outcomes.setdefault(key, {}).setdefault(source, set()).add(
+            claim["polarity"]
+        )
+    comparable, corroborated, mixed = 0, 0, 0
+    conflicts, supports, refutations = [], 0, 0
+    for groups in outcomes.values():
+        polarities = list(groups.values())
+        positive = sum(found == {"affirmed"} for found in polarities)
+        negative = sum(found == {"negated"} for found in polarities)
+        mixed += sum(len(found) > 1 for found in polarities)
+        if positive >= 2:
+            corroborated += 1
+        if positive + negative < 2:
+            continue
+        comparable += 1
+        supports += positive
+        refutations += negative
+        conflicts.append(2 * min(positive, negative) / (positive + negative))
+    return {
+        "comparable_claim_slot_count": comparable,
+        "corroborated_claim_slot_count": corroborated,
+        "mixed_origin_group_count": mixed,
+        "independent_claim_conflict_strength": max(conflicts)
+        if conflicts
+        else None,
+        "independent_refutation_share": ratio(
+            refutations, supports + refutations
+        )
+        if comparable
+        else None,
+    }
+
+
 def view_versions(view: TechnologyView) -> Dict[str, Any]:
     return {
         day.version_id: item.version
@@ -480,12 +553,20 @@ def economic_features(
         event for kind, event in classified if kind in ("fact", "reviewed")
     ]
     categories = Counter(event.data.get("category") for event in confirmed)
-    usd_funding = [
-        float(event.data["amount_value"])
+    # Constant dollars: 1 USD of 2010 is not 1 USD of 2025 (core.money).
+    real_funding = [
+        real.value
         for event in confirmed
         if event.data.get("category") == "investment"
         and event.data.get("amount_value") is not None
-        and event.data.get("currency") == "USD"
+        and (
+            real := to_real_usd(
+                float(event.data["amount_value"]),
+                event.data.get("currency"),
+                event.observed.year,
+            )
+        )
+        is not None
     ]
     confidences = [
         float(event.data["confidence"])
@@ -525,7 +606,7 @@ def economic_features(
         "economic_reviewed_count": sum(k == "reviewed" for k, _ in classified),
         "economic_category_diversity": len(categories),
         "investment_evidence_count": categories.get("investment", 0),
-        "funding_amount_usd": sum(usd_funding) if usd_funding else None,
+        "funding_amount_usd_real": sum(real_funding) if real_funding else None,
         "market_size_evidence": categories.get("market", 0),
         "cost_reduction_evidence": categories.get("cost", 0)
         + categories.get("savings", 0),
@@ -540,6 +621,185 @@ def economic_features(
         "economic_source_reliability": (
             sum(tiers) / len(tiers) if tiers else None
         ),
+    }
+
+
+# --------------------------------------------------------- economic layer
+
+
+def _median(values: Sequence[float]) -> Optional[float]:
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _dated_facts(
+    documents: Sequence[DocumentTrace], category: str, cutoff: date
+) -> List[Tuple[date, Dict[str, Any], DocumentTrace]]:
+    """Money facts of one category known at T, with their own date."""
+    facts = []
+    for item in documents:
+        for fact in item.version.economic_facts:
+            if fact.get("category") != category:
+                continue
+            when = parse_date(fact.get("observed_at")) or item.first_visible
+            if when is not None and when <= cutoff:
+                facts.append((when, fact, item))
+    return facts
+
+
+def _salary(fact: Dict[str, Any]) -> Optional[float]:
+    """Middle of the offered range in constant dollars."""
+    values = [
+        float(fact[key])
+        for key in ("amount_usd_real", "amount_max_usd_real")
+        if fact.get(key) is not None
+    ]
+    return sum(values) / len(values) if values else None
+
+
+def _parties(item: DocumentTrace) -> set:
+    version = item.version
+    return {*version.organizations, *version.companies, *version.universities}
+
+
+def economic_layer_features(
+    view: TechnologyView, cutoff: date, covered: set
+) -> Row:
+    """Money and demand of the economic layer (grants, vacancies), mixed
+    with the organizations of the rest of the corpus.
+
+    Amounts are constant dollars (core.money), so a grant of 2012 and one
+    of 2024 are comparable, and a model trained on earlier snapshots does
+    not see later ones drift out of its range. A layer that was never
+    searched leaves its columns missing; searched and empty is zero.
+    """
+    year_ago = months_before(cutoff, 12)
+    two_years_ago = months_before(cutoff, 24)
+    grant_documents = [
+        item for item in view.documents if item.family == FUNDING
+    ]
+    vacancy_documents = [
+        item for item in view.documents if item.family == LABOR_MARKET
+    ]
+    grants = _dated_facts(grant_documents, "grant_award", cutoff)
+    salaries = _dated_facts(vacancy_documents, "salary_offer", cutoff)
+    producers = set().union(
+        *(
+            _parties(item)
+            for item in view.documents
+            if item.family in (SCHOLARLY, CODE, PACKAGE, PATENT)
+        )
+    )
+    companies = set().union(
+        *(set(item.version.companies) for item in view.documents)
+    )
+
+    grant_known = FUNDING in covered or bool(grant_documents)
+    amounts = [
+        (when, float(fact["amount_usd_real"]), fact)
+        for when, fact, _ in grants
+        if fact.get("amount_usd_real") is not None
+    ]
+    total = sum(value for _, value, _ in amounts)
+    recent_amount = _window(
+        [(when, value) for when, value, _ in amounts], year_ago, cutoff
+    )
+    previous_amount = _window(
+        [(when, value) for when, value, _ in amounts], two_years_ago, year_ago
+    )
+    grant_dates = [(item.first_visible, 1.0) for item in grant_documents]
+    recipients = {
+        fact["recipient_organization_id"]
+        for _, fact, _ in grants
+        if fact.get("recipient_organization_id")
+    }
+    company_money = sum(
+        value
+        for _, value, fact in amounts
+        if fact.get("recipient_organization_id") in companies
+    )
+    # grant_count and job_posting_count come from coverage_features.
+    grant = {
+        "grant_count_last_year": int(_window(grant_dates, year_ago, cutoff)),
+        "grant_growth": log_growth(
+            _window(grant_dates, year_ago, cutoff),
+            _window(grant_dates, two_years_ago, year_ago),
+        ),
+        "grant_amount_usd_real": total,
+        "grant_amount_log": math.log1p(total),
+        "grant_amount_last_year_usd_real": recent_amount,
+        "grant_amount_growth": log_growth(recent_amount, previous_amount),
+        "grant_median_usd_real": _median([value for _, value, _ in amounts]),
+        "grant_funder_count": len(
+            {
+                fact["payer_organization_id"]
+                for _, fact, _ in grants
+                if fact.get("payer_organization_id")
+            }
+        ),
+        "grant_recipient_count": len(recipients),
+        # Money that goes to industry rather than academia (IAD of money).
+        "grant_company_share": ratio(company_money, total),
+        # Recipients that also publish, patent or release code on it.
+        "funded_producer_count": len(recipients & producers),
+    }
+
+    labor_known = LABOR_MARKET in covered or bool(vacancy_documents)
+    vacancy_dates = [(item.first_visible, 1.0) for item in vacancy_documents]
+    offers = [
+        (when, value)
+        for when, fact, _ in salaries
+        if (value := _salary(fact)) is not None
+    ]
+    employers = {
+        fact["payer_organization_id"]
+        for _, fact, _ in salaries
+        if fact.get("payer_organization_id")
+    } | set().union(*(_parties(item) for item in vacancy_documents))
+    recent_salary = _median(
+        [value for when, value in offers if year_ago < when <= cutoff]
+    )
+    previous_salary = _median(
+        [value for when, value in offers if two_years_ago < when <= year_ago]
+    )
+    labor = {
+        "vacancy_count_last_year": int(
+            _window(vacancy_dates, year_ago, cutoff)
+        ),
+        "vacancy_growth": log_growth(
+            _window(vacancy_dates, year_ago, cutoff),
+            _window(vacancy_dates, two_years_ago, year_ago),
+        ),
+        "vacancy_employer_count": len(employers),
+        # Monthly salary, constant dollars.
+        "salary_median_usd_real": _median([value for _, value in offers]),
+        "salary_growth": (
+            math.log(recent_salary / previous_salary)
+            if recent_salary and previous_salary
+            else None
+        ),
+        "salary_disclosed_share": ratio(len(offers), len(vacancy_documents)),
+        # Organizations that both develop it and hire for it: an
+        # implementation ecosystem, not only a research topic.
+        "hiring_producer_count": len(employers & producers),
+    }
+    return {
+        **{
+            name: value if grant_known else None
+            for name, value in grant.items()
+        },
+        "grant_data_missing": not grant_known,
+        **{
+            name: value if labor_known else None
+            for name, value in labor.items()
+        },
+        "vacancy_data_missing": not labor_known,
+        "economic_organization_count": len(recipients | employers),
     }
 
 
@@ -746,12 +1006,14 @@ def year_ago_of(cutoff: date) -> date:
 
 __all__ = [
     "activity_features",
+    "claim_slot_features",
     "company_use_dates",
     "convergence_features",
     "coverage_features",
     "credibility_features",
     "dynamics_features",
     "economic_features",
+    "economic_layer_features",
     "entropy",
     "growth_plateau_score",
     "hhi",

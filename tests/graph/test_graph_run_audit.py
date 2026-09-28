@@ -320,7 +320,7 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc, publishing=False: calls.append(
+            lambda transaction, doc, publishing=False, **_: calls.append(
                 ("document", transaction, doc)
             )
         ),
@@ -389,7 +389,7 @@ def test_document_and_extraction_share_one_execute_write_transaction(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc, publishing=False: writes.append(
+            lambda transaction, doc, publishing=False, **_: writes.append(
                 ("document", transaction)
             )
         ),

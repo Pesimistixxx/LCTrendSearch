@@ -23,6 +23,11 @@ from ..core.models import (
     SourceRef,
     stable_id,
 )
+from ..core.organizations import (
+    organization_identity,
+    source_organization_type,
+)
+from ..core.organizations import organization_type as _organization_type
 from .connectors import normalize_openalex_work_id
 
 
@@ -154,38 +159,6 @@ def _domains_from_topics(
         for domain in matched:
             found.setdefault(domain.domain_id, domain)
     return _without_parents(found.values())
-
-
-def _organization_type(name: str, default: str = "other") -> str:
-    """Type an organization the source left untyped by its name.
-
-    An explicit university marker wins; then known names (MIT, IBM, Сбер)
-    that carry no legal form or university marker; then the legal form.
-    GitHub logins ("sberbank-ai") are split into words.
-    """
-    catalog = load_catalog("sources")
-    lowered = name.casefold()
-    words = " " + " ".join(re.findall(r"\w+", lowered)) + " "
-    patterns = catalog["organization_type_patterns"]
-
-    def marked(kind: str) -> bool:
-        pattern = patterns.get(kind)
-        return bool(
-            pattern
-            and (re.search(pattern, lowered) or re.search(pattern, words))
-        )
-
-    if marked("university"):
-        return "university"
-    for kind, names in catalog.get("known_organizations", {}).items():
-        for known in names:
-            alias = " ".join(re.findall(r"\w+", known.casefold()))
-            if alias and f" {alias} " in words:
-                return kind
-    for kind in patterns:
-        if marked(kind):
-            return kind
-    return default
 
 
 def _bytes_hash(data: bytes) -> str:
@@ -441,16 +414,18 @@ def parse_openalex(
             if not institution_name:
                 continue
             external_id = str(institution.get("id") or institution_name)
-            organization_id = stable_id(
-                "organization", "openalex", external_id
-            )
             country_code = (
                 institution.get("country_code") or ""
             ).upper() or None
-            organization_type = load_catalog("sources")["platforms"][
-                "openalex"
-            ]["organization_types"].get(
-                institution.get("type"), institution.get("type") or "other"
+            organization_type = source_organization_type(
+                institution_name,
+                load_catalog("sources")["platforms"]["openalex"][
+                    "organization_types"
+                ].get(institution.get("type"), institution.get("type")),
+            )
+            # "Intel (United States)" and "Intel (Germany)" are one Intel.
+            organization_id, institution_name = organization_identity(
+                institution_name, organization_type, "openalex", external_id
             )
             organizations[organization_id] = Organization(
                 organization_id=organization_id,
@@ -516,13 +491,17 @@ def parse_openalex(
         if not name:
             continue
         external_id = str(funder.get("id") or name)
-        organization_id = stable_id("organization", "openalex", external_id)
+        # "Funder" is a role: Samsung funding a paper is still a company.
+        organization_type = source_organization_type(name, "funder")
+        organization_id, name = organization_identity(
+            name, organization_type, "openalex", external_id
+        )
         organizations.setdefault(
             organization_id,
             Organization(
                 organization_id=organization_id,
                 name=name,
-                organization_type="funder",
+                organization_type=organization_type,
                 country_code=(funder.get("country_code") or "").upper()
                 or None,
                 role="funder",
@@ -763,13 +742,14 @@ def parse_github(
     if owner.get("login"):
         owner_key = owner.get("node_id") or owner["login"]
         if owner.get("type") == "Organization":
+            organization_type = _organization_type(owner["login"])
             organizations.append(
                 Organization(
-                    organization_id=stable_id(
-                        "organization", "github", owner_key
-                    ),
+                    organization_id=organization_identity(
+                        owner["login"], organization_type, "github", owner_key
+                    )[0],
                     name=owner["login"],
-                    organization_type=_organization_type(owner["login"]),
+                    organization_type=organization_type,
                     role="owner",
                     external_ids=[
                         ExternalId(scheme="github", value=str(owner_key))
@@ -1129,11 +1109,14 @@ def parse_epo(
                 )
             )
             continue
+        organization_type = _organization_type(name)
         organizations.append(
             Organization(
-                organization_id=stable_id("organization", "epo", name),
+                organization_id=organization_identity(
+                    name, organization_type, "epo", name
+                )[0],
                 name=name,
-                organization_type=_organization_type(name),
+                organization_type=organization_type,
                 country_code=residence if residence in iso else None,
                 role="applicant",
             )

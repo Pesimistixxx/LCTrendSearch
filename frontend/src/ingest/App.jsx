@@ -115,8 +115,8 @@ export default function Ingestion() {
     </form>
     <section className="ai-topics">
       <h2>Темы от ИИ</h2>
-      <p className="hint">Модель предлагает конкретные поисковые запросы вокруг направления и не повторяет уже собранные темы. Запрос к модели ждёт в общей очереди LLM, поэтому во время обработки может занять минуту.</p>
-      <label>Направление<input value={direction} onChange={event => setDirection(event.target.value)} placeholder="Например: накопители энергии для дата-центров" maxLength={500} /></label>
+      <p className="hint">Модель предлагает крупные базовые области и подобласти направления (например, для «ML» — computer vision, NLP, reinforcement learning), чтобы собрать как можно больше материалов, и не повторяет уже собранные темы. Запрос к модели ждёт в общей очереди LLM, поэтому во время обработки может занять минуту.</p>
+      <label>Направление<input value={direction} onChange={event => setDirection(event.target.value)} placeholder="Например: ML, робототехника или «любое»" maxLength={500} /></label>
       <label>Сколько тем<select value={count} onChange={event => setCount(event.target.value)}>{['5', '10', '15', '20', '30'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <div className="actions">
         <button type="button" className="secondary" disabled={busy || !direction.trim() || !service?.llm?.configured} onClick={() => suggest(false)}>Предложить темы</button>

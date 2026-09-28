@@ -255,6 +255,8 @@ python -m lctrend crawl-pypi --packages numpy pydantic
 | `ingest KIND INPUT` | Такой же разбор, затем извлечение и запись в Neo4j |
 | `fetch KIND IDENTIFIER` | Запросить API: `openalex` — DOI/ID, `github` — `owner/repo`, `pypi` — имя пакета. По умолчанию только вывести документ; с `--ingest` обработать и записать в граф |
 | `crawl-openalex QUERY` | Получать страницы статей по поисковой строке и записывать результат в Neo4j с сохранением позиции обхода |
+| `crawl-economic SOURCE QUERY` | Экономический слой: гранты (`nih`, `nsf`) или вакансии (`trudvsem`, `hh`) по фразе, с суммами в долларах базового года и тем же извлечением технологий. Вакансии ищите по-русски; для `hh` нужен `HH_ACCESS_TOKEN` |
+| `normalize-graph [--apply]` | Привести уже загруженный граф к полным названиям стран, одному узлу на компанию и типам организаций по каталогу. Без `--apply` печатает план. Затем `migrate-concept-keys --apply` |
 | `crawl-pypi` | Обрабатывать `--packages` либо равномерную выборку из списка имён PyPI; тематического поиска по реестру нет |
 | `export-features --snapshot DATE` | Выгрузить признаки технологий из графа на дату среза в CSV |
 | `build-training-set` | Выгрузить исторические срезы технологий, будущие результаты реализации и временные разбиения; модель не обучает |
@@ -368,6 +370,7 @@ LLM_MODEL=your-model-name
 | `POSTGRES_PORT` | Внешний порт PostgreSQL, по умолчанию 5432; backend внутри Docker обращается к порту 5432 контейнера |
 | `FRONTEND_PORT` | Порт веб-интерфейса на компьютере, по умолчанию 5188 |
 | `GITHUB_TOKEN` | Необязательный токен для запросов к GitHub API |
+| `HH_ACCESS_TOKEN` | Токен приложения hh.ru (dev.hh.ru, OAuth client_credentials) для вакансий; без него источник `hh` пропускается с пометкой |
 | `OPENALEX_API_KEY` | Ключ из [настроек OpenAlex](https://openalex.org/settings/api), рекомендован для массовой загрузки; backend передаёт его в запросах API |
 | `OPENALEX_MAILTO` | Необязательный контактный email для запросов OpenAlex; это не ключ API или адрес статьи |
 | `LLM_PROVIDER` | `gigachat` или `openai_compatible`; в образце — GigaChat, без настройки — совместимый провайдер из `llm.json` |
