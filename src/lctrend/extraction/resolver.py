@@ -301,6 +301,19 @@ def alias_groups() -> Tuple[AliasGroup, ...]:
     )
 
 
+def alias_names(text: str, kind: object) -> List[str]:
+    """Curated synonyms of a name (the name itself included)."""
+    family = kind_family(kind)
+    key = f"key:{identity_key(text, kind)}"
+    names = [text]
+    for group in load_catalog("resolver")["explicit_aliases"]:
+        if kind_family(group["kind"]) == family and key in frozenset().union(
+            *(_alias_keys(name, group["kind"]) for name in group["names"])
+        ):
+            names += group["names"]
+    return list(dict.fromkeys(names))
+
+
 def _group(
     key: str, kind: object, groups: Sequence[AliasGroup]
 ) -> Optional[AliasGroup]:

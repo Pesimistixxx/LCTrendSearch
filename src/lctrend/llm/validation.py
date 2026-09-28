@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..core.config import load_catalog
 from ..core.models import Chunk, DocumentEnvelope
+from ..extraction.lexical import lexical_tokens
+from ..extraction.resolver import alias_names
 from .contracts import Extraction, Review, SourceSpan
 
 
@@ -142,6 +144,26 @@ def _anchor(
     }
 
 
+def _names_in(names: Iterable[str], texts: Iterable[str]) -> bool:
+    """Whether a name occurs in a text as a run of identity-key tokens.
+
+    Comparing keys, not strings, lets case, plural and Russian inflection
+    differ ("Германия" names "Германии").
+    """
+    phrases = [lexical_tokens(name) for name in names]
+    phrases = [phrase for phrase in phrases if phrase]
+    for text in texts:
+        tokens = lexical_tokens(text)
+        for phrase in phrases:
+            size = len(phrase)
+            if any(
+                tokens[start : start + size] == phrase
+                for start in range(len(tokens) - size + 1)
+            ):
+                return True
+    return False
+
+
 def _entity_refs(value: Any) -> Iterable[Any]:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -193,7 +215,9 @@ def validate_local_extraction(
     if not visible.issubset(chunks):
         raise ValueError("visible_ids references unknown chunks")
     schema = load_catalog("llm_schema")
-    country_codes = set(load_catalog("countries")["iso_alpha2"])
+    grounded_kinds = set(schema["grounded_label_kinds"])
+    countries = load_catalog("countries")
+    country_codes = set(countries["iso_alpha2"])
     entity_counts = Counter(entity.local_id for entity in result.entities)
     claim_counts = Counter(claim.claim_id for claim in result.claims)
     entities = {entity.local_id: entity for entity in result.entities}
@@ -238,9 +262,36 @@ def validate_local_extraction(
                 or entity.country_code not in country_codes
             ):
                 add(key, "invalid_country_code")
+            elif not _names_in(
+                countries["names"].get(entity.country_code, []),
+                [entity.label, *(span.quote for span in entity.evidence)],
+            ):
+                # The quoted country must be the coded one: a quote of
+                # "Германии" cannot become US.
+                add(key, "country_code_mismatch")
         entity.evidence = anchor_spans(
             key, entity.evidence, first_occurrence=True
         )
+        # The label names what the source names: its quote or chunk must
+        # contain it (or a curated synonym), or it is a phantom entity.
+        grounding = [
+            text
+            for span in entity.evidence
+            for text in (
+                span.quote,
+                chunks[span.chunk_id].text
+                if span.chunk_id in chunks
+                else "",
+            )
+        ]
+        if (
+            entity.kind.value in grounded_kinds
+            and entity.label.strip()
+            and not _names_in(
+                alias_names(entity.label, entity.kind.value), grounding
+            )
+        ):
+            add(key, "label_not_grounded")
 
     for claim in result.claims:
         key = "claim:" + claim.claim_id
