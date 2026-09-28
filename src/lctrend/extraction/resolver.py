@@ -7,7 +7,15 @@ import unicodedata
 from collections import defaultdict
 from functools import lru_cache
 from time import monotonic
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from ..core.config import load_catalog
 from ..core.models import (
@@ -270,6 +278,25 @@ class SemanticDeduplicator:
         )
 
 
+class AliasGroup(NamedTuple):
+    kind: str
+    keys: frozenset
+
+
+@lru_cache(maxsize=1)
+def alias_groups() -> Tuple[AliasGroup, ...]:
+    """Curated synonym groups compared by identity key, not written form."""
+    return tuple(
+        AliasGroup(
+            group["kind"],
+            frozenset().union(
+                *(_alias_keys(name, group["kind"]) for name in group["names"])
+            ),
+        )
+        for group in load_catalog("resolver")["explicit_aliases"]
+    )
+
+
 def _aliases(concept: Concept) -> List[str]:
     # An unreviewed observed name must not become identity evidence for the
     # next document.
@@ -335,22 +362,21 @@ class ConceptIndex:
             self._normalized[name].discard(concept_id)
 
     def matches(
-        self, text: str, groups: list, kind: object = None
+        self, text: str, groups: Sequence[AliasGroup], kind: object = None
     ) -> List[Concept]:
-        """Concepts sharing an identity key or an explicit synonym."""
+        """Concepts sharing an identity key or an explicit synonym group."""
+        keys = _alias_keys(text, kind)
         found = set()
-        for key in _alias_keys(text, kind):
+        for key in keys:
             found |= self._keys.get(key, set())
-        normalized = normalize_name(text)
         for group in groups:
-            names = {normalize_name(name) for name in group["names"]}
-            if normalized not in names:
+            if not keys & group.keys:
                 continue
-            for name in names:
+            for key in group.keys:
                 found |= {
                     concept_id
-                    for concept_id in self._normalized.get(name, ())
-                    if self._concepts[concept_id].kind.value == group["kind"]
+                    for concept_id in self._keys.get(key, ())
+                    if self._concepts[concept_id].kind.value == group.kind
                 }
         return [
             self._concepts[concept_id]
@@ -411,7 +437,7 @@ def resolve_mentions(
         if isinstance(registry, ConceptIndex)
         else ConceptIndex(registry)
     )
-    groups = load_catalog("resolver")["explicit_aliases"]
+    groups = alias_groups()
     touched: Dict[str, Concept] = {}
     decisions: List[ResolutionDecision] = []
 

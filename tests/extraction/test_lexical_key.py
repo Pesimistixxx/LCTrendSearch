@@ -144,3 +144,33 @@ def test_symbol_names_are_separated(left, right, kind):
 @pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C7)
 def test_script_twins_and_digit_boundaries_are_joined(left, right, kind):
     assert same_concept(left, right, kind)
+
+
+METHOD = ConceptKind.METHOD
+
+# C-6: synonym groups matched only the exact written form, and matched it
+# case-insensitively, so GaN joined the GAN group.
+FALSE_SPLITS_C6 = [
+    ("LLM", "больших языковых моделей", T),
+    ("LLM", "Large Language Models", T),
+    ("NLP", "обработки естественного языка", T),
+    ("цифровых двойников", "digital twin", T),
+    ("графовых нейронных сетей", "GNN", T),
+    ("федеративного обучения", "federated learning", METHOD),
+    ("свёрточных нейронных сетей", "CNNs", T),
+]
+
+FALSE_MERGES_C6 = [
+    ("GAN", "GaN", T),
+    ("LoRA", "LoRa", METHOD),
+]
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C6)
+def test_synonym_groups_match_by_key(left, right, kind):
+    assert same_concept(left, right, kind)
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_MERGES_C6)
+def test_synonym_groups_do_not_ignore_acronym_case(left, right, kind):
+    assert not same_concept(left, right, kind)
