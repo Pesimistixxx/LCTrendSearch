@@ -43,6 +43,25 @@ def test_bundled_resources_are_consistent():
             "commercial_economic_categories",
         ),
         ("taxonomy", ("branching",), 1, "taxonomy.branching"),
+        ("ranking", ("top_k",), 0, "ranking.top_k"),
+        (
+            "ranking",
+            ("candidates", "kinds"),
+            ["Typo"],
+            "ranking.candidates.kinds",
+        ),
+        (
+            "ranking",
+            ("score", "weights", "mention_growth_12m"),
+            "high",
+            "ranking.score.weights.mention_growth_12m",
+        ),
+        (
+            "ranking",
+            ("score", "labels"),
+            {},
+            "ranking.score.labels",
+        ),
         ("llm", ("model_ladder",), ["same", "same"], "model_ladder"),
         ("countries", ("iso_alpha2",), ["RU", "ZZ"], "countries.iso_alpha2"),
         (
@@ -110,4 +129,18 @@ def test_invalid_calendar_date_and_overlapping_modalities(catalogs):
 def test_complete_override_must_contain_required_fields(catalogs):
     catalogs["sources"] = {"domains": []}
     with pytest.raises(ValueError, match="sources.domains"):
+        validate_catalogs(catalogs)
+
+
+def test_negative_labels_require_only_families_with_a_source(catalogs):
+    label = catalogs["dataset"]["label"]
+    families = {
+        platform["source_family"]
+        for platform in catalogs["sources"]["platforms"].values()
+    }
+    assert set(label["required_negative_families"]) <= families
+    label["required_negative_families"].append("commercial")
+    with pytest.raises(
+        ValueError, match="required_negative_families.*no source"
+    ):
         validate_catalogs(catalogs)

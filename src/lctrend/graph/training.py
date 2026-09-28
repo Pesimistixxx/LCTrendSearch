@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from ..core.config import load_catalog
-from .temporal import CODE, PACKAGE, PATENT, TemporalCorpus, parse_date
+from .temporal import (
+    CODE,
+    PACKAGE,
+    PATENT,
+    TemporalCorpus,
+    independence_groups,
+    parse_date,
+)
+
+logger = logging.getLogger(__name__)
 
 FIELDNAMES = [
     "technology_id",
@@ -400,6 +410,10 @@ OUTCOME_FIELDS = [
     "future_packages",
     "future_users",
     "future_commercial_evidence",
+    "first_patent",
+    "first_repository",
+    "first_package",
+    "first_user",
     "future_source_coverage_count",
     "outcome_observation_complete",
     "label_realized",
@@ -571,7 +585,9 @@ def build_snapshot_rows(
     return rows
 
 
-def _future_outcomes(corpus, technology_id, snapshot, horizon_end, config):
+def _future_outcomes(
+    corpus, technology_id, snapshot, horizon_end, config, observed_by
+):
     from .features import classify_economic, is_company
 
     before = corpus.view(snapshot).technologies[technology_id]
@@ -582,19 +598,6 @@ def _future_outcomes(corpus, technology_id, snapshot, horizon_end, config):
         if snapshot < item.first_visible <= horizon_end
     ]
 
-    def independent_key(version):
-        if (
-            version.independence_group
-            or version.organizations
-            or version.companies
-            or version.universities
-            or version.contributors
-        ):
-            return version.independence_key
-        return None
-
-    groups = {independent_key(item.version) for item in future}
-    groups.discard(None)
     previous_users = {
         event.data.get("target_id")
         for event in before.relations
@@ -617,14 +620,20 @@ def _future_outcomes(corpus, technology_id, snapshot, horizon_end, config):
         and classify_economic(event.data, config["factual_modalities"])
         in ("fact", "reviewed")
     ]
-    for event in uses + economics:
-        version = corpus.versions.get(event.data.get("version_id"))
-        if version is not None:
-            key = independent_key(version)
-            if key is not None:
-                groups.add(key)
+    # Confirming documents joined through shared participants are one
+    # source; documents naming nobody cannot prove independence.
+    confirming = [item.version for item in future] + [
+        version
+        for event in uses + economics
+        if (version := corpus.versions.get(event.data.get("version_id")))
+        is not None
+    ]
+    groups = set(independence_groups(confirming).values())
+    groups.discard(None)
+    # Searches are known by the observation moment, usually long after the
+    # horizon; each must still cover the whole horizon interval.
     coverage = corpus.covered_families(
-        horizon_end,
+        observed_by,
         technology_id,
         period_start=snapshot,
         period_end=horizon_end,
@@ -635,6 +644,14 @@ def _future_outcomes(corpus, technology_id, snapshot, horizon_end, config):
             config["coverage_families"],
         )
     )
+    # Realization is the first artifact of its kind after T: a repository
+    # added to earlier ones continues an implementation, it is not one.
+    before_families = {item.family for item in before.documents}
+    future_families = {item.family for item in future}
+
+    def first(family):
+        return family in future_families and family not in before_families
+
     return {
         "future_document_count": len(future),
         "future_independent_sources": len(groups),
@@ -643,23 +660,27 @@ def _future_outcomes(corpus, technology_id, snapshot, horizon_end, config):
         "future_packages": sum(item.family == PACKAGE for item in future),
         "future_users": len({event.data.get("target_id") for event in uses}),
         "future_commercial_evidence": len(economics),
+        "first_patent": first(PATENT),
+        "first_repository": first(CODE),
+        "first_package": first(PACKAGE),
+        "first_user": bool(uses) and not previous_users,
         "future_source_coverage_count": len(required & coverage),
         "outcome_observation_complete": required <= coverage,
     }
 
 
 def _label(row, end_date, config):
+    # Unknown maturity is a flagged feature (max_maturity_rank_missing),
+    # not a reason to drop the label.
     rank = row["max_maturity_rank"]
-    if rank is None:
-        return None, "maturity_unknown"
-    if rank >= config["label"]["commercial_stage_rank"]:
+    if rank is not None and rank >= config["label"]["commercial_stage_rank"]:
         return None, "already_commercial"
     if _cutoff(row["horizon_end"]) > end_date:
         return None, "horizon_censored"
     if row["future_independent_sources"] >= config["label"][
         "min_future_independent_sources"
     ] and any(
-        row[name] > 0 for name in config["label"]["implementation_outcomes"]
+        row[name] for name in config["label"]["implementation_outcomes"]
     ):
         return 1, "realization_observed"
     if not row["outcome_observation_complete"]:
@@ -670,8 +691,10 @@ def _label(row, end_date, config):
 def temporal_split(rows, valid_snapshots=1, test_snapshots=1):
     """Assign ordered splits and purge overlapping target horizons.
 
-    Unknown labels stay outside training. A row whose outcomes reach a
-    later split's first snapshot is kept for audit with split='purged'.
+    Unknown labels stay outside training. Outcomes of (T, T+H] ending on
+    a later split's first snapshot use nothing after it and stay. A row
+    whose horizon reaches past that snapshot is kept for audit with
+    split='purged'.
     """
     if valid_snapshots < 0 or test_snapshots < 0:
         raise ValueError("split snapshot counts cannot be negative")
@@ -689,7 +712,7 @@ def temporal_split(rows, valid_snapshots=1, test_snapshots=1):
             when
             for when in rest
             if all(
-                row["horizon_end"] < min(test_dates)
+                row["horizon_end"] <= min(test_dates)
                 for row in rows
                 if row["snapshot_date"] == when
                 and row["label_realized"] is not None
@@ -708,7 +731,7 @@ def temporal_split(rows, valid_snapshots=1, test_snapshots=1):
             boundary = min(valid_dates or test_dates, default=None)
             row["split"] = (
                 "purged"
-                if boundary and row["horizon_end"] >= boundary
+                if boundary and row["horizon_end"] > boundary
                 else "train"
             )
     return rows
@@ -769,6 +792,7 @@ def build_dataset_rows(
                         current,
                         min(horizon_end, end),
                         config,
+                        end,
                     ),
                 }
             )
@@ -796,6 +820,41 @@ def build_dataset_rows(
         config["split"]["valid_snapshots"],
         config["split"]["test_snapshots"],
     )
+
+
+SPLITS = ("train", "valid", "test", "purged")
+
+
+def _label_summary(values):
+    """Class balance per split, label reasons and one-class warnings."""
+    labelled = [row for row in values if row.get("label_realized") in (0, 1)]
+
+    def balance(part):
+        return {
+            str(label): sum(row["label_realized"] == label for row in part)
+            for label in (0, 1)
+        }
+
+    classes = {
+        name: balance([row for row in labelled if row.get("split") == name])
+        for name in SPLITS
+    }
+    classes["all"] = balance(labelled)
+    reasons: Dict[str, int] = {}
+    for row in values:
+        reason = str(row.get("label_reason"))
+        reasons[reason] = reasons.get(reason, 0) + 1
+    warnings = []
+    present = [label for label, count in classes["all"].items() if count]
+    if len(present) < 2:
+        warnings.append(
+            "labels have one class only "
+            f"({', '.join(present) or 'none'}): a classifier cannot be "
+            "trained; see label_reasons"
+        )
+    for warning in warnings:
+        logger.warning("Training set: %s", warning)
+    return classes, dict(sorted(reasons.items())), warnings
 
 
 def _write_temporal_rows(path, rows, training, corpus=None):
@@ -827,11 +886,17 @@ def _write_temporal_rows(path, rows, training, corpus=None):
         "config": config,
         "splits": {
             name: sum(row.get("split") == name for row in values)
-            for name in ("train", "valid", "test", "purged", "unlabeled")
+            for name in (*SPLITS, "unlabeled")
         }
         if training
         else {},
     }
+    if training:
+        (
+            manifest["class_balance"],
+            manifest["label_reasons"],
+            manifest["warnings"],
+        ) = _label_summary(values)
     path.with_suffix(path.suffix + ".manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",

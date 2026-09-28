@@ -278,10 +278,21 @@ def test_unidentified_documents_do_not_prove_independence():
     assert row["label_realized"] is None
 
 
-def test_unknown_or_commercial_snapshot_maturity_excludes_labels():
+def test_unknown_maturity_is_a_flagged_feature_not_a_label_filter():
+    # Maturity comes only from reviewed LLM claims; without them (the
+    # "none" extractor, a failed review) the label is still observable.
     data = dataset()
     data["maturity"] = []
-    assert at_2020(data)["label_reason"] == "maturity_unknown"
+    row = at_2020(data)
+    assert row["max_maturity_rank"] is None
+    assert row["max_maturity_rank_missing"] is True
+    assert row["label_realized"] == 1
+    assert row["label_reason"] == "realization_observed"
+    known = at_2020(dataset())
+    assert known["max_maturity_rank_missing"] is False
+
+
+def test_commercial_snapshot_maturity_excludes_labels():
     data = dataset()
     data["maturity"][0]["stage_rank"] = 5
     row = at_2020(data)
@@ -362,14 +373,36 @@ def test_temporal_splits_purge_horizons_and_retain_usable_validation():
     ]
     temporal_split(rows)
     splits = {row["snapshot_date"]: row["split"] for row in rows}
+    # A horizon (T, T+H] that ends on the next split's first snapshot uses
+    # nothing after it, so it is kept; only horizons reaching past it purge.
     assert splits["2010-01-01"] == "test"
-    assert splits["2006-01-01"] == "valid"
-    assert splits["2002-01-01"] == "train"
-    assert splits["2003-01-01"] == splits["2009-01-01"] == "purged"
+    assert splits["2007-01-01"] == "valid"
+    assert splits["2004-01-01"] == "train"
+    assert splits["2005-01-01"] == splits["2009-01-01"] == "purged"
     train = [row for row in rows if row["split"] == "train"]
     valid = [row for row in rows if row["split"] == "valid"]
-    assert max(row["horizon_end"] for row in train) < valid[0]["snapshot_date"]
-    assert max(row["horizon_end"] for row in valid) < "2010-01-01"
+    boundary = valid[0]["snapshot_date"]
+    assert max(row["horizon_end"] for row in train) <= boundary
+    assert max(row["horizon_end"] for row in valid) <= "2010-01-01"
+
+
+def test_default_annual_split_keeps_more_than_one_training_year():
+    # 2015-2023 labelled snapshots, three-year horizons (the default).
+    rows = [
+        {
+            "snapshot_date": f"{year}-01-01",
+            "horizon_end": f"{year + 3}-01-01",
+            "label_realized": 0,
+        }
+        for year in range(2015, 2024)
+    ]
+    temporal_split(rows)
+    splits = {row["snapshot_date"][:4]: row["split"] for row in rows}
+    assert splits["2023"] == "test"
+    assert splits["2020"] == "valid"
+    assert [year for year, name in splits.items() if name == "train"] == [
+        "2015", "2016", "2017",
+    ]
 
 
 def test_csv_and_manifest_separate_outcomes_from_predictors(tmp_path):
@@ -402,3 +435,136 @@ def test_empty_dataset_exports_the_same_schema(tmp_path):
         names = csv.DictReader(stream).fieldnames
     assert "mention_growth_12m" in names
     assert "label_realized" in names
+
+
+SEARCHABLE_FAMILIES = ("scholarly", "code", "package_registry", "patent")
+
+
+def crawled_in_2026(data):
+    """Exhaustive searches run in 2026, long after the 2020-2023 horizon."""
+    data["crawls"] = [
+        {
+            "source_family": family,
+            "query": "Example",
+            "exhaustive": True,
+            "status": "completed",
+            "failures": 0,
+            "search_failures": 0,
+            "finished_at": "2026-01-01",
+        }
+        for family in SEARCHABLE_FAMILIES
+    ]
+    return data
+
+
+def test_exhaustive_crawls_after_the_horizon_make_negative_labels_possible():
+    row = at_2020(crawled_in_2026(dataset("scholarly")))
+    assert row["future_source_coverage_count"] == 4
+    assert row["outcome_observation_complete"] is True
+    assert row["label_realized"] == 0
+    assert row["label_reason"] == "no_realization_observed"
+
+
+def test_manifest_reports_class_balance_and_warns_on_one_class(tmp_path):
+    output = tmp_path / "train.csv"
+    rows = build_dataset_rows(TemporalCorpus(dataset()), start_year=2020)
+    write_dataset_rows(output, rows)
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    balance = manifest["class_balance"]
+    assert set(balance) == {"train", "valid", "test", "purged", "all"}
+    assert balance["all"] == {"0": 0, "1": 1}
+    assert sum(sum(part.values()) for name, part in balance.items()
+               if name != "all") == 1
+    assert manifest["label_reasons"]["realization_observed"] == 1
+    assert any("one class" in warning for warning in manifest["warnings"])
+
+
+def test_manifest_has_no_class_warning_when_both_labels_exist(tmp_path):
+    positive = dataset()
+    negative = crawled_in_2026(dataset("scholarly"))
+    rows = [
+        *(row for row in build_dataset_rows(TemporalCorpus(positive),
+                                            start_year=2020)
+          if row["label_realized"] is not None),
+        *(row for row in build_dataset_rows(TemporalCorpus(negative),
+                                            start_year=2020)
+          if row["label_realized"] is not None),
+    ]
+    output = tmp_path / "train.csv"
+    write_dataset_rows(output, rows)
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    balance = manifest["class_balance"]["all"]
+    assert balance["0"] > 0 and balance["1"] > 0
+    assert manifest["warnings"] == []
+
+
+def test_one_team_behind_an_article_and_its_repository_is_one_source():
+    data = dataset()
+    repository, article = data["versions"][2:4]
+    repository.update(
+        independence_group=None,
+        organizations=["Lab"],
+        contributors=["alice", "bob"],
+    )
+    article.update(independence_group=None, contributors=["alice"])
+    row = at_2020(data)
+    assert row["future_repositories"] == 1
+    assert row["future_independent_sources"] == 1
+    assert row["label_realized"] is None
+
+
+def test_snapshot_independence_diversity_counts_connected_teams():
+    data = dataset()
+    for row in data["versions"]:
+        row["independence_group"] = None
+    data["versions"][0]["organizations"] = ["Lab"]
+    # A joint paper with a partner is still the Lab team.
+    data["versions"][1]["organizations"] = ["Alpha Partner", "Lab"]
+    data["versions"][1]["contributors"] = ["carol"]
+    (row,) = build_snapshot_rows(TemporalCorpus(data), "2020-01-01")
+    assert row["independence_group_diversity"] == 1
+
+
+def test_realization_needs_an_artifact_absent_before_the_snapshot():
+    # A repository already existed at T: another one after T continues the
+    # implementation, it is not its first appearance.
+    data = dataset()
+    data["versions"].append(version("repo0", "2019-06-01", "code", "early"))
+    data["mentions"].append(
+        {
+            "technology_id": "t",
+            "version_id": "repo0-v1",
+            "observed_at": "2019-06-01",
+            "mentions": 1,
+        }
+    )
+    row = at_2020(data)
+    assert row["future_repositories"] == 1
+    assert row["first_repository"] is False
+    assert row["label_realized"] is None
+    assert row["label_reason"] == "source_coverage_incomplete"
+    first = at_2020(dataset())
+    assert first["first_repository"] is True
+    assert first["first_patent"] is first["first_package"] is False
+
+
+def test_first_company_user_after_the_snapshot_realizes_only_without_users():
+    def used_by(company, when, version_id):
+        return {
+            "technology_id": "t",
+            "version_id": version_id,
+            "observed_at": when,
+            "relation": "USED_BY",
+            "target_id": company,
+            "target_kind": "Company",
+        }
+
+    data = dataset("scholarly")
+    data["relations"] = [used_by("acme", "2021-01-01", "future1-v1")]
+    assert at_2020(data)["first_user"] is True
+    assert at_2020(data)["label_realized"] == 1
+    data["relations"].append(used_by("early", "2019-01-01", "past2-v1"))
+    row = at_2020(data)
+    assert row["future_users"] == 1
+    assert row["first_user"] is False
+    assert row["label_realized"] is None

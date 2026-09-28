@@ -283,3 +283,84 @@ def test_as_known_flag_keeps_the_strict_collection_gate(
         invoke(monkeypatch, "export-features", "--snapshot", "2020-01-01",
                "--output", features, "--no-taxonomy", *flag)
         assert len(read_csv(features)) == expected
+
+
+def openalex_pages(monkeypatch, total, pages):
+    """Serve fixed OpenAlex pages; every page reports the search total."""
+    served = iter(pages)
+
+    def fetch(query, cursor, per_page, mailto, filter):
+        works, next_cursor = next(served)
+        return {
+            "results": [
+                {"id": f"https://openalex.org/W{n}", "title": f"Work {n}"}
+                for n in works
+            ],
+            "meta": {"count": total, "next_cursor": next_cursor},
+        }
+
+    async def write(document, *args, **kwargs):
+        if document.source.record_id == "W2":
+            raise ValueError("one work failed to process")
+
+    monkeypatch.setattr(cli, "fetch_openalex_page", fetch)
+    monkeypatch.setattr(cli, "_snapshot", lambda document, raw: document)
+    monkeypatch.setattr(cli, "_write_ingested_async", write)
+
+
+def test_crawl_that_saw_every_search_result_is_exhaustive(
+    monkeypatch, tmp_path, temporal_store
+):
+    openalex_pages(monkeypatch, 3, [([1, 2], "next"), ([3], None)])
+    cli._crawl_openalex("fixture", 10, 2, tmp_path / "checkpoint.json",
+                        False, fulltext=False)
+    run = temporal_store.audits[-1]
+    assert run["records_seen"] == 3
+    # A failed work is a processing gap, not an incomplete search.
+    assert run["failures"] == 1 and run["search_failures"] == 0
+    assert run["status"] == "completed" and run["exhaustive"] is True
+
+
+def test_crawl_stopped_by_its_limit_is_not_exhaustive(
+    monkeypatch, tmp_path, temporal_store
+):
+    openalex_pages(monkeypatch, 3, [([1, 2], "next")])
+    cli._crawl_openalex("fixture", 2, 2, tmp_path / "checkpoint.json",
+                        False, fulltext=False)
+    run = temporal_store.audits[-1]
+    assert run["records_seen"] == 2
+    assert run["status"] == "completed" and run["exhaustive"] is False
+
+
+def test_failed_search_page_is_counted_and_never_exhaustive(
+    monkeypatch, tmp_path, temporal_store
+):
+    def fail(*args):
+        raise RuntimeError("search page failed")
+
+    monkeypatch.setattr(cli, "fetch_openalex_page", fail)
+    with pytest.raises(RuntimeError):
+        cli._crawl_openalex("fixture", 2, 2, tmp_path / "checkpoint.json",
+                            False, fulltext=False)
+    run = temporal_store.audits[-1]
+    assert run["search_failures"] == 1 and run["exhaustive"] is False
+
+
+def test_backtest_command_writes_precision_against_random(
+    monkeypatch, tmp_path, temporal_store, capsys
+):
+    output = tmp_path / "backtest.json"
+    invoke(monkeypatch, "backtest-top15", "--snapshot", "2019-06-01",
+           "--horizon-years", "2", "--trials", "50", "--output", output,
+           "--no-taxonomy")
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert temporal_store.reads == 1
+    assert result["snapshot"] == "2019-06-01"
+    assert result["horizon_end"] == "2021-06-01"
+    assert result["candidates"] == result["k"] == 1
+    (top,) = result["top"]
+    assert top["technology_id"] == "t1"
+    assert (top["past_documents"], top["future_documents"]) == (2, 1)
+    assert result["precision_at_k"] == 0.0
+    assert result["random"]["trials"] == 50
+    assert "precision@1" in capsys.readouterr().out

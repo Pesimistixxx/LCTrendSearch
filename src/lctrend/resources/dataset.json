@@ -5,10 +5,10 @@
   "horizon_years": 3,
   "min_documents": 2,
   "label": {
-    "note": "Realization, not publication popularity: independent confirmation plus an implementation or commercial outcome, for a technology not yet commercial at the snapshot.",
+    "note": "Realization, not publication popularity: independent confirmation plus the first repository, package, patent or company user after the snapshot, absent before it, for a technology not known to be commercial at the snapshot. Unknown maturity is a flagged feature, not a filter.",
     "min_future_independent_sources": 2,
-    "required_negative_families": ["scholarly", "code", "package_registry", "patent", "commercial"],
-    "implementation_outcomes": ["future_patents", "future_repositories", "future_packages", "future_users", "future_commercial_evidence"],
+    "required_negative_families": ["scholarly", "code", "package_registry", "patent"],
+    "implementation_outcomes": ["first_patent", "first_repository", "first_package", "first_user"],
     "commercial_stage_rank": 5
   },
   "split": {"note": "Temporal split by snapshot date; the last labelled snapshots validate and test.", "valid_snapshots": 1, "test_snapshots": 1},

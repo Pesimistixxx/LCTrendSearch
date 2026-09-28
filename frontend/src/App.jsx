@@ -107,7 +107,7 @@ function Home() {
       <div className="chips">
         {EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => go({ q: e })}>{e}</button>)}
       </div>
-      <p className="lead small">Поиск показывает демонстрационные данные. <a className="ingestion-link" href="#view=ingest">Перейти к сбору и проверке материалов →</a></p>
+      <p className="lead small">{DEMO_DATA ? 'Поиск показывает демонстрационные данные. ' : 'ТОП-15 считается по графу знаний на текущую дату. '}<a className="ingestion-link" href="#view=ingest">Перейти к сбору и проверке материалов →</a></p>
     </section>
   )
 }
@@ -180,8 +180,9 @@ function Results({ res }) {
     <section className="results">
       <DemoBanner />
       <div className="res-head">
-        <p className="eyebrow">Результаты открытого поиска</p>
+        <p className="eyebrow">{DEMO_DATA ? 'Результаты открытого поиска' : `Граф знаний на ${res.snapshot}`}</p>
         <h1 className="res-title">«{res.query}»</h1>
+        {res.note && <p className="muted small">{res.note}</p>}
       </div>
 
       <div className="stats">
@@ -196,7 +197,7 @@ function Results({ res }) {
           <span className="stat-sub">→ к ТОП-15</span>
         </button>
         <button className={`stat card stat-btn ${onlyConfident ? 'is-on' : ''}`} onClick={() => { setOnly(!onlyConfident); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }) }}>
-          <span className="stat-k">Уверенность модели &gt; 75%</span>
+          <span className="stat-k">{DEMO_DATA ? 'Уверенность модели' : 'Скор'} &gt; 75%</span>
           <b className="stat-v c-cyan"><CountUp to={res.stats.confident} /></b>
           <span className="stat-sub">{onlyConfident ? '✓ фильтр включён' : '→ показать только их'}</span>
         </button>
@@ -205,7 +206,7 @@ function Results({ res }) {
       <div className="card list" id="list">
         <div className="list-head">
           <h2>ТОП-{list.length} слабых сигналов</h2>
-          <span className="muted">Отсортировано по уверенности модели</span>
+          <span className="muted">{DEMO_DATA ? 'Отсортировано по уверенности модели' : 'Отсортировано по скору: Σ вес × z-оценка'}</span>
         </div>
         <div className="row row-h" aria-hidden="true">
           <span>#</span><span>Технология</span><span>Скоринг</span><span>Ключевые предикторы</span><span>Динамика</span><span />
@@ -266,7 +267,7 @@ function Score({ v, big }) {
     <div className={`ring lv-${l}`} style={{ '--p': pct(v) }}>
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" className="ring-bg" /><circle cx="60" cy="60" r="52" className="ring-fg" pathLength="100" /></svg>
       <b><CountUp to={pct(v)} /><small>%</small></b>
-      <span>уверенность</span>
+      <span>{DEMO_DATA ? 'уверенность' : 'скор'}</span>
     </div>
   )
   return (
@@ -278,8 +279,9 @@ function Score({ v, big }) {
 }
 
 function Spark({ data }) {
-  const max = Math.max(...data), w = 90, h = 28
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - (v / max) * (h - 4) - 2}`).join(' ')
+  const max = Math.max(1, ...data), w = 90, h = 28
+  const step = data.length > 1 ? w / (data.length - 1) : 0
+  const pts = data.map((v, i) => `${i * step},${h - (v / max) * (h - 4) - 2}`).join(' ')
   return (
     <svg className="spark" viewBox={`0 0 ${w} ${h}`} aria-label="Рост упоминаний по кварталам">
       <polyline points={`0,${h} ${pts} ${w},${h}`} className="spark-fill" />
@@ -291,7 +293,7 @@ function Spark({ data }) {
 function Insight({ s, q }) {
   const [g, setG] = useState(null)
   useEffect(() => { setG(null); graph(q, s.id).then(setG, () => setG(false)) }, [s.id])
-  const maxW = Math.max(...s.predictors.map((p) => Math.abs(p.weight)))
+  const maxW = Math.max(1e-9, ...s.predictors.map((p) => Math.abs(p.weight)))
 
   return (
     <article className="doc">
@@ -317,15 +319,20 @@ function Insight({ s, q }) {
       <div className="doc-body">
         <div className="doc-main">
           <Section n="01" t="Описание технологии"><p>{s.description}</p></Section>
-          <Section n="02" t="Потенциальные преимущества">
+          {s.advantages.length > 0 && <Section n="02" t="Потенциальные преимущества">
             <ul className="adv">{s.advantages.map((a) => <li key={a}>{a}</li>)}</ul>
-          </Section>
-          <Section n="03" t="Кейс-примеры">
+          </Section>}
+          {s.cases.length > 0 && <Section n="03" t="Кейс-примеры">
             <div className="cases">{s.cases.map((c) => <div key={c.title} className="case"><b>{c.title}</b><p>{c.text}</p></div>)}</div>
-          </Section>
-          <Section n="04" t="Оценки в аналитических отчётах">
+          </Section>}
+          {s.reports.length > 0 && <Section n="04" t="Оценки в аналитических отчётах">
             {s.reports.map((r) => <blockquote key={r.org}><p>{r.text}</p><cite>{r.org}</cite></blockquote>)}
-          </Section>
+          </Section>}
+          {s.quotes?.length > 0 && <Section n="04" t="Цитаты из подтверждённых утверждений">
+            {s.quotes.map((c, i) => (
+              <blockquote key={i}><p>«{c.text}»</p><cite>{c.url ? <a href={c.url} target="_blank" rel="noreferrer">{c.title}</a> : c.title} · {c.date}</cite></blockquote>
+            ))}
+          </Section>}
           <Section n="05" t="Почему это слабый сигнал">
             <p>{s.whyWeak}</p>
             <div className="preds">
@@ -337,15 +344,15 @@ function Insight({ s, q }) {
                 </div>
               ))}
             </div>
-            <p className="muted small">Вклад признаков в решение модели: вправо — за слабый сигнал, влево — против (признаки зрелости или хайпа).</p>
+            <p className="muted small">{DEMO_DATA ? 'Вклад признаков в решение модели: вправо — за слабый сигнал, влево — против (признаки зрелости или хайпа).' : 'Топ-3 вклада в скор: вес признака × его z-оценка среди всех кандидатов; вправо — за слабый сигнал, влево — против.'}</p>
           </Section>
-          <Section n="06" t="Почему такая уверенность"><p>{s.confidenceReason}</p></Section>
+          <Section n="06" t={DEMO_DATA ? 'Почему такая уверенность' : 'Как получен скор'}><p>{s.confidenceReason}</p></Section>
           <Section n="07" t="Источники">
             <div className="srcs">
               {s.sources.map((src, i) => (
                 <div key={i} className="src">
                   <div className="src-top">
-                    <a href={src.url} target="_blank" rel="noreferrer">{src.title}</a>
+                    {src.url ? <a href={src.url} target="_blank" rel="noreferrer">{src.title}</a> : <b>{src.title}</b>}
                     <span className={`trust trust-${src.trust}`}>{TRUST[src.trust]} доверенность</span>
                   </div>
                   <div className="src-meta mono">
@@ -368,7 +375,7 @@ function Insight({ s, q }) {
           <div className="card side-card">
             <h3>Динамика упоминаний</h3>
             <Spark data={s.trend} />
-            <p className="muted small">10 кварталов, патенты + публикации</p>
+            <p className="muted small">{s.trend.length} кварталов, упоминания во всех источниках</p>
           </div>
         </aside>
       </div>

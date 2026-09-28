@@ -26,6 +26,7 @@ CATALOG_NAMES = (
     "dataset",
     "taxonomy",
     "countries",
+    "ranking",
 )
 KINDS = {kind.value for kind in ConceptKind}
 DOCUMENT_TYPES = {kind.value for kind in DocumentType}
@@ -432,6 +433,8 @@ def _models(catalogs: Mapping) -> None:
     )
     if runtime["default_extractor"] not in {"none", "llm"}:
         _fail("runtime.default_extractor", "unknown extractor")
+    for key in ("training_output", "features_output"):
+        _text(_required(runtime, key, "runtime"), "runtime." + key)
     for group in resolver["explicit_aliases"]:
         if group["kind"] not in KINDS:
             _fail("resolver.explicit_aliases.kind", "unknown ConceptKind")
@@ -503,11 +506,10 @@ def _analytics(catalogs: Mapping) -> None:
         integer=True,
     )
     outcomes = {
-        "future_patents",
-        "future_repositories",
-        "future_packages",
-        "future_users",
-        "future_commercial_evidence",
+        "first_patent",
+        "first_repository",
+        "first_package",
+        "first_user",
     }
     _strings(
         label["implementation_outcomes"],
@@ -539,6 +541,22 @@ def _analytics(catalogs: Mapping) -> None:
     )
     if set(factual) & set(speculative):
         _fail("dataset.factual_modalities", "overlaps speculative_modalities")
+    # A family without a source can never be searched, so requiring it
+    # would make every negative label unreachable.
+    searchable = {
+        platform["source_family"]
+        for platform in catalogs["sources"]["platforms"].values()
+    }
+    required = label.get("required_negative_families")
+    if required is not None:
+        for item in _strings(
+            required, "dataset.label.required_negative_families"
+        ):
+            if item not in searchable:
+                _fail(
+                    "dataset.label.required_negative_families",
+                    f"family {item!r} has no source in sources.platforms",
+                )
     for key, value in dataset["coverage_families"].items():
         if value not in DOCUMENT_TYPES:
             _fail("dataset.coverage_families." + key, "unknown document type")
@@ -562,6 +580,44 @@ def _analytics(catalogs: Mapping) -> None:
         "new_branch_share",
     ):
         _number(taxonomy[key], "taxonomy." + key, 0, 1)
+
+
+def _ranking(catalogs: Mapping) -> None:
+    ranking = catalogs["ranking"]
+    _number(ranking["top_k"], "ranking.top_k", 1, integer=True)
+    _bool(ranking["include_novelty"], "ranking.include_novelty")
+    rules = ranking["candidates"]
+    _strings(rules["kinds"], "ranking.candidates.kinds", KINDS, nonempty=True)
+    for key in ("window_months", "min_independent_sources", "max_age_years"):
+        _number(rules[key], "ranking.candidates." + key, 1, integer=True)
+    _number(
+        rules["max_stage_rank"],
+        "ranking.candidates.max_stage_rank",
+        1,
+        max(catalogs["graph"]["maturity_stage_rank"].values()),
+        integer=True,
+    )
+    _strings(rules["generic_labels"], "ranking.candidates.generic_labels")
+    score = ranking["score"]
+    _number(score["z_clip"], "ranking.score.z_clip", 0.1)
+    weights = _mapping(score["weights"], "ranking.score.weights")
+    if not weights:
+        _fail("ranking.score.weights", "must name at least one feature")
+    for name, weight in weights.items():
+        _number(weight, "ranking.score.weights." + name, -math.inf)
+        _text(
+            score["labels"].get(name), "ranking.score.labels." + name
+        )
+    _number(
+        ranking["api"]["cache_seconds"], "ranking.api.cache_seconds", 0
+    )
+    for key, value in ranking["explanation"].items():
+        _number(value, "ranking.explanation." + key, 1, integer=True)
+    backtest = ranking["backtest"]
+    for key in ("horizon_years", "min_future_documents", "random_trials"):
+        _number(backtest[key], "ranking.backtest." + key, 1, integer=True)
+    _number(backtest["min_growth_ratio"], "ranking.backtest.min_growth_ratio")
+    _number(backtest["seed"], "ranking.backtest.seed", integer=True)
 
 
 def validate_catalogs(catalogs: Optional[Mapping[str, Any]] = None) -> None:
@@ -601,5 +657,6 @@ def validate_catalogs(catalogs: Optional[Mapping[str, Any]] = None) -> None:
         _contracts(catalogs)
         _models(catalogs)
         _analytics(catalogs)
+        _ranking(catalogs)
     except (KeyError, TypeError, AttributeError) as exc:
         _fail("catalogs", f"missing or malformed required field: {exc}")

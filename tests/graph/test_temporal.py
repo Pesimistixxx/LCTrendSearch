@@ -237,7 +237,7 @@ def test_coverage_requires_a_completed_relevant_exhaustive_observation():
                     {"finished_at": "2023-01-01"},
                     {"query": "Another technology"},
                     {"status": "running"},
-                    {"failures": 1},
+                    {"search_failures": 1},
                     {"finished_at": None},
                     {"retrieved_at": "2023-01-01"},
                 )
@@ -256,6 +256,22 @@ def test_coverage_requires_a_completed_relevant_exhaustive_observation():
     assert corpus.covered_families(date(2022, 1, 1), "t1") == {"patent"}
     assert corpus.covered_families(date(2022, 1, 1), "t2") == set()
     assert corpus.covered_families(date(2022, 1, 1)) == set()
+
+
+def test_failed_work_processing_is_not_an_incomplete_search():
+    # The search itself saw every result; some works failed to parse or
+    # extract. That is a processing gap, not missing search coverage.
+    corpus = TemporalCorpus(
+        {
+            "technologies": [
+                {"technology_id": "t1", "technology": "Technology One"}
+            ],
+            "crawls": [crawl(failures=3, search_failures=0)],
+        }
+    )
+    assert corpus.covered_families(
+        date(2022, 1, 1), "t1", date(2020, 1, 1), date(2021, 1, 1)
+    ) == {"patent"}
 
 
 def test_completed_sample_is_observed_but_cannot_prove_outcome_absence():
@@ -396,3 +412,62 @@ def test_datetime_input_and_invalid_history_dates_are_normalized():
         "release_dates": ["2020-02-01"],
         "commit_weeks": {"2020-02-01": 2},
     }
+
+
+def test_same_day_versions_are_ordered_by_observation_not_by_hash():
+    # One work collected twice: the later observation has the newer
+    # counters, whatever the version hashes sort like.
+    corpus = TemporalCorpus(
+        {
+            "versions": [
+                version(
+                    "v-b",
+                    retrieved_at="2026-01-10",
+                    metrics_observed_at="2026-01-10",
+                    metrics_json={"citation_count": 17},
+                    companies=["old-company"],
+                ),
+                version(
+                    "v-a",
+                    retrieved_at="2026-06-10",
+                    metrics_observed_at="2026-06-10",
+                    metrics_json={"citation_count": 40},
+                    companies=["new-company"],
+                ),
+            ],
+            "mentions": [mention("v-b"), mention("v-a")],
+        }
+    )
+    cutoff = date(2026, 9, 1)
+    assert corpus.metrics_at("d1", cutoff) == {"citation_count": 40}
+    assert corpus.visible_version("d1", cutoff).version_id == "v-a"
+    (trace,) = corpus.view(cutoff).technologies["t1"].documents
+    assert trace.version.companies == ("new-company",)
+    assert trace.mentions[0].version_id == "v-a"
+
+
+def test_independence_groups_join_documents_sharing_any_participant():
+    from lctrend.graph.temporal import independence_groups
+
+    corpus = TemporalCorpus(
+        {
+            "versions": [
+                # One team: the article and its repository share an author.
+                version("paper", "paper", contributors=["alice", "bob"],
+                        organizations=["Lab"]),
+                version("repo", "repo", contributors=["alice"]),
+                # Linked through a second organization of a joint paper.
+                version("joint", "joint", organizations=["Lab", "Other"]),
+                version("other", "other", organizations=["Other"]),
+                version("solo", "solo", organizations=["Elsewhere"]),
+                version("anonymous", "anonymous"),
+            ]
+        }
+    )
+    groups = independence_groups(corpus.versions.values())
+    assert (
+        groups["paper"] == groups["repo"] == groups["joint"]
+        == groups["other"]
+    )
+    assert groups["solo"] != groups["paper"]
+    assert groups["anonymous"] is None

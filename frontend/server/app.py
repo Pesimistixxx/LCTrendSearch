@@ -1,4 +1,8 @@
-"""Local ingestion controls. This API does not select or rank trends."""
+"""Local ingestion controls and the graph TOP-15 search.
+
+Trends are selected and ranked in ``lctrend.graph.ranking``; this module
+only serves them.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from tempfile import NamedTemporaryFile
 from threading import RLock
@@ -118,6 +123,19 @@ def _source_status() -> dict:
     }
 
 
+async def _read_graph() -> dict:
+    """The whole dated graph for the search ranking."""
+    from lctrend.graph.store import GraphStore
+
+    load_environment()
+    async with GraphStore(
+        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        os.getenv("NEO4J_USER", "neo4j"),
+        os.getenv("NEO4J_PASSWORD", "change-me-now"),
+    ) as store:
+        return await store.read_temporal_data()
+
+
 def _status() -> dict:
     """Read-only readiness; never return secrets or call a language model."""
     load_environment()
@@ -204,6 +222,7 @@ def create_app(
     upload_root=None,
     status_reader=None,
     environment_path=None,
+    search_service=None,
 ) -> FastAPI:
     root = Path(__file__).resolve().parents[2]
     frontend = (
@@ -224,6 +243,7 @@ def create_app(
     async def lifespan(app):
         load_environment()
         from lctrend.core.catalog_validation import validate_catalogs
+
         validate_catalogs()
         if app.state.manager is None:
             from .jobs import JobManager
@@ -246,6 +266,7 @@ def create_app(
     app = FastAPI(title="LCTrend: загрузка материалов", lifespan=lifespan)
     app.state.manager = manager
     app.state.crawls = crawl_manager
+    app.state.search = search_service
     readiness = status_reader or _status
 
     @app.exception_handler(RequestValidationError)
@@ -361,6 +382,31 @@ def create_app(
         finally:
             if temporary:
                 temporary.unlink(missing_ok=True)
+
+    @app.get("/api/search")
+    async def search_signals(
+        q: str = Query(max_length=200),
+        snapshot: Optional[str] = Query(default=None, alias="date"),
+    ):
+        query = q.strip()
+        if not query:
+            raise HTTPException(422, "Введите запрос")
+        try:
+            cutoff = date.fromisoformat(snapshot) if snapshot else None
+        except ValueError:
+            raise HTTPException(422, "date: ожидается YYYY-MM-DD") from None
+        if app.state.search is None:
+            from lctrend.graph.search import SearchService
+
+            app.state.search = SearchService(_read_graph)
+        try:
+            return await app.state.search.search(query, cutoff)
+        except Exception:
+            # Connection errors name hosts; keep them in the server log.
+            logger.exception("Search %r failed", query)
+            raise HTTPException(
+                503, "Граф недоступен: проверьте подключение к Neo4j"
+            ) from None
 
     @app.get("/api/health")
     def health():
@@ -545,9 +591,7 @@ def create_app(
         from lctrend.llm.client import JsonLLM, LLMError
 
         with settings_lock:
-            require_idle(
-                "Дождитесь завершения обработки перед сменой модели"
-            )
+            require_idle("Дождитесь завершения обработки перед сменой модели")
             values = {
                 "LLM_PROVIDER": body.provider,
                 "LLM_MODEL": body.model.strip(),

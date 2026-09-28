@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -205,11 +206,15 @@ def _crawl_run(platform: str, query: str, filter: Optional[str] = None):
         "period_end": bounds.get("to_publication_date"),
         "records_seen": 0,
         "records_ingested": 0,
+        # Works that failed to parse or extract; the search still saw them.
         "failures": 0,
+        # Search pages that failed: their results were never seen.
+        "search_failures": 0,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
         "status": "running",
-        # A limited topic search or registry sample cannot prove absence.
+        # Proven only by a search that saw all its results. A registry
+        # sample never proves absence.
         "exhaustive": False,
     }
 
@@ -347,6 +352,8 @@ def _crawl_openalex(
         slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
         seen_cursors = set()
         crawl_run = _crawl_run("openalex", query, filter)
+        # Number of works matching the search, as reported by OpenAlex.
+        total = None
         async with _opened(_store()) as store, _crawl_audit(
             store, crawl_run, checkpoint
         ):
@@ -356,18 +363,26 @@ def _crawl_openalex(
                 if cursor in seen_cursors:
                     raise ValueError("Repeated OpenAlex cursor")
                 seen_cursors.add(cursor)
-                page = await resolve(
-                    fetch_openalex_page(
-                        query,
-                        cursor,
-                        min(per_page, limit - processed),
-                        os.getenv("OPENALEX_MAILTO"),
-                        filter,
+                try:
+                    page = await resolve(
+                        fetch_openalex_page(
+                            query,
+                            cursor,
+                            min(per_page, limit - processed),
+                            os.getenv("OPENALEX_MAILTO"),
+                            filter,
+                        )
                     )
-                )
+                except Exception:
+                    crawl_run["search_failures"] += 1
+                    raise
                 if not isinstance(page, dict):
                     raise ValueError("Invalid OpenAlex page")
                 works, meta = page.get("results"), page.get("meta", {})
+                if isinstance(meta, dict) and isinstance(
+                    meta.get("count"), int
+                ):
+                    total = meta["count"]
                 if (
                     not isinstance(works, list)
                     or not isinstance(meta, dict)
@@ -439,6 +454,13 @@ def _crawl_openalex(
                     elapsed,
                     processed / elapsed,
                 )
+            # Seen by this run alone: a resumed crawl proves nothing about
+            # the part an earlier run saw.
+            crawl_run["exhaustive"] = (
+                total is not None
+                and crawl_run["records_seen"] >= total
+                and crawl_run["search_failures"] == 0
+            )
 
     asyncio.run(crawl())
 
@@ -729,7 +751,7 @@ def main() -> None:
         help="Export technology snapshots and future realization labels",
     )
     training_command.add_argument(
-        "--output", type=Path, default=Path(settings["training"]["output"])
+        "--output", type=Path, default=Path(settings["training_output"])
     )
     training_command.add_argument(
         "--start-year",
@@ -780,6 +802,46 @@ def main() -> None:
         help="Skip semantic, taxonomy and graph novelty features",
     )
     features_command.add_argument(
+        "--as-known",
+        action="store_true",
+        help="Strict mode: content also waits for its collection and "
+        "extraction (what this system knew at T), not only publication",
+    )
+    ranking_settings = load_catalog("ranking")
+    backtest_command = subparsers.add_parser(
+        "backtest-top15",
+        help="TOP-K at a date from data up to it, then the share that grew "
+        "in the horizon against random samples (precision@K)",
+    )
+    backtest_command.add_argument(
+        "--snapshot", type=date.fromisoformat, required=True
+    )
+    backtest_command.add_argument(
+        "--horizon-years",
+        type=int,
+        default=ranking_settings["backtest"]["horizon_years"],
+    )
+    backtest_command.add_argument(
+        "--top-k", type=int, default=ranking_settings["top_k"]
+    )
+    backtest_command.add_argument(
+        "--trials",
+        type=int,
+        default=ranking_settings["backtest"]["random_trials"],
+        help="Random samples of the candidate pool",
+    )
+    backtest_command.add_argument(
+        "--seed", type=int, default=ranking_settings["backtest"]["seed"]
+    )
+    backtest_command.add_argument(
+        "--output", type=Path, help="Also write the full result as JSON"
+    )
+    backtest_command.add_argument(
+        "--no-taxonomy",
+        action="store_true",
+        help="Skip semantic, taxonomy and graph novelty features",
+    )
+    backtest_command.add_argument(
         "--as-known",
         action="store_true",
         help="Strict mode: content also waits for its collection and "
@@ -936,6 +998,40 @@ def _run(args: argparse.Namespace) -> None:
                 write_subgraph_rows(args.subgraphs_output, samples),
                 args.subgraphs_output,
             )
+        return
+
+    if args.command == "backtest-top15":
+        from .graph.ranking import backtest
+
+        if min(args.horizon_years, args.top_k, args.trials) < 1:
+            raise ValueError("horizon, top-k and trials must be positive")
+        config = copy.deepcopy(load_catalog("ranking"))
+        config["top_k"] = args.top_k
+        config["include_novelty"] = not args.no_taxonomy
+        config["backtest"].update(
+            horizon_years=args.horizon_years,
+            random_trials=args.trials,
+            seed=args.seed,
+        )
+        corpus = asyncio.run(
+            _graph(lambda store: _temporal_data(store, args.as_known))
+        )
+        result = backtest(corpus, args.snapshot, config)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        random_mean = result["random"]["mean_precision"]
+        print(
+            f"{result['snapshot']} -> {result['horizon_end']}: "
+            f"precision@{result['k']}={result['precision_at_k']} "
+            f"random={random_mean} p={result['random']['p_value']} "
+            f"candidates={result['candidates']}"
+        )
+        for warning in result["warnings"]:
+            logger.warning("Backtest: %s", warning)
         return
 
     if args.command == "build-taxonomy":

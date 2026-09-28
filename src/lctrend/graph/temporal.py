@@ -138,22 +138,70 @@ class Version:
         return self.version_date or self.retrieved_date
 
     @property
-    def independence_key(self) -> str:
-        """Who stands behind the document.
-
-        An explicit independence group (a project shared by a repository and
-        its package) wins; otherwise the first organization or author team;
-        otherwise the document alone.
+    def order_key(self) -> Tuple[date, date, str]:
+        """Publication, then observation, then id: of two versions of one
+        day the later observed carries the newer counters. The id (a
+        content hash) only breaks exact ties.
         """
-        if self.independence_group:
-            return f"group:{self.independence_group}"
-        if self.organizations or self.companies or self.universities:
-            return "org:" + min(
-                self.organizations or self.companies or self.universities
-            )
-        if self.contributors:
-            return "people:" + ",".join(sorted(self.contributors)[:3])
-        return f"document:{self.document_id}"
+        return (
+            self.order_date,
+            self.retrieved_date or date.min,
+            self.version_id,
+        )
+
+    @property
+    def participants(self) -> Tuple[str, ...]:
+        """Who stands behind the document: an explicit independence group
+        (a project shared by a repository and its package), organizations
+        and people. Empty when the source names nobody.
+        """
+        return (
+            *(
+                (f"group:{self.independence_group}",)
+                if self.independence_group
+                else ()
+            ),
+            *(
+                f"org:{name}"
+                for name in (
+                    *self.organizations,
+                    *self.companies,
+                    *self.universities,
+                )
+            ),
+            *(f"person:{name}" for name in self.contributors),
+        )
+
+
+def independence_groups(
+    versions: Iterable[Version],
+) -> Dict[str, Optional[str]]:
+    """version_id -> independent source, None when nobody is named.
+
+    Documents sharing any participant are one source, transitively
+    (union-find): an article and the repository of the same author, or two
+    papers linked through a joint one. A source is named by its smallest
+    participant, so the result does not depend on order.
+    """
+    parent: Dict[str, str] = {}
+
+    def find(item: str) -> str:
+        parent.setdefault(item, item)
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    members = {item.version_id: item.participants for item in versions}
+    for participants in members.values():
+        for other in participants[1:]:
+            first, second = find(participants[0]), find(other)
+            if first != second:
+                parent[max(first, second)] = min(first, second)
+    return {
+        version_id: find(participants[0]) if participants else None
+        for version_id, participants in members.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -296,6 +344,9 @@ class TemporalCorpus:
         self.as_known = as_known
         self.versions: Dict[str, Version] = {}
         self.document_versions: Dict[str, List[Version]] = {}
+        # Display fields of the current Document node (title, URL); never
+        # features, they are not dated.
+        self.document_info: Dict[str, Dict[str, Optional[str]]] = {}
         skipped = 0
         for row in data.get("versions", []):
             document_date = parse_date(row.get("document_published_at"))
@@ -345,14 +396,20 @@ class TemporalCorpus:
             self.document_versions.setdefault(version.document_id, []).append(
                 version
             )
+            if row.get("title") or row.get("url"):
+                self.document_info[version.document_id] = {
+                    "title": row.get("title"),
+                    "url": row.get("url"),
+                }
         for versions in self.document_versions.values():
-            versions.sort(key=lambda item: (item.order_date, item.version_id))
+            versions.sort(key=lambda item: item.order_key)
         # Documents whose every version lacks a publication date.
         self.undated_documents = sum(
             all(version.undated for version in versions)
             for versions in self.document_versions.values()
         )
         self.labels: Dict[str, str] = {}
+        self.kinds: Dict[str, str] = {}
         self.embeddings: Dict[str, List[float]] = {}
         self.embedding_dates: Dict[str, date] = {}
         for row in data.get("technologies", []):
@@ -360,6 +417,8 @@ class TemporalCorpus:
             self.labels[technology_id] = str(
                 row.get("technology") or technology_id
             )
+            if row.get("kind"):
+                self.kinds[technology_id] = str(row["kind"])
             embedding_date = parse_date(row.get("embedding_observed_at"))
             if row.get("embedding") and embedding_date is not None:
                 self.embeddings[technology_id] = list(row["embedding"])
@@ -504,9 +563,7 @@ class TemporalCorpus:
         ]
         if not visible:
             return None
-        version = max(
-            visible, key=lambda item: (item.order_date, item.version_id)
-        )
+        version = max(visible, key=lambda item: item.order_key)
         if not self.as_known:
             return version
         return replace(
@@ -540,8 +597,11 @@ class TemporalCorpus:
     ) -> set:
         """Completed relevant searches known at T.
 
-        An explicit interval requires a complete crawl covering that whole
-        interval. A found document establishes presence, never absence.
+        For outcomes, T is the moment of observation (the dataset end), not
+        the horizon end: a search run in 2026 over 2020-2023 proves absence
+        in 2020-2023. An explicit interval requires a complete crawl
+        covering that whole interval, finished no earlier than its end.
+        A found document establishes presence, never absence.
         An unrestricted, exhaustive crawl applies to every technology;
         query-specific crawls apply only to their technology or exact label.
         Without an interval, sampled crawls establish source observation.
@@ -564,7 +624,9 @@ class TemporalCorpus:
                 observed is None
                 or observed > cutoff
                 or crawl.get("status") not in ("succeeded", "completed")
-                or crawl.get("failures", 0)
+                # A failed search page leaves results unseen. A work that
+                # failed to parse or extract does not: the search saw it.
+                or crawl.get("search_failures")
                 or (
                     (period_start is not None or period_end is not None)
                     and crawl.get("exhaustive") is not True
@@ -722,7 +784,7 @@ class SnapshotView:
         )
         _, mentions = max(
             carrying,
-            key=lambda item: (item[0].order_date, item[0].version_id),
+            key=lambda item: item[0].order_key,
         )
         visible = corpus.visible_version(document_id, cutoff)
         return DocumentTrace(

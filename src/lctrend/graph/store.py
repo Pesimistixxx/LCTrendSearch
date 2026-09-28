@@ -836,6 +836,7 @@ class GraphStore:
                     r.records_seen = $records_seen,
                     r.records_ingested = $records_ingested,
                     r.failures = $failures,
+                    r.search_failures = $search_failures,
                     r.checkpoint_json = $checkpoint_json,
                     r.started_at = $started_at,
                     r.finished_at = $finished_at,
@@ -853,6 +854,7 @@ class GraphStore:
                     "records_seen": 0,
                     "records_ingested": 0,
                     "failures": 0,
+                    "search_failures": 0,
                     "checkpoint_json": None,
                     "finished_at": None,
                     "status": "running",
@@ -900,6 +902,7 @@ class GraphStore:
                    coalesce(v.contributor_ids, []) AS contributors,
                    coalesce(v.organization_ids, []) AS organizations,
                    s.source_id AS source_id,
+                   d.title AS title, d.canonical_url AS url,
                    v.source_family AS source_family,
                    v.independence_group AS independence_group,
                    v.reliability_tier AS reliability_tier,
@@ -931,6 +934,7 @@ class GraphStore:
             WHERE t.concept_id IS NOT NULL
             RETURN t.concept_id AS technology_id,
                    t.preferred_label AS technology,
+                   t.kind AS kind,
                    t.first_seen_at AS first_seen_at,
                    t.status AS status, t.embedding AS embedding,
                    t.embedding_observed_at AS embedding_observed_at
@@ -981,7 +985,9 @@ class GraphStore:
             OPTIONAL MATCH (a)-[:IN_CLAIM_GROUP]->(g:ClaimGroup)
             OPTIONAL MATCH (a)-[:FROM_EVIDENCE_FAMILY]->(f:EvidenceFamily)
             OPTIONAL MATCH (run:ProcessingRun)-[:CREATED]->(a)
-            WITH v, a, t, g, f, max(run.started_at) AS run_recorded_at
+            OPTIONAL MATCH (a)-[e:SUPPORTED_BY]->(:Chunk)
+            WITH v, a, t, g, f, max(run.started_at) AS run_recorded_at,
+                 head(collect(e.quote)) AS quote
             RETURN t.concept_id AS technology_id,
                    a.assertion_id AS assertion_id, a.predicate AS predicate,
                    a.status AS status,
@@ -993,7 +999,8 @@ class GraphStore:
                    coalesce(a.recorded_at, run_recorded_at) AS recorded_at,
                    v.document_version_id AS version_id,
                    g.claim_group_id AS claim_group_id,
-                   f.family_id AS evidence_family_id
+                   f.family_id AS evidence_family_id,
+                   quote
         """
         crawls = """
             MATCH (r:CrawlRun)
@@ -1006,6 +1013,7 @@ class GraphStore:
                    r.observed_at AS observed_at,
                    r.retrieved_at AS retrieved_at,
                    r.status AS status, r.failures AS failures,
+                   r.search_failures AS search_failures,
                    r.exhaustive AS exhaustive,
                    r.technology_ids AS technology_ids
         """

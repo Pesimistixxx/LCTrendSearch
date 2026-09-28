@@ -20,6 +20,7 @@ from .temporal import (
     DocumentTrace,
     SnapshotView,
     TechnologyView,
+    independence_groups,
     parse_date,
 )
 
@@ -210,7 +211,12 @@ def convergence_features(
 ) -> Row:
     documents = view.documents
     families = Counter(item.family for item in documents)
-    groups = Counter(item.version.independence_key for item in documents)
+    sources = independence_groups(item.version for item in documents)
+    # A document naming nobody is its own source.
+    groups = Counter(
+        sources[item.version.version_id] or f"document:{item.document_id}"
+        for item in documents
+    )
     year_ago = months_before(cutoff, 12)
     dated = view.dated_documents
     first = {
@@ -385,11 +391,19 @@ def credibility_features(
         if claim.get("verification_status") == "supported"
     ]
     versions = view_versions(view)
+    sources = independence_groups(versions.values())
+
+    def source(version) -> str:
+        # A document naming nobody is its own source.
+        return (
+            sources[version.version_id] or f"document:{version.document_id}"
+        )
+
     families = {
         claim.get("evidence_family_id")
         or claim.get("claim_group_id")
         or (
-            versions[claim["version_id"]].independence_key
+            source(versions[claim["version_id"]])
             if claim.get("version_id") in versions
             else claim.get("version_id")
         )
@@ -617,6 +631,8 @@ def maturity_features(
     )
     return {
         "max_maturity_rank": rank,
+        # No reviewed maturity claim by T (e.g. the "none" extractor).
+        "max_maturity_rank_missing": rank is None,
         "max_trl": max(trls, default=None),
         "maturity_growth": (
             (rank or 0) - (rank_year_ago or 0) if rank is not None else None

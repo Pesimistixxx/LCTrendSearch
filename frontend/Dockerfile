@@ -4,6 +4,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.js ./
 COPY src ./src
+# The container serves the graph TOP-15 from /api/search, never the mock.
+ARG VITE_MOCK=0
+ENV VITE_MOCK=$VITE_MOCK
 RUN npm run build
 
 FROM nginx:alpine
