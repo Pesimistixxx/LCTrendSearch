@@ -1831,9 +1831,18 @@ class GraphStore:
                     f"""
                     UNWIND $rows AS row
                     MATCH (c:{label} {{concept_id: row.concept_id}})
-                    SET c.embedding = row.vector,
-                        c.embedding_model = $model,
-                        c.embedding_observed_at = $recorded_at
+                    // The same vector of the same model keeps the date on
+                    // which past snapshots already saw it.
+                    WITH c, row,
+                         c.embedding = row.vector
+                         AND c.embedding_model = $model
+                         AND c.embedding_observed_at IS NOT NULL
+                         AS unchanged
+                    SET c.embedding_observed_at = CASE WHEN unchanged
+                            THEN c.embedding_observed_at
+                            ELSE $recorded_at END,
+                        c.embedding = row.vector,
+                        c.embedding_model = $model
                     """,
                     rows=batch,
                     model=result.embedding_model,

@@ -217,3 +217,29 @@ def test_ambiguous_links_are_not_counted_as_mentions():
     asyncio.run(reader(queries).read_taxonomy_input(["Technology"]))
     taxonomy = next(q for q in queries if "MENTIONS" in q)
     assert "m.resolution_status, '') <> 'ambiguous'" in taxonomy
+
+
+def test_an_unchanged_vector_keeps_its_observation_date():
+    document, result = extraction(ConceptKind.TECHNOLOGY)
+    result.concept_embeddings = {"concept:graphene": [0.6, 0.8]}
+    result.embedding_model = "EmbeddingsGigaR"
+    tx = Transaction()
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    query, parameters = next(
+        (query, parameters)
+        for query, parameters in tx.queries
+        if "c.embedding_observed_at" in query
+    )
+    query = " ".join(query.split())
+    # Re-processing with the same vector and model must not move the date
+    # a past snapshot saw (N-2).
+    assert (
+        "c.embedding = row.vector AND c.embedding_model = $model "
+        "AND c.embedding_observed_at IS NOT NULL AS unchanged"
+    ) in query
+    assert (
+        "c.embedding_observed_at = CASE WHEN unchanged "
+        "THEN c.embedding_observed_at ELSE $recorded_at END"
+    ) in query
+    assert query.index("AS unchanged") < query.index("SET")
+    assert parameters["model"] == "EmbeddingsGigaR"
