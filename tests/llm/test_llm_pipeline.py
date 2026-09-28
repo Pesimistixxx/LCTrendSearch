@@ -626,13 +626,14 @@ def test_conflicting_reviews_for_same_source_claim_cannot_restore_acceptance():
     assert GraphStore._solution_links(doc, result) == []
 
 
-def test_empty_document_makes_no_model_calls_and_has_failed_coverage():
+def test_empty_document_makes_no_model_calls_and_is_skipped_not_failed():
     doc = document()
     doc.chunks = []
     provider = ReplayProvider([])
     result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert list(provider.calls) == []
-    assert result.run.status == "failed"
+    # A-10: "failed" claimed an extraction error where nothing was read.
+    assert result.run.status == "skipped_no_text"
     assert result.assertions == []
     assert result.run.metadata["coverage"]["total_chunks"] == 0
 

@@ -958,6 +958,8 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         )
     if not chunks:
         warnings.append("no_text_chunks")
+        # An empty file carries no text, whatever its format promises.
+        coverage = "metadata_only"
     for order, chunk in enumerate(chunks):
         chunk.order = order
         chunk.locator.update(

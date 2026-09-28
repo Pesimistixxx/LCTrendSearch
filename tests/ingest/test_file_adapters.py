@@ -169,6 +169,8 @@ def test_empty_bad_encoding_and_unsupported_input_are_explicit(tmp_path):
     document = parse_file(path)
     assert document.chunks == []
     assert "no_text_chunks" in document.metadata["parse_warnings"]
+    # A-10: an empty file used to claim coverage "full_text".
+    assert document.coverage == "metadata_only"
     path.write_bytes(b"\xff\xff")
     with pytest.raises(FileAdapterError, match="UTF-8"):
         parse_file(path)

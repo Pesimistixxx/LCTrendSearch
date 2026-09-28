@@ -1080,11 +1080,13 @@ async def _process_document(
     # make the document's coverage incomplete. Packet-level gaps do.
     blocking = [item for item in metadata["issues"] if not _item_issue(item)]
     metadata["item_issue_count"] = len(metadata["issues"]) - len(blocking)
+    # Nothing to read is not a failed extraction: no model was called and
+    # a later text of this version must still be processed (A-10).
     run.status = (
-        "succeeded"
-        if len(covered) == len(document.chunks)
-        and document.chunks
-        and not blocking
+        "skipped_no_text"
+        if not document.chunks
+        else "succeeded"
+        if len(covered) == len(document.chunks) and not blocking
         else ("partial" if covered else "failed")
     )
     embeddings, embedding_model = await _concept_embeddings(

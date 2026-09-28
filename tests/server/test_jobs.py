@@ -1110,3 +1110,23 @@ def test_finished_job_has_only_terminal_documents(tmp_path):
         assert job["counts"]["running"] == 0
     finally:
         instance.close(wait=True)
+
+
+def test_skipped_no_text_run_is_reported_as_no_text(tmp_path):
+    # A-10: the pipeline's own status now says why nothing was extracted.
+    instance = manager(
+        tmp_path,
+        file_parser=lambda path: document(path).model_copy(
+            update={"chunks": [], "coverage": "metadata_only"}
+        ),
+        document_processor=lambda doc, **kwargs: extraction(
+            doc, "skipped_no_text", coverage={"total_chunks": 0}
+        ),
+    )
+    try:
+        final = finish(instance, instance.create_files(files(tmp_path, 1)))
+        record = final["documents"][0]
+        assert record["llm_status"] == "no_text"
+        assert record["error"]["code"] == "no_text"
+    finally:
+        instance.close(wait=True)

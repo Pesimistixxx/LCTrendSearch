@@ -1383,10 +1383,12 @@ class JobManager:
         job = self._jobs[job_id]
         store = context["store"]
         try:
-            no_text = (
-                job["mode"] == "llm"
-                and not document.chunks
-                and result.run.metadata.get("model_calls") == 0
+            no_text = job["mode"] == "llm" and (
+                result.run.status == "skipped_no_text"
+                or (
+                    not document.chunks
+                    and result.run.metadata.get("model_calls") == 0
+                )
             )
             if job["mode"] != "llm":
                 llm_status = "disabled"
