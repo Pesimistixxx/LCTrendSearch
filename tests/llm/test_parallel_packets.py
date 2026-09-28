@@ -134,3 +134,23 @@ def test_aliases_leave_fixture_ids_and_foreign_ids_alone():
         "c1": ["c2", '{"chunk_id": "c1"}', foreign],
         "text": "no ids here",
     }
+
+
+def test_a_call_cut_by_a_stopping_server_is_not_a_bad_answer():
+    # A server stop closes the loop's executor under a request in flight;
+    # that must not be recorded as the model answering garbage.
+    from lctrend.llm.pipeline import _Budget
+
+    class Stopped:
+        async def generate(self, schema, system, payload, *, stage="extract"):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+    trace = []
+    budget = _Budget(Stopped(), PipelineSettings(), trace)
+    try:
+        asyncio.run(budget.call(object, "s", {}, "extract"))
+    except LLMError as exc:
+        assert exc.code == "interrupted"
+    else:
+        raise AssertionError("the call must fail")
+    assert trace[-1]["code"] == "interrupted"

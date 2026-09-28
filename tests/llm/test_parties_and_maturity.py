@@ -149,6 +149,36 @@ def test_trl_must_be_written_in_the_quote_and_stage_must_be_known():
     assert issues_for(response, "claim:stage") == []
 
 
+def test_market_event_needs_a_known_event_and_round():
+    response = extraction()
+    response["claims"].append(
+        claim(
+            "event",
+            "reports_market_event",
+            {"subject": "battery", "organization": "acme"},
+            FIRST,
+            qualifiers={"event": "product_launch"},
+        )
+    )
+    assert issues_for(response, "claim:event") == []
+    response["claims"][3]["qualifiers"] = {
+        "event": "funding_round",
+        "round": "series_a",
+    }
+    assert issues_for(response, "claim:event") == []
+    response["claims"][3]["qualifiers"] = {"event": "rumor"}
+    assert "invalid_qualifier:event" in issues_for(response, "claim:event")
+    response["claims"][3]["qualifiers"] = {
+        "event": "funding_round",
+        "round": "series_z",
+    }
+    assert "invalid_qualifier:round" in issues_for(response, "claim:event")
+    response["claims"][3]["qualifiers"] = {}
+    assert "missing_required_qualifier:event" in issues_for(
+        response, "claim:event"
+    )
+
+
 def test_country_code_is_required_shape_and_only_for_countries():
     response = extraction()
     response["entities"][2]["country_code"] = "Germany"

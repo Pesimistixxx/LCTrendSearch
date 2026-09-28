@@ -40,9 +40,13 @@ def isolated_log_file(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def forget_embedding_keys():
-    """Which keys embed is process-wide; each test starts from nothing."""
+    """Which keys embed, rest or block a host is process-wide; each test
+    starts from nothing."""
+    from lctrend.ingest import connectors
     from lctrend.llm.client import reset_key_knowledge
 
     reset_key_knowledge()
+    connectors._HOST_BLOCKED.clear()
     yield
     reset_key_knowledge()
+    connectors._HOST_BLOCKED.clear()

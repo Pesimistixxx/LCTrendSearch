@@ -475,3 +475,57 @@ def test_chat_pool_learns_what_the_embedding_pool_found(tmp_path):
     # The chat pool never asks "two" for embeddings again.
     asyncio.run(chat_pool.embed(["a"], "EmbeddingsGigaR"))
     assert server.embeddings == ["main"] * 3
+
+
+def test_a_key_rests_for_every_pool_of_the_process(tmp_path):
+    # Jobs and the semantic layer build separate pools from one keys file:
+    # a 429 on one pool must keep the others off that key too.
+    server = Accounts(limited={"one"}, delay=0)
+    keys = [{"credentials": basic("one")}, {"credentials": basic("two")}]
+    first, second = pool(tmp_path, server, keys), pool(tmp_path, server, keys)
+    asyncio.run(first.generate(Answer, "s", {"n": 0}))
+    for n in range(3):
+        asyncio.run(second.generate(Answer, "s", {"n": n}))
+    assert [key for key, _ in server.chat].count("one") == 1
+
+
+def test_a_key_keeps_one_limit_whoever_builds_its_client(tmp_path):
+    # A second client of the same key asking for more requests at once
+    # shares the key's limit instead of opening a second gate.
+    server = Accounts(delay=0.05)
+    config = deepcopy(load_catalog("llm"))
+    config["gigachat"].pop("model_routes", None)
+    options = {
+        "api_key": basic("one"),
+        "provider": "gigachat",
+        "scope": "GIGACHAT_API_PERS",
+        "transport": httpx.MockTransport(server),
+        "config": config,
+    }
+    narrow = JsonLLM(max_concurrency=1, **options)
+    wide = JsonLLM(max_concurrency=4, **options)
+
+    async def burst():
+        await asyncio.gather(
+            *(
+                client.generate(Answer, "s", {"n": n})
+                for n, client in enumerate([narrow, wide] * 3)
+            )
+        )
+
+    asyncio.run(burst())
+    assert server.peak == {"one": 1}
+
+
+def test_documents_at_once_never_exceed_the_keys(tmp_path):
+    from lctrend.llm.client import document_workers
+
+    provider = pool(
+        tmp_path,
+        Accounts(),
+        [{"credentials": basic(name)} for name in ("a", "b", "c", "d")],
+    )
+    assert document_workers(6, provider) == 4
+    assert document_workers(2, provider) == 2
+    # No model calls (mode "none"): the requested workers run.
+    assert document_workers(6, None) == 6

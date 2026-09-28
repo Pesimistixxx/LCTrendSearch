@@ -47,6 +47,30 @@ async def _pubmed_slot() -> None:
     await asyncio.sleep(start - now)
 
 
+# Host -> (monotonic time its rate limit resets, the refusing status). A
+# host that asked to wait longer than max_rate_limit_wait_seconds is not
+# asked again until then: a GitHub crawl of hundreds of repositories would
+# otherwise spend a request and a warning on each one.
+_HOST_BLOCKED: Dict[str, tuple] = {}
+_HOST_BLOCKED_LOCK = threading.Lock()
+
+
+def _blocked(url: str) -> Optional[int]:
+    """The refusing status while the host's rate limit lasts, else None."""
+    host = _host(url)
+    with _HOST_BLOCKED_LOCK:
+        until, status = _HOST_BLOCKED.get(host, (0.0, 0))
+        if until > time.monotonic():
+            return status
+        _HOST_BLOCKED.pop(host, None)
+    return None
+
+
+def _block(url: str, status: int, delay: float) -> None:
+    with _HOST_BLOCKED_LOCK:
+        _HOST_BLOCKED[_host(url)] = (time.monotonic() + delay, status)
+
+
 class SourceHTTPError(RuntimeError):
     """A source answered with a non-retryable (or exhausted) HTTP error."""
 
@@ -121,6 +145,9 @@ async def request(
     cap = float(settings.get("max_backoff_seconds", 60.0))
     limit_wait = float(settings.get("max_rate_limit_wait_seconds", cap))
     retry_statuses = set(settings.get("retry_statuses", []))
+    blocked = _blocked(url)
+    if blocked is not None:
+        raise SourceHTTPError(blocked, url)
     async with httpx.AsyncClient(
         timeout=settings["timeout_seconds"],
         transport=TRANSPORT,
@@ -157,10 +184,12 @@ async def request(
                         delay = _retry_after(response)
                         if delay is not None and delay > limit_wait:
                             logger.warning(
-                                "%s asks to wait %.0fs; giving up",
+                                "%s asks to wait %.0fs; giving up, no "
+                                "requests to it until then",
                                 _host(url),
                                 delay,
                             )
+                            _block(url, status, delay)
                             raise SourceHTTPError(status, url)
                     else:
                         raise SourceHTTPError(status, url)

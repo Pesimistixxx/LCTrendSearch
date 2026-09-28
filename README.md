@@ -214,7 +214,7 @@ LLM-провайдер использует endpoint `/chat/completions`. Зад
 
 | Настройка | По умолчанию | Что ограничивает |
 |---|---|---|
-| `LCTREND_WORKERS` / `runtime.json` → `ingestion.workers` | 4 | Документов одного задания или пачки обхода одновременно, 1–16 |
+| `LCTREND_WORKERS` / `runtime.json` → `ingestion.workers` | 4 | Документов одного задания или пачки обхода одновременно, 1–16; с LLM не больше, чем ключей в пуле (сумма их `workers`): один воркер на ключ |
 | `crawl-openalex --workers N` | как выше | То же для CLI |
 | `LLM_MAX_CONCURRENCY` / `llm.json` → `max_concurrent_requests` | GigaChat: 1, OpenAI-совместимый: 4 | Одновременных запросов к LLM на процесс |
 | `pipeline.json` → `model_calls_per_packet`, `max_document_model_calls` | 5 и 200 | Бюджет вызовов LLM растёт с числом пакетов документа, но не выше предела. 5 на пакет: извлечение, повтор после раунда контекста, две группы рецензии полного пакета и запас на повтор |

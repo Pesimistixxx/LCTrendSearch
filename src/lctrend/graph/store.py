@@ -2066,7 +2066,7 @@ class GraphStore:
               AND coalesce(t.status, '') <> 'merged'
             RETURN t.concept_id AS technology_id,
                    t.preferred_label AS technology,
-                   t.kind AS kind,
+                   t.kind AS kind, t.definition AS definition,
                    t.first_seen_at AS first_seen_at,
                    t.status AS status, t.embedding AS embedding,
                    t.embedding_model AS embedding_model,
@@ -2079,6 +2079,7 @@ class GraphStore:
             RETURN t.concept_id AS technology_id, type(r) AS relation,
                    coalesce(x.concept_id, x.organization_id, x.domain_id)
                        AS target_id,
+                   coalesce(x.preferred_label, x.name) AS target_label,
                    x.kind AS target_kind,
                    labels(x) AS target_labels,
                    r.document_version_id AS version_id,
@@ -2140,6 +2141,12 @@ class GraphStore:
                     WHERE type(role) IN $role_types
                       AND concept.concept_id IS NOT NULL
                     | [type(role), concept.concept_id]] AS roles,
+                   // Names for reports (signal cards); roles stay ids.
+                   [(a)-[role]->(concept)
+                    WHERE type(role) IN $role_types
+                      AND concept.concept_id IS NOT NULL
+                    | [type(role), concept.preferred_label, concept.kind]]
+                       AS role_labels,
                    quote
         """
         crawls = """

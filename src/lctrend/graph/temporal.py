@@ -490,6 +490,8 @@ class TemporalCorpus:
         )
         self.labels: Dict[str, str] = {}
         self.kinds: Dict[str, str] = {}
+        # What the sources say a technology is (signal cards).
+        self.definitions: Dict[str, str] = {}
         self.embeddings: Dict[str, List[float]] = {}
         self.embedding_dates: Dict[str, date] = {}
         for row in data.get("technologies", []):
@@ -499,6 +501,8 @@ class TemporalCorpus:
             )
             if row.get("kind"):
                 self.kinds[technology_id] = str(row["kind"])
+            if row.get("definition"):
+                self.definitions[technology_id] = str(row["definition"])
             embedding_date = parse_date(row.get("embedding_observed_at"))
             if row.get("embedding") and (
                 embedding_date is not None or not as_known

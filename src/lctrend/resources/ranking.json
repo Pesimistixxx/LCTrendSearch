@@ -37,6 +37,34 @@
       "commercial_user_count": "Компании-пользователи (штраф)"
     }
   },
+  "signals": {
+    "note": "Weak-signal cards (lctrend signals-report, ranking.signals). The ranked pool is clustered by name vectors, one dossier per cluster goes to the model, which names the niche and writes the reasons; stage, trend, score and sources are computed by code. Score = stage points + trend points, as in the analyst table of September 2026.",
+    "top_k": 100,
+    "pool": 300,
+    "max_stage_rank": 5,
+    "concurrency": 4,
+    "cluster": {"min_cosine": 0.82, "max_members": 6},
+    "trend": {
+      "note": "Dated documents in the last window_months against the window before; ratio uses add-one smoothing. fast needs min_fast_documents recent documents.",
+      "window_months": 12,
+      "fast_ratio": 2.0,
+      "growth_ratio": 1.2,
+      "stable_ratio": 0.8,
+      "min_fast_documents": 3,
+      "labels": {"fast": "Растёт быстро", "growing": "Растёт", "stable": "Стабильный", "declining": "Снижается"},
+      "points": {"fast": 3, "growing": 2, "stable": 1, "declining": 0}
+    },
+    "stages": {
+      "note": "maturity_stage_rank (graph.json) -> card stage. mass_adoption is not a weak signal (max_stage_rank).",
+      "ranks": {"1": "concept", "2": "concept", "3": "prototype", "4": "pilot", "5": "early_adoption"},
+      "labels": {"concept": "Концепция/Исследование", "prototype": "Прототип/PoC", "pilot": "Пилот", "early_adoption": "Раннее внедрение"},
+      "points": {"concept": 1, "prototype": 2, "pilot": 3, "early_adoption": 4}
+    },
+    "areas": ["Индустриальный ИИ", "Роботы", "Инфраструктура ИИ", "Финтех", "Защита ИИ", "Edge", "Кибербезопасность", "Квантовые технологии", "Полупроводники", "Энергетика", "Биотехнологии и медицина", "Другое"],
+    "dossier": {"max_claims": 25, "max_events": 15, "max_organizations": 20, "max_documents": 12, "max_quote_chars": 400},
+    "max_sources": 4,
+    "max_companies": 6
+  },
   "api": {"cache_seconds": 300},
   "explanation": {"top_features": 3, "max_quotes": 3, "max_sources": 5, "trend_quarters": 10},
   "backtest": {

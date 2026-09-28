@@ -962,12 +962,23 @@ class JobManager:
                 logger.info(
                     "Job %s: %d registry concepts", job_id, len(registry)
                 )
+            from lctrend.llm.client import document_workers
+
+            workers = document_workers(job["workers"], provider)
+            if workers < job["workers"]:
+                logger.info(
+                    "Job %s: %d workers requested, %d run: one worker per "
+                    "LLM key",
+                    job_id,
+                    job["workers"],
+                    workers,
+                )
             context = {
                 "store": store,
                 "provider": provider,
                 "registry": registry,
                 "publication": asyncio.Lock(),
-                "workers": asyncio.Semaphore(job["workers"]),
+                "workers": asyncio.Semaphore(workers),
             }
 
             stage = "discovery"

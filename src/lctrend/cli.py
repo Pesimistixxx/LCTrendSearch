@@ -391,7 +391,11 @@ def _crawl_openalex(
 
     async def crawl():
         nonlocal processed, failures, cursor
-        slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
+        from .llm.client import document_workers
+
+        # One worker per LLM key: more would only queue for a busy key.
+        slots = asyncio.Semaphore(document_workers(workers, provider))
+        publication = asyncio.Lock()
         seen_cursors = set()
         crawl_run = _crawl_run("openalex", query, filter)
         # Number of works matching the search, as reported by OpenAlex.
@@ -605,7 +609,11 @@ def _crawl_economic(
 
     async def crawl():
         nonlocal processed, cursor
-        slots, publication = asyncio.Semaphore(workers), asyncio.Lock()
+        from .llm.client import document_workers
+
+        # One worker per LLM key: more would only queue for a busy key.
+        slots = asyncio.Semaphore(document_workers(workers, provider))
+        publication = asyncio.Lock()
         crawl_run = _crawl_run(source, query)
         complete = False
         async with (
@@ -1085,6 +1093,56 @@ def main() -> None:
         help="Strict mode: content also waits for its collection and "
         "extraction (what this system knew at T), not only publication",
     )
+    signals_command = subparsers.add_parser(
+        "signals-report",
+        help="Weak-signal table at a date: niche, area, companies, why, "
+        "stage, trend, score and sources (XLSX/CSV/JSON)",
+    )
+    signals_command.add_argument(
+        "--snapshot",
+        type=date.fromisoformat,
+        default=date.today(),
+        help="Snapshot date T (default: today)",
+    )
+    signals_command.add_argument(
+        "--output",
+        type=Path,
+        action="append",
+        required=True,
+        help="Report file: .xlsx, .csv or .json; repeat for several",
+    )
+    signals_command.add_argument(
+        "--top-k",
+        type=int,
+        default=ranking_settings["signals"]["top_k"],
+        help="Cards in the table",
+    )
+    signals_command.add_argument(
+        "--pool",
+        type=int,
+        default=ranking_settings["signals"]["pool"],
+        help="Ranked candidates read before clustering",
+    )
+    signals_command.add_argument(
+        "--query",
+        help="Narrow to domains or technology names, like /api/search",
+    )
+    signals_command.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Cards from the dossier only, without the language model",
+    )
+    signals_command.add_argument(
+        "--no-taxonomy",
+        action="store_true",
+        help="Skip semantic, taxonomy and graph novelty features",
+    )
+    signals_command.add_argument(
+        "--as-known",
+        action="store_true",
+        help="Strict mode: content also waits for its collection and "
+        "extraction (what this system knew at T), not only publication",
+    )
     taxonomy_command = subparsers.add_parser(
         "build-taxonomy",
         help="Build the technology taxonomy of a snapshot into Neo4j",
@@ -1503,6 +1561,45 @@ def _run(args: argparse.Namespace) -> None:
         )
         for warning in result["warnings"]:
             logger.warning("Backtest: %s", warning)
+        return
+
+    if args.command == "signals-report":
+        from .ranking.export import write_report
+        from .ranking.signals import build_cards
+
+        if min(args.top_k, args.pool) < 1:
+            raise ValueError("top-k and pool must be positive")
+        config = copy.deepcopy(load_catalog("ranking"))
+        config["include_novelty"] = not args.no_taxonomy
+        config["signals"]["pool"] = args.pool
+        corpus = asyncio.run(
+            _graph(lambda store: _temporal_data(store, args.as_known))
+        )
+        provider = None
+        if not args.no_llm:
+            from .llm.client import JsonLLM
+
+            provider = JsonLLM.from_environment()
+        result = asyncio.run(
+            build_cards(
+                corpus,
+                args.snapshot,
+                provider,
+                config,
+                query=args.query,
+                top_k=args.top_k,
+            )
+        )
+        for path in args.output:
+            write_report(result, path)
+            logger.info("Signals report: %s", path)
+        stats = result["stats"]
+        print(
+            f"{result['snapshot']}: cards={stats['cards']} "
+            f"clusters={stats['clusters']} candidates={stats['candidates']} "
+            f"rejected_by_model={stats['rejected_by_model']} "
+            f"without_model={stats['without_model']}"
+        )
         return
 
     if args.command == "prune-chunks":

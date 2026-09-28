@@ -496,13 +496,18 @@ class _Budget:
                     delay,
                 )
                 await _sleep(delay)
-            except Exception:
+            except Exception as exc:
+                # A stopping server closes the loop's executor under a
+                # request in flight: that is an interruption, not a bad
+                # answer of the model.
+                interrupted = _shutting_down(exc)
+                code = "interrupted" if interrupted else "invalid_response"
                 self.trace.append(
                     {
                         "stage": stage,
                         "call": self.used,
                         "status": "failed",
-                        "code": "invalid_response",
+                        "code": code,
                     }
                 )
                 _emit(
@@ -510,14 +515,35 @@ class _Budget:
                     stage=stage,
                     status="failed",
                     model_calls=self.used,
-                    code="invalid_response",
+                    code=code,
                 )
+                if interrupted:
+                    logger.info(
+                        "LLM %s call interrupted: the process is stopping",
+                        stage,
+                    )
+                    raise LLMError(
+                        "interrupted", "The process stopped during the call"
+                    ) from None
                 logger.warning(
                     "LLM %s returned an invalid response", stage, exc_info=True
                 )
                 raise LLMError(
                     "invalid_response", "Provider returned an invalid response"
                 ) from None
+
+
+def _shutting_down(exc: BaseException) -> bool:
+    """The event loop or its executor was closed under the call."""
+    seen: set = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, RuntimeError) and (
+            "after shutdown" in str(exc) or "loop is closed" in str(exc)
+        ):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 async def _review(

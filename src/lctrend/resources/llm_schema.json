@@ -149,6 +149,15 @@
       "qualifier_enums": {"stage": ["concept", "laboratory_validation", "prototype", "pilot", "commercial_deployment", "mass_adoption"]},
       "grounded_integer_qualifiers": {"trl": [1, 9]},
       "integer_qualifier_markers": {"trl": "(?:\\bTRL\\b|\\bУГТ\\b|\\btechnology readiness level\\b|\\bуров(?:ень|ня|ню|не|нем) готовности технологии\\b|\\bуров(?:ень|ня|ню|не|нем) технологической готовности\\b)\\s*(?:(?:level|уровень|уровня)\\s*)?(?:[:=–—-]\\s*)?"}
+    },
+    "reports_market_event": {
+      "required_roles": ["subject"], "allowed_roles": ["subject", "organization", "country", "market"],
+      "role_types": {"subject": ["Technology", "Method", "Material"], "organization": ["Organization", "Company", "University"], "country": ["Country"], "market": ["MarketSegment"]},
+      "required_qualifiers": ["event"],
+      "qualifier_enums": {
+        "event": ["funding_round", "stealth_exit", "product_launch", "acquisition", "partnership", "contract", "standard", "regulation", "open_source_release", "public_audit"],
+        "round": ["grant", "pre_seed", "seed", "series_a", "series_b", "series_c", "series_d_plus", "strategic", "debt", "ipo"]
+      }
     }
   }
 }

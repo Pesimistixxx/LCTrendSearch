@@ -53,11 +53,22 @@ MAX_RETAINED_CALLS = 2000
 # One request limit per provider endpoint and key for the whole process: the
 # CLI, the web job loop, the resolver's own client and embedding threads all
 # count against LLM_MAX_CONCURRENCY together (B-10). Each key of a KeyPool
-# has its own limit: providers count concurrent streams per account.
+# has its own limit: providers count concurrent streams per account. The
+# limit belongs to the key, not to the client: the first client of a key
+# fixes it, and a later client asking for more (a single-key JsonLLM on the
+# same credentials, another pool) shares it instead of opening a second
+# gate onto the same account.
 _PROCESS_LIMITS: Dict[
-    Tuple[str, str, str, int], threading.BoundedSemaphore
+    Tuple[str, str, str], Tuple[int, threading.BoundedSemaphore]
 ] = {}
 _PROCESS_LIMITS_LOCK = threading.Lock()
+
+
+# Key -> monotonic time it may be used again after HTTP 429, and its last
+# pause. Process-wide like the limits: every pool built from one keys file
+# (jobs, the semantic layer, status checks) must leave a resting key alone.
+_KEY_RESTING: Dict[Tuple[str, str, str], float] = {}
+_KEY_PAUSE: Dict[Tuple[str, str, str], float] = {}
 
 
 # Which keys embed, which have no embeddings package: known once per
@@ -71,19 +82,34 @@ def _embedding_key(member: Any) -> Tuple[str, str, str]:
 
 
 def reset_key_knowledge() -> None:
-    """Forget which keys embed (tests, or after new packages are bought)."""
+    """Forget which keys embed, rest and their limits (tests, or after new
+    packages are bought). A request holding a slot releases the semaphore
+    it acquired, so forgetting a limit never breaks a running request."""
     with _PROCESS_LIMITS_LOCK:
         _EMBEDDING_KEYS.clear()
+        _KEY_RESTING.clear()
+        _KEY_PAUSE.clear()
+        _PROCESS_LIMITS.clear()
 
 
 def _process_limit(
     provider: str, base_url: str, key_id: str, limit: int
 ) -> threading.BoundedSemaphore:
     with _PROCESS_LIMITS_LOCK:
-        key = (provider, base_url, key_id, limit)
+        key = (provider, base_url, key_id)
         if key not in _PROCESS_LIMITS:
-            _PROCESS_LIMITS[key] = threading.BoundedSemaphore(limit)
-        return _PROCESS_LIMITS[key]
+            _PROCESS_LIMITS[key] = (limit, threading.BoundedSemaphore(limit))
+        fixed, semaphore = _PROCESS_LIMITS[key]
+    if fixed != limit:
+        _log_once(
+            logging.WARNING,
+            "LLM key %s: a client asked for %d concurrent requests, the key "
+            "keeps its limit of %d",
+            key_id[:8] or "default",
+            limit,
+            fixed,
+        )
+    return semaphore
 
 
 async def _take_slot(semaphore: threading.BoundedSemaphore) -> int:
@@ -101,6 +127,17 @@ async def _take_slot(semaphore: threading.BoundedSemaphore) -> int:
     finally:
         STATS.wait(-1)
     return round((perf_counter() - queued) * 1000)
+
+
+def document_workers(requested: int, provider: Any) -> int:
+    """Documents processed at once: never more than the LLM provider runs
+    requests at once (one per key of a key pool, by its ``workers``), so
+    each worker has its own key and no document queues behind another on
+    a busy account. Without a provider (no model calls) nothing caps it."""
+    capacity = getattr(provider, "max_concurrency", None)
+    if isinstance(capacity, bool) or not isinstance(capacity, int):
+        return requested
+    return max(1, min(requested, capacity))
 
 
 def _record(calls: Any, call: Dict[str, Any]) -> None:
@@ -1736,9 +1773,7 @@ class KeyPool:
         for member in self.members:
             member.calls, member.model_events = self.calls, self.model_events
         self._next = 0
-        # Key index -> monotonic time it may be used again, and its pause.
-        self._resting: Dict[int, float] = {}
-        self._pause: Dict[int, float] = {}
+        # A rate-limited key rests process-wide: _KEY_RESTING, _KEY_PAUSE.
         # Keys refused for the run (revoked or expired credentials).
         self._rejected: set = set()
 
@@ -1807,33 +1842,39 @@ class KeyPool:
         with _PROCESS_LIMITS_LOCK:
             _EMBEDDING_KEYS[_embedding_key(member)] = embeds
 
-    def _awake(self, member: JsonLLM) -> bool:
-        return self._resting.get(self.members.index(member), 0) <= monotonic()
+    @staticmethod
+    def _awake(member: JsonLLM) -> bool:
+        return _KEY_RESTING.get(_embedding_key(member), 0) <= monotonic()
 
     def _rest(self, member: JsonLLM, exc: LLMError) -> None:
-        index = self.members.index(member)
         if rejected_key(exc):
-            self._rejected.add(index)
+            self._rejected.add(self.members.index(member))
             logger.warning(
                 "Key %s is refused (%s); not used again in this run",
                 member.key_name,
                 exc.code,
             )
             return
-        pause = exc.retry_after or min(
-            self._pause.get(index, KEY_COOLDOWN_SECONDS / 2) * 2,
-            KEY_COOLDOWN_MAX_SECONDS,
-        )
-        self._pause[index] = pause
+        key = _embedding_key(member)
+        with _PROCESS_LIMITS_LOCK:
+            pause = exc.retry_after or min(
+                _KEY_PAUSE.get(key, KEY_COOLDOWN_SECONDS / 2) * 2,
+                KEY_COOLDOWN_MAX_SECONDS,
+            )
+            _KEY_PAUSE[key] = pause
+            _KEY_RESTING[key] = max(
+                _KEY_RESTING.get(key, 0), monotonic() + pause
+            )
         logger.info(
             "Key %s is rate limited (HTTP 429); resting %.0fs",
             member.key_name,
             pause,
         )
-        self._resting[index] = monotonic() + pause
 
-    def _rested(self, member: JsonLLM) -> None:
-        self._pause.pop(self.members.index(member), None)
+    @staticmethod
+    def _rested(member: JsonLLM) -> None:
+        with _PROCESS_LIMITS_LOCK:
+            _KEY_PAUSE.pop(_embedding_key(member), None)
 
     async def _acquire(
         self, usable: Any

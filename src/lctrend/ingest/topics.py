@@ -8,9 +8,15 @@ against each other and against topics already crawled, and capped.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 MAX_TOPICS = 30
 MAX_QUERY_CHARS = 120
@@ -45,10 +51,28 @@ class SuggestedTopic(BaseModel):
     query: str = Field(min_length=1, max_length=400)
     why: str = Field(default="", max_length=1000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_query(cls, value: Any) -> Any:
+        # Some models answer a list of plain query strings.
+        return {"query": value} if isinstance(value, str) else value
+
+    @field_validator("why", mode="before")
+    @classmethod
+    def _short_why(cls, value: Any) -> Any:
+        # A wordy explanation must not cost the whole answer.
+        return value[:1000] if isinstance(value, str) else value
+
 
 class TopicSuggestions(BaseModel):
     model_config = ConfigDict(extra="ignore")
     topics: List[SuggestedTopic] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_list(cls, value: Any) -> Any:
+        # The list without its {"topics": ...} wrapper.
+        return {"topics": value} if isinstance(value, list) else value
 
 
 def _key(query: str) -> str:

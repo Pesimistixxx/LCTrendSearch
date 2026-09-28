@@ -697,6 +697,82 @@ def _ranking(catalogs: Mapping) -> None:
         _number(backtest[key], "ranking.backtest." + key, 1, integer=True)
     _number(backtest["min_growth_ratio"], "ranking.backtest.min_growth_ratio")
     _number(backtest["seed"], "ranking.backtest.seed", integer=True)
+    if "signals" in ranking:
+        _signals(ranking["signals"], catalogs["graph"]["maturity_stage_rank"])
+
+
+def _signals(signals: Mapping, stage_ranks: Mapping) -> None:
+    path = "ranking.signals"
+    for key in ("top_k", "pool", "concurrency", "max_sources"):
+        _number(signals[key], f"{path}.{key}", 1, integer=True)
+    _number(signals["max_companies"], path + ".max_companies", 1, integer=True)
+    _number(
+        signals["max_stage_rank"],
+        path + ".max_stage_rank",
+        1,
+        max(stage_ranks.values()),
+        integer=True,
+    )
+    cluster = signals["cluster"]
+    _number(cluster["min_cosine"], path + ".cluster.min_cosine", 0, 1)
+    _number(
+        cluster["max_members"], path + ".cluster.max_members", 1, integer=True
+    )
+    trend = signals["trend"]
+    _number(
+        trend["window_months"], path + ".trend.window_months", 1, integer=True
+    )
+    _number(
+        trend["min_fast_documents"],
+        path + ".trend.min_fast_documents",
+        1,
+        integer=True,
+    )
+    _number(trend["stable_ratio"], path + ".trend.stable_ratio", 0)
+    _number(
+        trend["growth_ratio"],
+        path + ".trend.growth_ratio",
+        trend["stable_ratio"],
+    )
+    _number(
+        trend["fast_ratio"], path + ".trend.fast_ratio", trend["growth_ratio"]
+    )
+    categories = {"fast", "growing", "stable", "declining"}
+    for key in ("labels", "points"):
+        if set(_mapping(trend[key], f"{path}.trend.{key}")) != categories:
+            _fail(
+                f"{path}.trend.{key}",
+                "must name " + ", ".join(sorted(categories)),
+            )
+    for name, text in trend["labels"].items():
+        _text(text, f"{path}.trend.labels.{name}")
+    for name, points in trend["points"].items():
+        _number(points, f"{path}.trend.points.{name}", 0, integer=True)
+    stages = signals["stages"]
+    names = set(_mapping(stages["labels"], path + ".stages.labels"))
+    if set(_mapping(stages["points"], path + ".stages.points")) != names:
+        _fail(path + ".stages.points", "must name every stage label")
+    for name in names:
+        _text(stages["labels"][name], f"{path}.stages.labels.{name}")
+        _number(
+            stages["points"][name],
+            f"{path}.stages.points.{name}",
+            0,
+            integer=True,
+        )
+    ranks = _mapping(stages["ranks"], path + ".stages.ranks")
+    known = {str(rank) for rank in stage_ranks.values()}
+    for rank, stage in ranks.items():
+        if rank not in known:
+            _fail(f"{path}.stages.ranks.{rank}", "unknown maturity rank")
+        if stage not in names:
+            _fail(f"{path}.stages.ranks.{rank}", "unknown card stage")
+    for rank in range(1, int(signals["max_stage_rank"]) + 1):
+        if str(rank) in known and str(rank) not in ranks:
+            _fail(path + ".stages.ranks", f"rank {rank} has no card stage")
+    _strings(signals["areas"], path + ".areas", nonempty=True)
+    for key, value in _mapping(signals["dossier"], path + ".dossier").items():
+        _number(value, f"{path}.dossier.{key}", 1, integer=True)
 
 
 def validate_catalogs(catalogs: Optional[Mapping[str, Any]] = None) -> None:

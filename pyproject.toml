@@ -23,6 +23,8 @@ dependencies = [
 llm = ["httpx>=0.27,<1"]
 pdf = ["docling>=2,<3"]
 gui = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1"]
+# signals-report --output *.xlsx
+report = ["openpyxl>=3.1,<4"]
 dev = [
     "pytest>=8,<9",
     "ruff>=0.16,<0.17",

@@ -249,3 +249,33 @@ def test_github_secondary_rate_limit_is_retried():
     assert connectors._rate_limited(secondary)
     assert connectors._retry_after(secondary) == 7
     assert not connectors._rate_limited(forbidden)
+
+
+def test_a_long_rate_limit_stops_requests_to_the_host(monkeypatch):
+    # GitHub's primary limit asks to wait most of an hour: one refusal must
+    # not turn into one request (and one warning) per repository.
+    calls = []
+
+    def fetch(request):
+        calls.append(request.url.host)
+        if request.url.host == "api.github.com":
+            return httpx.Response(
+                403,
+                headers={
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(9_999_999_999),
+                },
+            )
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(connectors, "TRANSPORT", httpx.MockTransport(fetch))
+    for name in ("a", "b", "c"):
+        with pytest.raises(connectors.SourceHTTPError) as failure:
+            asyncio.run(
+                connectors.request(f"https://api.github.com/repos/o/{name}")
+            )
+        assert failure.value.status == 403
+    assert calls == ["api.github.com"]
+    # Other hosts are unaffected.
+    asyncio.run(connectors.request("https://api.openalex.org/works"))
+    assert calls[-1] == "api.openalex.org"
