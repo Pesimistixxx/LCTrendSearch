@@ -1048,7 +1048,10 @@ def parse_epo(
     ]
     organizations = []
     countries: Dict[str, Country] = {}
-    if country:
+    iso = set(load_catalog("countries")["iso_alpha2"])
+    # EP, WO, EA... are patent offices, not countries (A-7).
+    office = country.upper() if country.upper() not in iso else None
+    if country and not office:
         countries[country.upper()] = Country(
             country_id=stable_id("country", country.upper()),
             code=country.upper(),
@@ -1073,11 +1076,11 @@ def parse_epo(
                 organization_id=stable_id("organization", "epo", name),
                 name=name,
                 organization_type=_organization_type(name),
-                country_code=residence,
+                country_code=residence if residence in iso else None,
                 role="applicant",
             )
         )
-        if residence:
+        if residence in iso:
             countries.setdefault(
                 residence,
                 Country(
@@ -1110,6 +1113,7 @@ def parse_epo(
         chunks=chunks,
         metadata={
             "country": country or None,
+            "patent_office": office,
             "kind": kind or None,
             "classifications": [
                 " ".join("".join(item.itertext()).split())

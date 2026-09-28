@@ -45,7 +45,10 @@ def test_epo_types_applicants_keeps_residence_and_publication_date():
     assert ("LOVELACE ADA", "applicant") in {
         (item.name, item.role) for item in document.contributors
     }
-    assert {item.code for item in document.countries} == {"EP", "DE"}
+    # A-7: EP is the European Patent Office, not a country; the old
+    # expectation {"EP", "DE"} made it a jurisdiction country.
+    assert {item.code for item in document.countries} == {"DE"}
+    assert document.metadata["patent_office"] == "EP"
     assert [item.name for item in document.domains] == ["Robotics"]
     assert [chunk.kind for chunk in document.chunks] == ["abstract", "claims"]
     assert document.coverage == "full_text"
@@ -170,3 +173,20 @@ def test_html_publication_meta_is_a_date_but_file_creation_is_not(tmp_path):
     undated = parse_file(plain)
     assert undated.published_at is None
     assert undated.metadata["metadata_basis"]["language"] == "script_heuristic"
+
+
+def test_patent_offices_are_not_countries():
+    # A-7: WO/EP/EA publications became "countries" of the document.
+    for office in ("WO", "EA"):
+        document = parse_epo(
+            EPO.replace(
+                "<ops:country>EP</ops:country>",
+                f"<ops:country>{office}</ops:country>",
+            ).replace("[DE]", f"[{office}]", 1),
+            retrieved_at="2026-09-27T00:00:00Z",
+        )
+        assert office not in {item.code for item in document.countries}
+        assert document.metadata["patent_office"] == office
+        assert all(
+            item.country_code != office for item in document.organizations
+        )
