@@ -1006,10 +1006,14 @@ class GraphStore:
             (
                 "MATCH (v:DocumentVersion {document_version_id: $version_id}) "
                 "OPTIONAL MATCH (v)<-[:PROCESSED]-(r:ProcessingRun) "
-                "WHERE r.status = 'succeeded' OR r.published = true "
+                "WHERE (r.status = 'succeeded' OR r.published = true) "
+                # Publishing the same run again (a resumed crawl) is not
+                # "something better is already active" (D-3).
+                "AND r.run_id <> $run_id "
                 "RETURN count(v) AS count, count(r) AS published"
             ),
             version_id=document.document_version_id,
+            run_id=result.run.run_id,
         )
         existing = existing or {}
         status = result.run.status

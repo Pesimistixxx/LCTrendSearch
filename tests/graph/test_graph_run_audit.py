@@ -338,6 +338,9 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
     assert len(tx.queries) == 1
     assert "RETURN count(v) AS count" in tx.queries[0][0]
     assert tx.queries[0][1]["version_id"] == document.document_version_id
+    # D-3: the run being published does not count as an active better one.
+    assert "r.run_id <> $run_id" in tx.queries[0][0]
+    assert tx.queries[0][1]["run_id"] == result.run.run_id
 
 
 def test_document_and_extraction_share_one_execute_write_transaction(
