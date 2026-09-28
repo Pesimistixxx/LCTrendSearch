@@ -63,12 +63,27 @@ def test_history_and_parties_are_taken_from_the_visible_version():
     assert trace.history["release_dates"] == ["2020-02-01"]
 
 
-def test_publication_does_not_backdate_a_later_retrieval():
+def test_content_is_visible_from_publication_despite_later_retrieval():
+    data = {
+        "versions": [version(retrieved_at="2022-01-01")],
+        "mentions": [mention()],
+    }
+    trace = (
+        TemporalCorpus(data)
+        .view(date(2021, 1, 1))
+        .technologies["t1"]
+        .documents[0]
+    )
+    assert trace.first_visible == date(2020, 1, 1)
+
+
+def test_as_known_mode_does_not_backdate_a_later_retrieval():
     corpus = TemporalCorpus(
         {
             "versions": [version(retrieved_at="2022-01-01")],
             "mentions": [mention()],
-        }
+        },
+        as_known=True,
     )
     assert corpus.view(date(2021, 1, 1)).technologies == {}
     trace = corpus.view(date(2022, 1, 1)).technologies["t1"].documents[0]
@@ -89,7 +104,12 @@ def test_versions_are_selected_by_publication_with_separate_retrieval_gate():
     assert corpus.visible_version("d1", date(2024, 1, 1)).version_id == "v2"
 
 
-def test_undated_mentions_are_excluded_and_extraction_is_not_backdated():
+@pytest.mark.parametrize(
+    "as_known, visible_2021", [(False, {"t2"}), (True, set())]
+)
+def test_undated_mentions_are_excluded_and_extraction_gates_as_known(
+    as_known, visible_2021
+):
     corpus = TemporalCorpus(
         {
             "versions": [version()],
@@ -97,16 +117,18 @@ def test_undated_mentions_are_excluded_and_extraction_is_not_backdated():
                 mention(observed=None),
                 mention(technology="t2", recorded_at="2022-01-01"),
             ],
-        }
+        },
+        as_known=as_known,
     )
-    assert corpus.view(date(2021, 1, 1)).technologies == {}
+    assert set(corpus.view(date(2021, 1, 1)).technologies) == visible_2021
     assert set(corpus.view(date(2022, 1, 1)).technologies) == {"t2"}
 
 
+@pytest.mark.parametrize("as_known", [False, True])
 @pytest.mark.parametrize(
     "kind", ["relations", "maturity", "economics", "assertions"]
 )
-def test_events_require_visible_dated_source_versions(kind):
+def test_events_require_visible_dated_source_versions(kind, as_known):
     corpus = TemporalCorpus(
         {
             "versions": [version(), version("v2", published="2022-01-01")],
@@ -134,16 +156,19 @@ def test_events_require_visible_dated_source_versions(kind):
                     "recorded_at": "2023-01-01",
                 },
             ],
-        }
+        },
+        as_known=as_known,
     )
-    assert (
-        getattr(corpus.view(date(2021, 1, 1)).technologies["t1"], kind) == []
+    early = getattr(corpus.view(date(2021, 1, 1)).technologies["t1"], kind)
+    # Extraction time gates content only in the as_known mode.
+    assert [event.observed for event in early] == (
+        [] if as_known else [date(2020, 1, 1)]
     )
     events = getattr(corpus.view(date(2023, 1, 1)).technologies["t1"], kind)
-    assert [event.observed for event in events] == [
+    assert sorted(event.observed for event in events) == sorted([
         date(2022, 1, 1),
-        date(2023, 1, 1),
-    ]
+        date(2023, 1, 1) if as_known else date(2020, 1, 1),
+    ])
 
 
 def test_projected_maturity_rejects_unreviewed_or_speculative_rows():
@@ -315,7 +340,10 @@ def test_current_embeddings_need_their_own_timestamp():
     assert corpus.embeddings_at(date(2021, 1, 1)) == {"early": [1, 1]}
 
 
-def test_extraction_completion_and_latest_observation_have_separate_dates():
+@pytest.mark.parametrize("as_known", [False, True])
+def test_extraction_completion_and_latest_observation_have_separate_dates(
+    as_known,
+):
     corpus = TemporalCorpus(
         {
             "versions": [
@@ -326,9 +354,12 @@ def test_extraction_completion_and_latest_observation_have_separate_dates():
                 )
             ],
             "crawls": [crawl(finished_at="2024-01-01")],
-        }
+        },
+        as_known=as_known,
     )
-    assert corpus.visible_version("d1", date(2021, 1, 1)).extracted is False
+    # Extraction describes published content, so only as_known waits for it.
+    early = corpus.visible_version("d1", date(2021, 1, 1))
+    assert early.extracted is not as_known
     assert corpus.visible_version("d1", date(2022, 1, 1)).extracted is True
     assert corpus.latest_date == date(2024, 1, 1)
 

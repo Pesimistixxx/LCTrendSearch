@@ -281,6 +281,7 @@ python -m lctrend crawl-pypi --packages numpy pydantic
 | `--end-date DATE` | `build-training-set` | Последняя дата среза `YYYY-MM-DD`; по умолчанию конец корпуса |
 | `--subgraphs-output PATH` | `build-training-set` | Дополнительно сохранить ограниченные подграфы каждого среза в JSONL |
 | `--no-taxonomy` | `export-features`, `build-training-set` | Отключить семантические, таксономические и графовые признаки новизны |
+| `--as-known` | `export-features`, `build-training-set` | Строгий режим «как знала система»: содержимое видно не раньше его сбора и обработки. По умолчанию содержимое датируется публикацией, а время сбора влияет только на метрики |
 | `--help` | Любая команда | Справка, например `python -m lctrend fetch --help` |
 
 ### Временной датасет технологий

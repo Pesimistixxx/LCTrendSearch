@@ -798,7 +798,7 @@ def build_dataset_rows(
     )
 
 
-def _write_temporal_rows(path, rows, training):
+def _write_temporal_rows(path, rows, training, corpus=None):
     values = list(rows)
     config = load_catalog("dataset")
     features = _feature_schema(config)
@@ -818,6 +818,8 @@ def _write_temporal_rows(path, rows, training):
         "outcome_columns": OUTCOME_FIELDS if training else [],
         "missing_value": "empty CSV cell",
         "label_column": "label_realized" if training else None,
+        # Strict mode: content waited for its collection and extraction.
+        "as_known": bool(corpus is not None and corpus.as_known),
         "config": config,
         "splits": {
             name: sum(row.get("split") == name for row in values)
@@ -833,9 +835,17 @@ def _write_temporal_rows(path, rows, training):
     return len(values)
 
 
-def write_dataset_rows(path: Path, rows: Iterable[Dict[str, object]]) -> int:
-    return _write_temporal_rows(path, rows, True)
+def write_dataset_rows(
+    path: Path,
+    rows: Iterable[Dict[str, object]],
+    corpus: Optional[TemporalCorpus] = None,
+) -> int:
+    return _write_temporal_rows(path, rows, True, corpus)
 
 
-def write_snapshot_rows(path: Path, rows: Iterable[Dict[str, object]]) -> int:
-    return _write_temporal_rows(path, rows, False)
+def write_snapshot_rows(
+    path: Path,
+    rows: Iterable[Dict[str, object]],
+    corpus: Optional[TemporalCorpus] = None,
+) -> int:
+    return _write_temporal_rows(path, rows, False, corpus)
