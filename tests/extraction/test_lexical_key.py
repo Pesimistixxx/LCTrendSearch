@@ -32,8 +32,7 @@ def same_concept(left, right, kind=T, right_kind=None):
     )
     first, second = decisions
     return (
-        second.concept_id is not None
-        and first.concept_id == second.concept_id
+        second.concept_id is not None and first.concept_id == second.concept_id
     )
 
 

@@ -50,9 +50,7 @@ def _script(char: str) -> Optional[str]:
 
 
 def _distinct(token: str, script: str, twins: str) -> bool:
-    return any(
-        _script(char) == script and char not in twins for char in token
-    )
+    return any(_script(char) == script and char not in twins for char in token)
 
 
 def _fold_twins(token: str, cyrillic_context: bool) -> str:
@@ -68,9 +66,7 @@ def _fold_twins(token: str, cyrillic_context: bool) -> str:
     latin = _distinct(token, "latin", _LATIN_TWINS)
     if cyrillic and latin:
         return token
-    if latin or (
-        not cyrillic and (token.isupper() or not cyrillic_context)
-    ):
+    if latin or (not cyrillic and (token.isupper() or not cyrillic_context)):
         return token.translate(_TO_LATIN)
     return token.translate(_TO_CYRILLIC)
 
@@ -117,11 +113,7 @@ def _cyrillic(token: str) -> str:
 
 def _word(token: str, shouted: bool) -> str:
     if not shouted:
-        if (
-            token.endswith("s")
-            and len(token) > 2
-            and _is_acronym(token[:-1])
-        ):
+        if token.endswith("s") and len(token) > 2 and _is_acronym(token[:-1]):
             token = token[:-1]
         if token.isupper() and _is_acronym(token):
             return token.casefold().replace("ё", "е")

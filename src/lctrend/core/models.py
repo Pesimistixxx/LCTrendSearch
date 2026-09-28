@@ -187,6 +187,12 @@ class Concept(BaseModel):
     language: Optional[str] = None
     status: str = "provisional"
     names: List[ConceptName] = Field(default_factory=list)
+    # Lexical identity key (extraction.lexical) the concept was created
+    # under; None for concepts created before key v2.
+    identity_key: Optional[str] = None
+    # Resolved mentions per canonical form; the most frequent form is the
+    # preferred label of a concept that has not been reviewed.
+    label_counts: Dict[str, int] = Field(default_factory=dict)
 
 
 class Mention(BaseModel):

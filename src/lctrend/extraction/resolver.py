@@ -281,6 +281,8 @@ class SemanticDeduplicator:
 class AliasGroup(NamedTuple):
     kind: str
     keys: frozenset
+    # Identity key of the group's first name: every member shares it.
+    canonical: str
 
 
 @lru_cache(maxsize=1)
@@ -292,9 +294,38 @@ def alias_groups() -> Tuple[AliasGroup, ...]:
             frozenset().union(
                 *(_alias_keys(name, group["kind"]) for name in group["names"])
             ),
+            identity_key(group["names"][0], group["kind"]),
         )
         for group in load_catalog("resolver")["explicit_aliases"]
     )
+
+
+def _group(
+    key: str, kind: object, groups: Sequence[AliasGroup]
+) -> Optional[AliasGroup]:
+    family = kind_family(kind)
+    return next(
+        (
+            group
+            for group in groups
+            if f"key:{key}" in group.keys and kind_family(group.kind) == family
+        ),
+        None,
+    )
+
+
+# Within the Technology family the concept kind is the highest kind any
+# mention reported, so it does not depend on the order of documents.
+_KIND_RANK = {
+    ConceptKind.MATERIAL: 1,
+    ConceptKind.METHOD: 2,
+    ConceptKind.TECHNOLOGY: 3,
+}
+
+
+def _preferred(counts: Dict[str, int]) -> str:
+    """The most frequent form; ties go to the smallest form, not the first."""
+    return min(counts, key=lambda form: (-counts[form], form))
 
 
 def _aliases(concept: Concept) -> List[str]:
@@ -343,7 +374,8 @@ class ConceptIndex:
         self._order.setdefault(concept_id, len(self._order))
         aliases = _aliases(concept)
         keys = frozenset().union(
-            *(_alias_keys(alias, concept.kind) for alias in aliases)
+            *(_alias_keys(alias, concept.kind) for alias in aliases),
+            {f"key:{concept.identity_key}"} if concept.identity_key else (),
         )
         normalized = frozenset(normalize_name(alias) for alias in aliases)
         for key in keys:
@@ -414,6 +446,62 @@ def _add_alias(concept: Concept, text: str) -> None:
     )
 
 
+def _observe(
+    concept: Concept, mention: Mention, groups: Sequence[AliasGroup]
+) -> None:
+    """Record a resolved mention: its name, its form count and its kind."""
+    _add_alias(concept, mention.surface_text)
+    if concept.status == "accepted":
+        return
+    counts = concept.label_counts or {concept.preferred_label: 1}
+    form = mention.canonical_text or mention.surface_text
+    counts[form] = counts.get(form, 0) + 1
+    concept.label_counts = counts
+    concept.preferred_label = _preferred(counts)
+    kind = _mention_kind(mention)
+    key = concept.identity_key or identity_key(concept.preferred_label)
+    if (
+        _group(key, concept.kind, groups) is None
+        and _KIND_RANK.get(kind, 0) > _KIND_RANK.get(concept.kind, 0)
+        and kind_family(kind) == kind_family(concept.kind)
+    ):
+        concept.kind = kind
+
+
+def _new_concept(
+    mention: Mention, text: str, groups: Sequence[AliasGroup]
+) -> Concept:
+    """A provisional concept identified by kind family and identity key.
+
+    The same name reaches the same concept_id in any document order and in
+    concurrent jobs; a curated synonym group fixes the kind and the key.
+    """
+    kind = _mention_kind(mention)
+    key = identity_key(text, kind)
+    group = _group(key, kind, groups)
+    if group is not None:
+        key, kind = group.canonical, ConceptKind(group.kind)
+    concept_id = stable_id("concept", kind_family(kind), key)
+    normalized = normalize_name(mention.surface_text)
+    return Concept(
+        concept_id=concept_id,
+        kind=kind,
+        preferred_label=text,
+        status="provisional",
+        identity_key=key,
+        label_counts={text: 1},
+        names=[
+            ConceptName(
+                name_id=stable_id("name", concept_id, normalized),
+                text=mention.surface_text,
+                normalized_text=normalized,
+                name_kind="observed",
+                status="provisional",
+            )
+        ],
+    )
+
+
 def resolve_mentions(
     mentions: Sequence[Mention],
     registry: Iterable[Concept],
@@ -456,7 +544,8 @@ def resolve_mentions(
 
         if len(deterministic) == 1:
             concept = deterministic[0]
-            _add_alias(concept, mention.surface_text)
+            _observe(concept, mention, groups)
+            concepts.add(concept)
             touched[concept.concept_id] = concept
             decisions.append(
                 ResolutionDecision(
@@ -530,31 +619,14 @@ def resolve_mentions(
                 )
                 continue
 
-        kind = (
-            mention.type_candidates[0]
-            if mention.type_candidates
-            else ConceptKind.CANDIDATE
-        )
-        concept_id = stable_id("concept", "provisional", mention.mention_id)
-        concept = Concept(
-            concept_id=concept_id,
-            kind=kind,
-            preferred_label=canonical_text,
-            status="provisional",
-            names=[
-                ConceptName(
-                    name_id=stable_id(
-                        "name",
-                        concept_id,
-                        normalize_name(mention.surface_text),
-                    ),
-                    text=mention.surface_text,
-                    normalized_text=normalize_name(mention.surface_text),
-                    name_kind="observed",
-                    status="provisional",
-                )
-            ],
-        )
+        concept = _new_concept(mention, canonical_text, groups)
+        concept_id = concept.concept_id
+        existing = concepts.get(concept_id)
+        if existing is not None:
+            # Same family and key: the same identity, even when no reviewed
+            # name of the existing concept matched.
+            _observe(existing, mention, groups)
+            concept = existing
         concepts.add(concept)
         touched[concept_id] = concept
         decisions.append(

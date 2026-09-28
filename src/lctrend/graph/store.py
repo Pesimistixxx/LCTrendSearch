@@ -20,6 +20,7 @@ from ..core.models import (
     stable_id,
     validate_extraction,
 )
+from ..extraction.lexical import KEY_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,14 @@ def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
         language=properties.get("language"),
         status=properties.get("status", "provisional"),
         names=names,
+        identity_key=properties.get("identity_key"),
+        label_counts=json.loads(properties.get("label_counts_json") or "{}"),
     )
+
+
+# Kinds of one identity family (extraction.lexical.kind_family); a node is
+# only ever relabeled upwards, so concurrent writers cannot downgrade it.
+FAMILY_RANK = {"Material": 1, "Method": 2, "Technology": 3}
 
 
 class GraphStore:
@@ -1473,6 +1481,75 @@ class GraphStore:
         return rows
 
     @staticmethod
+    async def _settle_family_kinds(
+        tx: Any, result: ExtractionResult
+    ) -> ExtractionResult:
+        """Write each Technology-family concept under its highest kind.
+
+        A stored node of a lower kind is relabeled; a stored node of a
+        higher kind keeps its label, so a stale registry copy cannot
+        create a second node or downgrade the concept.
+        """
+        ids = [
+            concept.concept_id
+            for concept in result.concepts
+            if concept.kind.value in FAMILY_RANK
+        ]
+        if not ids:
+            return result
+        stored = {
+            row["concept_id"]: [label for label in FAMILY_RANK if row[label]]
+            for row in map(
+                _data,
+                await _records(
+                    tx,
+                    """
+                    UNWIND $ids AS id
+                    OPTIONAL MATCH (t:Technology {concept_id: id})
+                    OPTIONAL MATCH (m:Method {concept_id: id})
+                    OPTIONAL MATCH (x:Material {concept_id: id})
+                    RETURN id AS concept_id, t IS NOT NULL AS Technology,
+                           m IS NOT NULL AS Method, x IS NOT NULL AS Material
+                    """,
+                    ids=ids,
+                ),
+            )
+        }
+        moves: Dict[Tuple[str, str], List[str]] = {}
+        concepts = []
+        for concept in result.concepts:
+            labels = stored.get(concept.concept_id) or []
+            if concept.kind.value not in FAMILY_RANK or not labels:
+                concepts.append(concept)
+                continue
+            kind = max([concept.kind.value, *labels], key=FAMILY_RANK.get)
+            if kind not in labels:
+                source = max(labels, key=FAMILY_RANK.get)
+                moves.setdefault((source, kind), []).append(concept.concept_id)
+            if len(labels) > 1:
+                logger.warning(
+                    "Concept %s is stored under several kinds %s; merge them",
+                    concept.concept_id,
+                    labels,
+                )
+            concepts.append(
+                concept.model_copy(update={"kind": ConceptKind(kind)})
+            )
+        for (source, target), rows in sorted(moves.items()):
+            await _run(
+                tx,
+                f"""
+                UNWIND $ids AS id
+                MATCH (c:{source} {{concept_id: id}})
+                REMOVE c:{source}
+                SET c:{target}, c.kind = $kind
+                """,
+                ids=rows,
+                kind=target,
+            )
+        return result.model_copy(update={"concepts": concepts})
+
+    @staticmethod
     async def _write_extraction(
         tx: Any,
         document: DocumentEnvelope,
@@ -1537,6 +1614,7 @@ class GraphStore:
             run_id=run.run_id,
         )
 
+        result = await GraphStore._settle_family_kinds(tx, result)
         for concept in result.concepts:
             label = concept.kind.value
             await _run(
@@ -1550,6 +1628,9 @@ class GraphStore:
                     c.aliases = $aliases,
                     c.normalized_aliases = $normalized_aliases,
                     c.names_json = $names_json,
+                    c.identity_key = $identity_key,
+                    c.key_version = $key_version,
+                    c.label_counts_json = $label_counts_json,
                     c.first_seen_at = CASE
                         WHEN $observed_at IS NULL THEN c.first_seen_at
                         WHEN c.first_seen_at IS NULL
@@ -1579,8 +1660,12 @@ class GraphStore:
                 names_json=json_value(
                     [name.model_dump() for name in concept.names]
                 ),
+                key_version=KEY_VERSION if concept.identity_key else None,
+                label_counts_json=json_value(concept.label_counts),
                 observed_at=_version_date(document),
-                **concept.model_dump(exclude={"names"}, mode="json"),
+                **concept.model_dump(
+                    exclude={"names", "label_counts"}, mode="json"
+                ),
             )
 
         # Every concept a mention, role or projection points to is in
