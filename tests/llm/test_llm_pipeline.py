@@ -1035,3 +1035,49 @@ def test_shipped_budget_covers_a_context_round_and_split_review():
     assert len(result.assertions) == 2 * len(doc.chunks)
     assert {a.status for a in result.assertions} == {"accepted"}
     assert result.run.status == "succeeded"
+
+
+def test_run_records_the_pdf_it_read():
+    # A-2: "already processed" compares the PDF, not only the version.
+    doc = document()
+    doc.coverage = "full_text"
+    doc.metadata["fulltext"] = {"status": "parsed", "sha256": "pdf-sha"}
+    provider = RecordingReplay([extracted(doc), reviewed()])
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
+    assert result.run.metadata["input_coverage"] == "full_text"
+    assert result.run.metadata["input_fulltext_sha256"] == "pdf-sha"
+
+
+def test_store_reports_what_each_processed_run_read():
+    import json as json_module
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **parameters):
+            assert "metadata_json" in query
+            return [
+                {
+                    "id": "version",
+                    "metadata_json": json_module.dumps(
+                        {
+                            "input_coverage": "full_text",
+                            "input_fulltext_sha256": "pdf-sha",
+                        }
+                    ),
+                }
+            ]
+
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: Session()}
+    )()
+    store._database = "neo4j"
+    found = asyncio.run(store.processed_inputs(["version"]))
+    assert found == {
+        "version": [{"coverage": "full_text", "fulltext_sha256": "pdf-sha"}]
+    }

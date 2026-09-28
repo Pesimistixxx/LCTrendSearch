@@ -8,11 +8,12 @@ Missing source text and failed downloads are recorded in document.metadata.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import logging
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Callable, Dict, List, Mapping
+from typing import Any, Callable, Collection, Dict, List, Mapping
 
 from ..core.aio import resolve
 from ..core.config import load_catalog
@@ -231,12 +232,14 @@ async def attach_openalex_fulltext(
     payload: Mapping[str, Any],
     fetch: Callable[[str], Any] = None,
     fetch_pubmed: Callable[[str], Any] | None = None,
+    known_sha256: Collection[str] = (),
 ) -> DocumentEnvelope:
     """Attach an open-access PDF, then fall back to a verified PubMed abstract.
 
     ``fetch`` and ``fetch_pubmed`` may be sync or async. Docling runs in a
     worker thread with a timeout, so a pathological PDF fails this document
-    instead of the job.
+    instead of the job. A PDF whose bytes are in ``known_sha256`` was already
+    extracted: it is recorded as ``already_processed`` and not parsed again.
     """
     if fetch is None:
         from .connectors import fetch_pdf as fetch
@@ -258,6 +261,16 @@ async def attach_openalex_fulltext(
     for url in urls:
         try:
             raw = await resolve(fetch(url))
+            sha256 = hashlib.sha256(raw).hexdigest()
+            if sha256 in known_sha256:
+                status.update(
+                    status="already_processed",
+                    pdf_url=url,
+                    sha256=sha256,
+                    byte_length=len(raw),
+                )
+                logger.debug("Full text %s was already extracted", url)
+                return document
             timeout = load_catalog("pipeline")["file_limits"].get(
                 "pdf_timeout_seconds"
             )

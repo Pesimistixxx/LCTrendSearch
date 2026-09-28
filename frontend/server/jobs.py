@@ -30,6 +30,7 @@ from uuid import uuid4
 
 from lctrend.core import aio
 from lctrend.core.models import DocumentEnvelope, ExtractionResult
+from lctrend.ingest.processed import covers, known_fulltexts, prior_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -1130,7 +1131,12 @@ class JobManager:
                 else:
                     writer = self._snapshot_writer
                 document = await aio.call(writer, document, raw)
-                if await self._already_processed(job, document, store):
+                prior = await self._prior_inputs(job, document, store)
+                if (
+                    prior
+                    and not job["fulltext"]
+                    and covers(prior, document)
+                ):
                     await self._record_metrics(document, store)
                     await self._skip(job_id, doc_id, document)
                     return
@@ -1145,12 +1151,22 @@ class JobManager:
                         attacher = attach_openalex_fulltext
                     else:
                         attacher = self._fulltext_attacher
-                    attached = await aio.call(attacher, document, source)
+                    known = known_fulltexts(prior)
+                    attached = await aio.call(
+                        attacher,
+                        document,
+                        source,
+                        **({"known_sha256": known} if known else {}),
+                    )
                     if attached is not None:
                         document = attached
+                    if prior and covers(prior, document):
+                        await self._record_metrics(document, store)
+                        await self._skip(job_id, doc_id, document)
+                        return
             document = DocumentEnvelope.model_validate(document)
-            if job["source"] == "files" and await self._already_processed(
-                job, document, store
+            if job["source"] == "files" and covers(
+                await self._prior_inputs(job, document, store), document
             ):
                 await self._skip(job_id, doc_id, document)
                 return
@@ -1223,18 +1239,16 @@ class JobManager:
                 **branch_updates,
             )
 
-    async def _already_processed(self, job, document, store) -> bool:
-        """A complete extraction of this exact version is already in Neo4j."""
-        lookup = getattr(store, "processed_versions", None)
-        if job["mode"] == "none" or lookup is None:
-            return False
+    async def _prior_inputs(self, job, document, store) -> list:
+        """Inputs of complete extractions of this version in Neo4j."""
+        if job["mode"] == "none":
+            return []
         try:
-            found = await aio.call(lookup, [document.document_version_id])
+            return await prior_inputs(store, document.document_version_id)
         except Exception as exc:
             # The check only saves money; it never blocks processing.
             logger.debug("Processed-version lookup failed: %s", exc)
-            return False
-        return document.document_version_id in found
+            return []
 
     async def _record_metrics(self, document, store) -> None:
         """Counters of a skipped version are a new dated observation."""

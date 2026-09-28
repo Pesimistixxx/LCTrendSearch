@@ -800,6 +800,38 @@ class GraphStore:
             )
         return {record["id"] for record in records}
 
+    async def processed_inputs(
+        self, version_ids: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """What each complete extraction of these versions read.
+
+        The version does not change when a full text becomes available, so
+        "already processed" also compares coverage and the PDF hash.
+        """
+        from ..ingest.processed import run_input
+
+        if not version_ids:
+            return {}
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(
+                session,
+                """
+                UNWIND $ids AS id
+                MATCH (v:DocumentVersion {document_version_id: id})
+                      <-[:PROCESSED]-(r:ProcessingRun)
+                WHERE r.status = 'succeeded' AND r.parser <> 'metadata'
+                RETURN id, r.metadata_json AS metadata_json
+                """,
+                ids=list(version_ids),
+            )
+        found: Dict[str, List[Dict[str, Any]]] = {}
+        for record in records:
+            row = _data(record)
+            found.setdefault(row["id"], []).append(
+                run_input(row.get("metadata_json"))
+            )
+        return found
+
     async def read_concepts(self) -> List[Concept]:
         # Metadata nodes share some labels (Organization, Country, Domain)
         # but carry no concept_id; UNION removes multi-label duplicates.

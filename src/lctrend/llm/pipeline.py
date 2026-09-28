@@ -37,6 +37,7 @@ from ..extraction.economics import (
     extract_economic_evidence,
 )
 from ..extraction.resolver import ConceptRegistry, resolve_mentions
+from ..ingest.processed import fulltext_sha256
 from .client import CALL_LOG, LLMError, Provider
 from .context import (
     ContextBudgetError,
@@ -444,6 +445,8 @@ async def _process_document(
         "demo": bool(getattr(provider, "demo", False)),
         "source_snapshot": document.artifact.model_dump(),
         "input_coverage": document.coverage,
+        # The version stays when a PDF appears; the PDF identifies the input.
+        "input_fulltext_sha256": fulltext_sha256(document),
         "input_quality_status": document.quality_status,
         "parse_warnings": document.metadata.get("parse_warnings", []),
     }

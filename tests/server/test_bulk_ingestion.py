@@ -207,3 +207,40 @@ def test_provider_concurrency_limit_bounds_in_flight_requests(monkeypatch):
     asyncio.run(many())
     assert peak == 2
     assert len(provider.calls) == 6
+
+
+def test_late_full_text_of_a_processed_version_is_extracted(tmp_path):
+    # A-2: the version was processed from its abstract; a PDF appeared.
+    processed = []
+
+    def process(doc, **kwargs):
+        processed.append(doc.metadata["fulltext"]["sha256"])
+        return extraction(doc)
+
+    def attach(doc, payload, **kwargs):
+        doc.coverage = "abstract_and_full_text"
+        doc.metadata["fulltext"] = {"status": "parsed", "sha256": "pdf-1"}
+        return doc
+
+    instance = manager(
+        tmp_path,
+        document_processor=process,
+        source_fetcher=lambda *args: {
+            "results": [{"id": "https://openalex.org/W1", "title": "One"}],
+            "meta": {"next_cursor": None},
+        },
+        fulltext_attacher=attach,
+    )
+    store = instance.fixture_store
+    runs = [{"coverage": "abstract_only", "fulltext_sha256": None}]
+    store.processed_inputs = lambda ids: {ids[0]: list(runs)}
+    try:
+        final = finish(instance, instance.create_openalex("sensors", 1))
+        assert processed == ["pdf-1"]
+        assert final["documents"][0]["stage"] != "already_processed"
+        runs.append({"coverage": "full_text", "fulltext_sha256": "pdf-1"})
+        final = finish(instance, instance.create_openalex("sensors", 1))
+        assert processed == ["pdf-1"]
+        assert final["documents"][0]["stage"] == "already_processed"
+    finally:
+        instance.close(wait=True)
