@@ -46,7 +46,7 @@ flowchart TD
 
     subgraph D["4. Сопоставление — extraction/resolver.py"]
         D1["ConceptRegistry / ConceptIndex<br/>реестр концептов из графа"]:::done
-        D2["Лексический слой: normalize_name,<br/>lemmatize_name (simplemma), explicit_aliases"]:::done
+        D2["Лексический слой: normalize_name,<br/>ключ v2 (lexical.py, Snowball), explicit_aliases"]:::done
         D3["SemanticDeduplicator: эмбеддинги GigaChat<br/>+ cross-encoder → POSSIBLY_SAME_AS"]:::done
         D4["resolve_mentions → Concept, ResolutionDecision"]:::done
         D5["_concept_embeddings → векторы названий"]:::done
@@ -239,7 +239,7 @@ flowchart LR
 
 | Слой | Где | Что делает | Ограничения |
 | --- | --- | --- | --- |
-| Лексический | `normalize_name`, `lemmatize_name`, `resolver.json → explicit_aliases` | одинаковые названия после нормализации и лемматизации, плюс 14 групп синонимов → один концепт | русские согласованные формы («языковые модели» ≠ «языковая модель»); аббревиатуры склеиваются только по списку |
+| Лексический | `lexical.identity_key` (ключ v2), `resolver.json → explicit_aliases` | одинаковые названия после нормализации и стемминга, плюс 14 групп синонимов → один концепт | стемминг Snowball не различает омонимичные основы; аббревиатуры склеиваются только по списку |
 | Смысловой | `SemanticDeduplicator` | эмбеддинг названия; при сходстве ≥ 0.78 и оценке cross-encoder ≥ 0.80 — связь `POSSIBLY_SAME_AS` для проверки человеком | сам концепты не склеивает; без эмбеддингов работает только лексический слой |
 | Таксономия | `build_taxonomy` | дерево тем по эмбеддингам на дату среза; явные `SUBTECHNOLOGY_OF` подтягивают дочерние технологии к родителю | метки узлов — самые представительные названия, а не сгенерированные имена; строится только из концептов с эмбеддингом |
 

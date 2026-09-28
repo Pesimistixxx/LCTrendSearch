@@ -1,6 +1,3 @@
-import sys
-from types import SimpleNamespace
-
 from lctrend.core.models import Concept, ConceptKind, ConceptName, Mention
 from lctrend.extraction.resolver import (
     alias_keys,
@@ -78,26 +75,13 @@ def test_abbreviation_and_full_name_share_one_concept():
     }
 
 
-def test_normalization_and_missing_optional_lemma(monkeypatch):
+def test_normalization_and_stemming():
     assert normalize_name("  Graph-based_NER™ ") == "graph based ner"
-    monkeypatch.setitem(sys.modules, "simplemma", None)
-    # Key v2 strips an English plural itself: it no longer depends on the
-    # optional lemmatizer, so "models" and "model" share a key without it.
+    # Key v2 strips an English plural and stems Russian with Snowball; the
+    # optional simplemma lemmatizer is no longer part of identity.
     assert alias_keys("models") & alias_keys("model")
     assert alias_keys("  MODEL ") & alias_keys("model")
-
-
-def test_optional_lemma_is_tested_with_injected_implementation(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "simplemma",
-        SimpleNamespace(
-            lemmatize=lambda token, lang: (
-                "model" if token == "models" else token
-            )
-        ),
-    )
-    assert alias_keys("models") & alias_keys("model")
+    assert alias_keys("языковые модели") & alias_keys("языковой модели")
 
 
 def test_same_initials_do_not_establish_identity():

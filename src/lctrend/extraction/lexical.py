@@ -6,14 +6,14 @@ neither merge unrelated names nor split inflected forms of one name:
 - text is NFKC-normalized and split on punctuation and symbols;
 - acronyms written in capitals (AI, ИИ, GAN, LED) are never lemmatized;
   short mixed-case acronyms keep their case (GaN is not GAN);
-- Latin words only lose a plural ending;
+- ё is е; Cyrillic words are stemmed with Snowball, Latin words only
+  lose a plural ending;
 - a country is identified by its ISO 3166-1 code alone.
 """
 
 from __future__ import annotations
 
 import re
-import sys
 import unicodedata
 from functools import lru_cache
 from typing import Optional, Tuple
@@ -24,20 +24,6 @@ KEY_VERSION = "lexical-key/2"
 _ACRONYM_MAX = 5
 _LATIN_KEEP = ("ss", "us", "is", "ics", "as")
 _COUNTRY_CODE = re.compile(r"[A-Za-z]{2}")
-
-_SIMPLEMMA_MISSING = False
-
-
-def _lemmatizer():
-    """The optional simplemma function; a failed import is tried only once."""
-    global _SIMPLEMMA_MISSING
-    module = sys.modules.get("simplemma")
-    if module is None and not _SIMPLEMMA_MISSING:
-        try:
-            import simplemma as module
-        except ImportError:
-            _SIMPLEMMA_MISSING = True
-    return getattr(module, "lemmatize", None)
 
 
 def _script(char: str) -> Optional[str]:
@@ -53,9 +39,7 @@ def _script(char: str) -> Optional[str]:
 
 def _is_acronym(token: str) -> bool:
     capitals = sum(char.isupper() for char in token)
-    return len(token) >= 2 and (
-        token.isupper() or capitals >= 2 and len(token) <= _ACRONYM_MAX
-    )
+    return 2 <= len(token) <= _ACRONYM_MAX and capitals >= 2
 
 
 def _singular(token: str) -> str:
@@ -71,9 +55,15 @@ def _singular(token: str) -> str:
     return token[:-1]
 
 
+@lru_cache(maxsize=1)
+def _russian():
+    import snowballstemmer
+
+    return snowballstemmer.stemmer("russian")
+
+
 def _cyrillic(token: str) -> str:
-    lemmatize = _lemmatizer()
-    return lemmatize(token, lang="ru") if lemmatize else token
+    return _russian().stemWord(token)
 
 
 def _word(token: str, shouted: bool) -> str:
@@ -84,11 +74,11 @@ def _word(token: str, shouted: bool) -> str:
             and _is_acronym(token[:-1])
         ):
             token = token[:-1]
-        if token.isupper() and len(token) >= 2:
-            return token.casefold()
+        if token.isupper() and _is_acronym(token):
+            return token.casefold().replace("ё", "е")
         if _is_acronym(token):
             return token
-    token = token.casefold()
+    token = token.casefold().replace("ё", "е")
     scripts = {_script(char) for char in token} - {None}
     if scripts == {"latin"}:
         return _singular(token)

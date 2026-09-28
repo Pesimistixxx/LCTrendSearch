@@ -71,3 +71,40 @@ def test_false_merges_are_separated(left, right, kind):
 @pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C1)
 def test_false_splits_are_joined(left, right, kind):
     assert same_concept(left, right, kind)
+
+
+# C-2: Russian inflected forms of one name were split; ё/е too.
+FALSE_SPLITS_C2 = [
+    ("языковая модель", "языковые модели", T),
+    ("языковая модель", "языковой модели", T),
+    ("большая языковая модель", "большой языковой модели", T),
+    ("большие языковые модели", "больших языковых моделей", T),
+    ("квантовый отжиг", "квантового отжига", T),
+    ("федеративное обучение", "федеративного обучения", T),
+    ("нейронная сеть", "нейронных сетей", T),
+    ("цифровой двойник", "цифровые двойники", T),
+    ("твердотельный аккумулятор", "твердотельных аккумуляторов", T),
+    ("интернет вещей", "интернета вещей", T),
+    ("обучение с подкреплением", "обучения с подкреплением", T),
+    ("твёрдый электролит", "твердый электролит", T),
+    ("ёмкостный датчик", "емкостные датчики", T),
+    ("БОЛЬШИЕ ЯЗЫКОВЫЕ МОДЕЛИ", "большая языковая модель", T),
+]
+
+FALSE_MERGES_C2 = [
+    ("литий-ионный аккумулятор", "натрий-ионный аккумулятор", T),
+    ("модель", "моделирование", T),
+    ("сеть", "сетка", T),
+    # A capitalized Russian acronym is not stemmed into a letter.
+    ("ИИ", "и", T),
+]
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_MERGES_C2)
+def test_russian_false_merges_are_separated(left, right, kind):
+    assert not same_concept(left, right, kind)
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C2)
+def test_russian_forms_are_joined(left, right, kind):
+    assert same_concept(left, right, kind)
