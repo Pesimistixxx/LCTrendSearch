@@ -383,6 +383,11 @@ def test_csv_and_manifest_separate_outcomes_from_predictors(tmp_path):
         name.startswith("future_") for name in manifest["feature_columns"]
     )
     assert "label_realized" not in manifest["feature_columns"]
+    # Duplicate columns are gone; the manifest names their replacement.
+    assert manifest["column_aliases"]["taxonomy_depth"] == "taxonomy_level"
+    assert not set(manifest["column_aliases"]) & set(
+        manifest["feature_columns"]
+    )
     with output.open(newline="", encoding="utf-8") as stream:
         exported = list(csv.DictReader(stream))
     assert exported[0]["label_realized"] == "1"

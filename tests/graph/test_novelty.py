@@ -141,7 +141,8 @@ def test_missing_embedding_does_not_invent_semantic_novelty():
     rows = novelty_features(TemporalCorpus(data).view(date(2020, 1, 1)))
     assert rows["a"]["semantic_novelty"] is None
     assert rows["a"]["cluster_centroid_distance"] is None
-    assert rows["a"]["taxonomy_depth"] is None
+    # taxonomy_depth was a copy of taxonomy_level and is no longer a column.
+    assert rows["a"]["taxonomy_level"] is None
 
 
 def test_same_day_concept_cannot_be_semantic_reference():
@@ -158,3 +159,66 @@ def test_sampled_betweenness_is_repeatable():
     assert novelty_features(snapshot, config) == novelty_features(
         snapshot, config
     )
+
+
+def emerging_cluster():
+    """Three established terms near [1, 0], five new ones near [0, 1]."""
+    versions, mentions, technologies = [], [], []
+    for index in range(8):
+        new = index >= 3
+        when = f"2019-{index + 3:02d}-01" if new else "2015-01-01"
+        key = f"t{index}"
+        versions.append(
+            {
+                "document_id": key,
+                "version_id": key + "v",
+                "document_type": "article",
+                "version_published_at": when,
+                "retrieved_at": when,
+            }
+        )
+        mentions.append(
+            {
+                "technology_id": key,
+                "version_id": key + "v",
+                "observed_at": when,
+                "mentions": 1,
+            }
+        )
+        offset = 0.01 * index
+        technologies.append(
+            {
+                "technology_id": key,
+                "embedding": [offset, 1.0] if new else [1.0, offset],
+                "embedding_observed_at": when,
+            }
+        )
+    return {
+        "versions": versions,
+        "mentions": mentions,
+        "technologies": technologies,
+        "relations": [],
+    }
+
+
+def test_an_emerging_cluster_keeps_its_documented_semantic_novelty():
+    rows = novelty_features(
+        TemporalCorpus(emerging_cluster()).view(date(2020, 1, 1))
+    )
+    for key in ("t3", "t4", "t5", "t6", "t7"):
+        # 1 - cosine to the nearest concept known a year before T.
+        assert rows[key]["semantic_novelty"] > 0.5
+        # The distance to any earlier concept is a different metric:
+        # the cluster's own members are close.
+        assert rows[key]["nearest_known_distance"] < 0.01
+    assert rows["t0"]["semantic_novelty"] < 0.01
+
+
+def test_novelty_fields_have_no_duplicate_columns():
+    duplicates = {
+        "nearest_known_technology_distance",
+        "semantic_outlier_score",
+        "new_taxonomy_branch",
+        "taxonomy_depth",
+    }
+    assert not duplicates & set(NOVELTY_FIELDS)
