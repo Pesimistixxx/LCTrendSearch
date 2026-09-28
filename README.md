@@ -387,7 +387,7 @@ python -m pip install -e ".[llm,pdf,dev]"
 python -m lctrend init-graph
 ```
 
-Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest. Можно объединить: `python -m pip install -e ".[gui,llm,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
+Базовый пакет требует Python >= 3.9; дополнительные библиотеки могут требовать более новую версию. `[llm]` устанавливает httpx, `[pdf]` — Docling, `[gui]` — HTTP-сервер и загрузку файлов, `[dev]` — pytest, ruff и зависимости `[gui]` для тестов сервера. Можно объединить: `python -m pip install -e ".[gui,llm,pdf,dev]"`. Для `parse file` база и LLM не нужны. Все команды запускаются из `LCTrendSearch`, где лежит `.env`.
 
 ## Что происходит на каждом этапе
 
