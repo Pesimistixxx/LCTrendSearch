@@ -442,3 +442,79 @@ def test_local_pdf_gets_the_same_body_as_an_openalex_full_text(
         ),
     )
     assert len(plan.packets) == 1
+
+
+FAKE_DOCLING = """
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+
+class DocumentConverter:
+    def convert(self, path, max_num_pages=None):
+        raw = Path(path).read_bytes()
+        if b"stuck" in raw:
+            time.sleep(120)
+        item = SimpleNamespace(
+            label=SimpleNamespace(value="text"),
+            text=raw.decode(),
+            self_ref="#/texts/0",
+            prov=[],
+        )
+        return SimpleNamespace(
+            document=SimpleNamespace(iterate_items=lambda: [(item, 0)]),
+            status=SimpleNamespace(value="success"),
+        )
+"""
+
+
+def test_stuck_pdf_is_killed_and_the_next_pdf_converts(tmp_path, monkeypatch):
+    # A-4: a thread timeout left Docling running with the converter held.
+    import time
+
+    from lctrend.ingest import file_adapters
+
+    package = tmp_path / "site" / "docling"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "document_converter.py").write_text(
+        FAKE_DOCLING, encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+    for name in ("docling", "docling.document_converter"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(file_adapters, "IN_PROCESS_DOCLING", False)
+    worker = file_adapters._DoclingProcess()
+    monkeypatch.setattr(file_adapters, "_DOCLING", worker)
+    monkeypatch.setenv("LCTREND_RAW_DIR", str(tmp_path / "raw"))
+    catalog = file_adapters.load_catalog
+
+    def limits(timeout):
+        def load(name):
+            value = catalog(name)
+            if name == "pipeline":
+                value["file_limits"]["pdf_timeout_seconds"] = timeout
+            return value
+
+        monkeypatch.setattr(file_adapters, "load_catalog", load)
+
+    def pdf(name, text):
+        path = tmp_path / name
+        path.write_bytes(text.encode())
+        return path
+
+    try:
+        limits(60)  # the first call also starts the worker
+        first = parse_file(pdf("first.pdf", "Sparse attention works."))
+        assert first.chunks[0].text == "Sparse attention works."
+        limits(1)
+        started = time.monotonic()
+        with pytest.raises(file_adapters.DoclingTimeout):
+            parse_file(pdf("stuck.pdf", "stuck forever"))
+        assert time.monotonic() - started < 10
+        assert worker.process is None
+        limits(60)
+        after = parse_file(pdf("after.pdf", "Next paper converts."))
+        assert after.chunks[0].text == "Next paper converts."
+    finally:
+        worker.stop()

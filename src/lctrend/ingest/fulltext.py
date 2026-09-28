@@ -240,12 +240,10 @@ async def attach_openalex_fulltext(
                 )
                 logger.debug("Full text %s was already extracted", url)
                 return document
-            timeout = load_catalog("pipeline")["file_limits"].get(
-                "pdf_timeout_seconds"
-            )
-            snapshot, chunks, warnings = await asyncio.wait_for(
-                asyncio.to_thread(_body_chunks, raw, document, url),
-                timeout,
+            # The converter enforces pdf_timeout_seconds itself and kills a
+            # stuck conversion; a thread timeout here would leave it running.
+            snapshot, chunks, warnings = await asyncio.to_thread(
+                _body_chunks, raw, document, url
             )
         except Exception as exc:
             logger.warning(
