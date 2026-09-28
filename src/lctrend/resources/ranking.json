@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "note": "Transparent TOP-15 until the dataset has both label classes: a rule selects candidates at T, a weighted sum of z-scored export-features columns ranks them. A feature's contribution is its weight times its z-score.",
+  "top_k": 15,
+  "include_novelty": true,
+  "candidates": {
+    "note": "Rules at snapshot T. Unknown maturity passes; a known stage above max_stage_rank does not.",
+    "kinds": ["Technology", "Method"],
+    "window_months": 24,
+    "min_independent_sources": 2,
+    "max_age_years": 5,
+    "max_stage_rank": 4,
+    "generic_labels": [
+      "artificial intelligence", "machine learning", "deep learning", "neural network", "neural networks", "algorithm", "algorithms", "technology", "software", "data", "big data", "internet", "computer", "model", "models", "method", "system",
+      "искусственный интеллект", "машинное обучение", "глубокое обучение", "нейронная сеть", "нейронные сети", "алгоритм", "технология", "технологии", "программное обеспечение", "данные", "большие данные", "интернет", "модель", "метод", "система"
+    ]
+  },
+  "score": {
+    "note": "z = (value - mean) / std over all candidates at T, clipped; a missing value contributes 0. Negative weights penalize.",
+    "z_clip": 3.0,
+    "weights": {
+      "mention_growth_12m": 1.0,
+      "growth_acceleration": 0.5,
+      "source_type_diversity": 0.5,
+      "independence_group_diversity": 0.75,
+      "semantic_novelty": 0.75,
+      "maturity_growth": 0.5,
+      "commercial_user_count": -1.0
+    },
+    "labels": {
+      "mention_growth_12m": "Рост упоминаний за 12 мес.",
+      "growth_acceleration": "Ускорение роста",
+      "source_type_diversity": "Разнообразие типов источников",
+      "independence_group_diversity": "Независимые источники",
+      "semantic_novelty": "Семантическая новизна",
+      "maturity_growth": "Прогресс зрелости за год",
+      "commercial_user_count": "Компании-пользователи (штраф)"
+    }
+  },
+  "api": {"cache_seconds": 300},
+  "explanation": {"top_features": 3, "max_quotes": 3, "max_sources": 5, "trend_quarters": 10},
+  "backtest": {
+    "note": "TOP-K at T from data up to T; a technology grew when its dated documents in (T, T+H] exceed min_growth_ratio times those in (T-H, T].",
+    "horizon_years": 2,
+    "min_growth_ratio": 1.0,
+    "min_future_documents": 1,
+    "random_trials": 1000,
+    "seed": 13
+  }
+}

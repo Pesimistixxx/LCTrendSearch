@@ -10,4 +10,7 @@ build/
 *.egg-info/
 node_modules/
 artifacts/ingestion/
+# Exports are regenerated from the graph; committed copies go stale.
+artifacts/features/
+artifacts/training/
 logs/

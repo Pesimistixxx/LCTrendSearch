@@ -5,13 +5,6 @@
   "ingestion": {"workers": 4},
   "openalex": {"limit": 500, "per_page": 100, "checkpoint": ".openalex-crawl.json"},
   "pypi": {"limit": 5000, "sample_phase": 0.0, "checkpoint": ".pypi-crawl.json"},
-  "training": {
-    "start_year": 2015,
-    "horizon_years": 3,
-    "min_documents": 2,
-    "positive_future_documents": 5,
-    "negative_future_documents": 1,
-    "output": "artifacts/training/technology_3y.csv"
-  },
+  "training_output": "artifacts/training/technology_3y.csv",
   "features_output": "artifacts/features/technology.csv"
 }
