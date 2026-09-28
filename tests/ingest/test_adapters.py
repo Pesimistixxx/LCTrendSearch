@@ -236,9 +236,12 @@ def test_github_pins_commit_and_dates_each_content_kind():
     first_id = document.document_version_id
     payload["_retrieved_at"] = "2026-09-27T00:00:00Z"
     assert parse_github(payload).document_version_id == first_id
+    # Counters are metric observations of the same content (A-1).
     payload["repository"]["stargazers_count"] = 100
-    assert parse_github(payload).document_version_id != first_id
-    first_id = parse_github(payload).document_version_id
+    payload["repository"]["pushed_at"] = "2026-09-27"
+    starred = parse_github(payload)
+    assert starred.document_version_id == first_id
+    assert starred.metrics["stars"] == 100
     payload["readme"]["text"] = "Changed content"
     assert parse_github(payload).document_version_id != first_id
 
@@ -353,4 +356,54 @@ def test_epo_parses_namespaced_xml():
     assert document.published_at == "2026-01-02"
     assert (
         document.chunks[0].text == "A sensor using event-driven transmission."
+    )
+
+
+def test_openalex_rank_and_counters_do_not_make_a_new_version():
+    work = {
+        "id": "https://openalex.org/W1",
+        "doi": "https://doi.org/10.1/x",
+        "title": "Edge AI",
+        "abstract_inverted_index": {"Edge": [0], "AI": [1]},
+        "_retrieved_at": "2026-09-01T00:00:00Z",
+    }
+    first = parse_openalex(
+        {**work, "relevance_score": 12.5, "cited_by_count": 3, "fwci": 1.1}
+    )
+    again = parse_openalex(
+        {
+            **work,
+            "_retrieved_at": "2026-09-08T00:00:00Z",
+            "relevance_score": 0.7,
+            "cited_by_count": 9,
+            "counts_by_year": [{"year": 2026, "cited_by_count": 6}],
+            "updated_date": "2026-09-07T00:00:00",
+            "fwci": 2.4,
+            "citation_normalized_percentile": {"value": 0.9},
+            "cited_by_percentile_year": {"min": 90, "max": 91},
+        }
+    )
+    assert again.document_version_id == first.document_version_id
+    assert again.metrics["citation_count"] == 9
+    assert again.metrics["fwci"] == 2.4
+    changed = parse_openalex(
+        {**work, "abstract_inverted_index": {"Cloud": [0], "AI": [1]}}
+    )
+    assert changed.document_version_id != first.document_version_id
+
+
+def test_pypi_new_release_of_another_line_keeps_the_version():
+    package = {
+        "info": {"name": "pkg", "version": "2.0", "summary": "Tool"},
+        "releases": {"2.0": [{"upload_time": "2026-01-01"}]},
+        "last_serial": 1,
+    }
+    backport = {
+        **package,
+        "releases": {**package["releases"], "1.9.1": []},
+        "last_serial": 2,
+    }
+    assert (
+        parse_pypi(package).document_version_id
+        == parse_pypi(backport).document_version_id
     )

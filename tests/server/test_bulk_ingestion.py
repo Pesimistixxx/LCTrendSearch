@@ -74,7 +74,10 @@ def test_refetching_an_unchanged_record_keeps_its_version():
     first = parse_openalex({**work, "_retrieved_at": "2026-01-01T00:00:00Z"})
     second = parse_openalex({**work, "_retrieved_at": "2026-02-01T00:00:00Z"})
     assert first.document_version_id == second.document_version_id
-    changed = parse_openalex({**work, "cited_by_count": 5})
+    # A new citation count is a metric observation, not new content (A-1).
+    cited = parse_openalex({**work, "cited_by_count": 5})
+    assert cited.document_version_id == first.document_version_id
+    changed = parse_openalex({**work, "title": "Revised work"})
     assert changed.document_version_id != first.document_version_id
     package = {"info": {"name": "pkg", "version": "1.0"}, "releases": {}}
     assert (

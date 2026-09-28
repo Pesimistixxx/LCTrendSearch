@@ -243,6 +243,23 @@ async def _job_registry(store, extract: bool):
     return ConceptRegistry(await resolve(store.read_concepts()))
 
 
+async def _record_metrics(store, document) -> None:
+    """Counters of a skipped version are a new observation, not lost."""
+    recorder = getattr(store, "record_metrics", None)
+    if recorder is None:
+        return
+    try:
+        await resolve(recorder(document))
+    except Exception as exc:
+        if type(exc).__module__.startswith("neo4j"):
+            raise
+        logger.warning(
+            "Metrics of %s not recorded: %s",
+            document.document_version_id,
+            type(exc).__name__,
+        )
+
+
 def _crawl_openalex(
     query: str,
     limit: int,
@@ -309,6 +326,7 @@ def _crawl_openalex(
                             "work=%s already processed; skipped",
                             document.source.record_id,
                         )
+                        await _record_metrics(store, document)
                         return True
                 if fulltext:
                     await resolve(attach_openalex_fulltext(document, payload))

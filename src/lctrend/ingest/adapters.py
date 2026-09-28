@@ -145,15 +145,74 @@ def _bytes_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _observation_hash(payload: Mapping[str, Any]) -> str:
-    """Hash of the source record without its fetch time.
+# Fields that change between fetches of unchanged content: fetch time,
+# search rank and counters. They are observations of the version (stored as
+# metrics with their own date), never a new version: a new version means a
+# new paid extraction.
+VOLATILE_FIELDS = {
+    "common": frozenset({"_retrieved_at"}),
+    "openalex": frozenset(
+        {
+            "relevance_score",
+            "cited_by_count",
+            "counts_by_year",
+            "updated_date",
+            "fwci",
+            "citation_normalized_percentile",
+            "cited_by_percentile_year",
+            "summary_stats",
+            "is_authors_truncated",
+        }
+    ),
+    "github": frozenset(
+        {
+            "stargazers_count",
+            "watchers_count",
+            "watchers",
+            "subscribers_count",
+            "forks_count",
+            "forks",
+            "network_count",
+            "open_issues_count",
+            "open_issues",
+            "size",
+            "score",
+            "pushed_at",
+            "updated_at",
+            # Weekly activity windows slide with the fetch date.
+            "commit_activity",
+            "contributor_stats",
+        }
+    ),
+    "pypi": frozenset(
+        {"downloads", "last_serial", "releases", "vulnerabilities"}
+    ),
+}
 
-    Fetch time alone is not a version: re-fetching an unchanged record must
-    map to the already processed version instead of a new one.
+
+def _without(value: Any, volatile: frozenset) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _without(item, volatile)
+            for key, item in value.items()
+            if key not in volatile
+        }
+    if isinstance(value, list):
+        return [_without(item, volatile) for item in value]
+    return value
+
+
+def _observation_hash(payload: Mapping[str, Any], source: str = "") -> str:
+    """Hash of the source record's content.
+
+    Fetch time, search rank and counters are not a version: re-fetching an
+    unchanged record must map to the already processed version instead of
+    a new one.
     """
-    observation = {
-        key: value for key, value in payload.items() if key != "_retrieved_at"
-    }
+    volatile = VOLATILE_FIELDS["common"] | VOLATILE_FIELDS.get(
+        source, frozenset()
+    )
+    observation = _without(dict(payload), volatile)
     return _bytes_hash(
         json.dumps(observation, sort_keys=True, default=str).encode("utf-8")
     )
@@ -302,7 +361,9 @@ def parse_openalex(
         doi = doi_id.removeprefix("doi:")
     identity = doi or openalex_id
     document_id = stable_id("document", "openalex", identity)
-    version_id = stable_id("version", document_id, _observation_hash(payload))
+    version_id = stable_id(
+        "version", document_id, _observation_hash(payload, "openalex")
+    )
     abstract = _abstract_from_inverted_index(
         payload.get("abstract_inverted_index")
     )
@@ -576,11 +637,13 @@ def parse_github(
             content = base64.b64decode(readme["content"]).decode(
                 "utf-8", errors="replace"
             )
-    # Mutable counters need their own snapshot so later collection cannot
-    # overwrite the metrics attached to a previous version. Fetch time alone
-    # is not a version.
+    # Counters are dated metric observations of the version, not content:
+    # a new star must not pay for a new extraction.
     version_id = stable_id(
-        "version", document_id, commit_sha, _observation_hash(payload)
+        "version",
+        document_id,
+        commit_sha,
+        _observation_hash(payload, "github"),
     )
     canonical_url = (
         repo.get("html_url")
@@ -724,7 +787,7 @@ def parse_pypi(
     version = info.get("version") or "unknown"
     document_id = stable_id("document", "pypi", name.lower())
     version_id = stable_id(
-        "version", document_id, version, _observation_hash(payload)
+        "version", document_id, version, _observation_hash(payload, "pypi")
     )
     canonical_url = (
         info.get("package_url")

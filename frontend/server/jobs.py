@@ -1131,6 +1131,7 @@ class JobManager:
                     writer = self._snapshot_writer
                 document = await aio.call(writer, document, raw)
                 if await self._already_processed(job, document, store):
+                    await self._record_metrics(document, store)
                     await self._skip(job_id, doc_id, document)
                     return
                 if job["fulltext"]:
@@ -1234,6 +1235,20 @@ class JobManager:
             logger.debug("Processed-version lookup failed: %s", exc)
             return False
         return document.document_version_id in found
+
+    async def _record_metrics(self, document, store) -> None:
+        """Counters of a skipped version are a new dated observation."""
+        recorder = getattr(store, "record_metrics", None)
+        if recorder is None:
+            return
+        try:
+            await aio.call(recorder, document)
+        except Exception as exc:
+            logger.warning(
+                "Metrics of %s not recorded: %s",
+                document.document_version_id,
+                type(exc).__name__,
+            )
 
     async def _skip(self, job_id, doc_id, document) -> None:
         await asyncio.to_thread(

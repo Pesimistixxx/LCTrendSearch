@@ -226,6 +226,67 @@ class GraphStore:
                     ),
                 }
 
+    @staticmethod
+    async def _write_metrics(
+        tx: Any, document: DocumentEnvelope, observed: str
+    ) -> None:
+        """One dated metrics observation of the version.
+
+        Counters change without the content changing, so they are kept as
+        a history on the unchanged version instead of forcing a new one.
+        """
+        if not document.metrics:
+            return
+        observed_at = document.metrics_observed_at or observed
+        await _run(
+            tx,
+            """
+            MATCH (v:DocumentVersion {document_version_id: $version_id})
+            MERGE (m:MetricsObservation {observation_id: $observation_id})
+            SET m.observed_at = $observed_at, m.metrics_json = $metrics_json,
+                m.document_version_id = $version_id
+            MERGE (v)-[:HAS_METRICS]->(m)
+            """,
+            version_id=document.document_version_id,
+            observation_id=stable_id(
+                "metrics", document.document_version_id, observed_at
+            ),
+            observed_at=observed_at,
+            metrics_json=json_value(document.metrics),
+        )
+
+    async def record_metrics(self, document: DocumentEnvelope) -> None:
+        """Keep the counters of a re-fetched, already processed version."""
+        observed = (
+            document.retrieved_at or datetime.now(timezone.utc).isoformat()
+        )
+
+        async def write(tx: Any) -> None:
+            await GraphStore._write_metrics(tx, document, observed)
+            observed_at = document.metrics_observed_at or observed
+            await _run(
+                tx,
+                """
+                MATCH (v:DocumentVersion {document_version_id: $version_id})
+                SET v.metrics_json = CASE
+                        WHEN v.metrics_observed_at IS NULL
+                            OR $observed_at >= v.metrics_observed_at
+                        THEN $metrics_json ELSE v.metrics_json END,
+                    v.metrics_observed_at = CASE
+                        WHEN v.metrics_observed_at IS NULL
+                            OR $observed_at > v.metrics_observed_at
+                        THEN $observed_at ELSE v.metrics_observed_at END
+                """,
+                version_id=document.document_version_id,
+                observed_at=observed_at,
+                metrics_json=json_value(document.metrics),
+            )
+
+        if not document.metrics:
+            return
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(write)
+
     async def write_document(self, document: DocumentEnvelope) -> None:
         async with self._driver.session(database=self._database) as session:
             await session.execute_write(self._write_document, document)
@@ -284,13 +345,20 @@ class GraphStore:
                             > coalesce(v.last_retrieved_at, v.retrieved_at)
                     THEN $retrieved_at
                     ELSE coalesce(v.last_retrieved_at, v.retrieved_at) END,
+                // Latest observation for readers of the current state; the
+                // dated history lives in MetricsObservation nodes.
+                v.metrics_json = CASE
+                    WHEN $metrics_observed_at IS NULL THEN $metrics_json
+                    WHEN v.metrics_observed_at IS NULL
+                        OR $metrics_observed_at >= v.metrics_observed_at
+                    THEN $metrics_json
+                    ELSE v.metrics_json END,
                 v.metrics_observed_at = CASE
                     WHEN $metrics_observed_at IS NULL THEN NULL
                     WHEN v.metrics_observed_at IS NULL
                         OR $metrics_observed_at > v.metrics_observed_at
                     THEN $metrics_observed_at
                     ELSE v.metrics_observed_at END,
-                v.metrics_json = $metrics_json,
                 v.country_codes = $country_codes, v.company_ids = $company_ids,
                 v.university_ids = $university_ids, v.domain_ids = $domain_ids,
                 v.contributor_ids = $contributor_ids,
@@ -344,6 +412,7 @@ class GraphStore:
             metadata_json=json_value(document.metadata),
             metrics_json=json_value(document.metrics),
         )
+        await GraphStore._write_metrics(tx, document, observed)
 
         await _run(
             tx,
@@ -876,6 +945,10 @@ class GraphStore:
         versions = """
             MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
                   -[:FROM_SOURCE]->(s:Source)
+            WITH d, v, s,
+                 [(v)-[:HAS_METRICS]->(obs:MetricsObservation)
+                  | {observed_at: obs.observed_at,
+                     metrics_json: obs.metrics_json}] AS metric_observations
             OPTIONAL MATCH (v)<-[:PROCESSED]-(run:ProcessingRun)
             WHERE run.published = true OR run.status = 'succeeded'
             RETURN d.document_id AS document_id,
@@ -890,6 +963,7 @@ class GraphStore:
                        AS last_retrieved_at,
                    v.metrics_observed_at AS metrics_observed_at,
                    v.metrics_json AS metrics_json,
+                   metric_observations,
                    v.metadata_json AS metadata_json,
                    v.coverage AS coverage,
                    v.quality_status AS quality_status,

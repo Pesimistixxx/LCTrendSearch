@@ -456,3 +456,49 @@ def test_temporal_read_uses_first_retrieval_with_legacy_fallback():
         in versions
     )
     assert "AS last_retrieved_at" in versions
+
+
+def test_metrics_are_a_dated_observation_of_the_unchanged_version():
+    work = {"id": "https://openalex.org/W1", "title": "Example"}
+    early = parse_openalex(
+        {**work, "cited_by_count": 17, "_retrieved_at": "2024-01-01"}
+    )
+    late = parse_openalex(
+        {**work, "cited_by_count": 40, "_retrieved_at": "2026-01-01"}
+    )
+    assert early.document_version_id == late.document_version_id
+    observations = []
+    for document in (early, late):
+        tx = Transaction()
+        asyncio.run(GraphStore._write_document(tx, document))
+        observations.extend(
+            parameters
+            for query, parameters in tx.queries
+            if "MERGE (m:MetricsObservation" in query
+        )
+    assert [item["observed_at"] for item in observations] == [
+        "2024-01-01",
+        "2026-01-01",
+    ]
+    assert len({item["observation_id"] for item in observations}) == 2
+    assert json.loads(observations[0]["metrics_json"])["citation_count"] == 17
+    # The version keeps only a newer observation as its current metrics.
+    query = " ".join(
+        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
+        .split()
+    )
+    current = re.search(r"v\.metrics_json = CASE (.*?) END", query)
+    assert current and ">= v.metrics_observed_at" in current.group(1)
+
+
+def test_temporal_read_returns_the_metric_history():
+    queries = []
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: ReadSession(queries)}
+    )()
+    store._database = "neo4j"
+    asyncio.run(store.read_temporal_data())
+    versions = next(q for q in queries if "MATCH (d:Document)" in q)
+    assert "HAS_METRICS" in versions
+    assert "metric_observations" in versions.split("RETURN", 1)[1]
