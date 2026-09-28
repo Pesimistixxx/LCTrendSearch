@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from lctrend.ingest.adapters import parse_epo, parse_github, parse_openalex
 from lctrend.ingest.file_adapters import parse_file
 
@@ -190,3 +192,45 @@ def test_patent_offices_are_not_countries():
         assert all(
             item.country_code != office for item in document.organizations
         )
+
+
+@pytest.mark.parametrize(
+    "name,kind",
+    [
+        ("MIT", "university"),
+        ("IBM", "company"),
+        ("OpenAI", "company"),
+        ("Sber", "company"),
+        ("МГУ имени М. В. Ломоносова", "university"),
+        ("Сколтех", "university"),
+        ("ПАО Сбербанк", "company"),
+        ("Apple Valley University", "university"),
+        ("Acme Foundation", "other"),
+        ("Community Group", "other"),
+    ],
+)
+def test_untyped_organizations_get_their_type(name, kind):
+    # A-8: 27 of 53 checked names came out "other".
+    from lctrend.ingest.adapters import _organization_type
+
+    assert _organization_type(name) == kind
+
+
+def test_github_organization_owner_is_typed_by_its_login():
+    # A-8: every GitHub owner was "other".
+    for login, kind in (("openai", "company"), ("sberbank-ai", "company")):
+        document = parse_github(
+            {
+                "repository": {
+                    "full_name": f"{login}/tool",
+                    "name": "tool",
+                    "owner": {
+                        "login": login,
+                        "type": "Organization",
+                        "node_id": login,
+                    },
+                },
+            }
+        )
+        types = [item.organization_type for item in document.organizations]
+        assert types == [kind]

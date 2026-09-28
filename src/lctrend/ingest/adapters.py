@@ -131,12 +131,33 @@ def _domains_from_topics(
 
 
 def _organization_type(name: str, default: str = "other") -> str:
-    """Type an organization the source left untyped by its name."""
+    """Type an organization the source left untyped by its name.
+
+    An explicit university marker wins; then known names (MIT, IBM, Сбер)
+    that carry no legal form or university marker; then the legal form.
+    GitHub logins ("sberbank-ai") are split into words.
+    """
+    catalog = load_catalog("sources")
     lowered = name.casefold()
-    for kind, pattern in load_catalog("sources")[
-        "organization_type_patterns"
-    ].items():
-        if re.search(pattern, lowered):
+    words = " " + " ".join(re.findall(r"\w+", lowered)) + " "
+    patterns = catalog["organization_type_patterns"]
+
+    def marked(kind: str) -> bool:
+        pattern = patterns.get(kind)
+        return bool(
+            pattern
+            and (re.search(pattern, lowered) or re.search(pattern, words))
+        )
+
+    if marked("university"):
+        return "university"
+    for kind, names in catalog.get("known_organizations", {}).items():
+        for known in names:
+            alias = " ".join(re.findall(r"\w+", known.casefold()))
+            if alias and f" {alias} " in words:
+                return kind
+    for kind in patterns:
+        if marked(kind):
             return kind
     return default
 

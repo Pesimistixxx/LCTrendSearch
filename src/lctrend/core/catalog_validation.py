@@ -189,6 +189,10 @@ def _sources(catalog: Mapping) -> None:
         catalog["organization_type_patterns"],
         "sources.organization_type_patterns",
     )
+    for kind, names in _mapping(
+        catalog.get("known_organizations", {}), "sources.known_organizations"
+    ).items():
+        _strings(names, f"sources.known_organizations.{kind}")
     local = _mapping(catalog["local_files"], "sources.local_files")
     _text(local["sidecar_suffix"], "sources.local_files.sidecar_suffix")
     _number(
