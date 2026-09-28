@@ -195,11 +195,13 @@ class _Budget:
         settings: PipelineSettings,
         trace: list[dict],
         event=None,
+        issues: list | None = None,
     ):
         self.provider, self.settings, self.trace = provider, settings, trace
         self.limit = settings.max_model_calls
         self.used = 0
         self.event = event
+        self.issues = issues
 
     async def call(
         self, schema, prompt, payload, stage: str, reserve: int = 0
@@ -224,11 +226,22 @@ class _Budget:
                         schema, prompt, payload, stage=stage
                     )
                 )
+                dropped = list(getattr(result, "_dropped_items", None) or [])
                 result = schema.model_validate(
                     result.model_dump()
                     if hasattr(result, "model_dump")
                     else result
                 )
+                if dropped and self.issues is not None:
+                    # Malformed elements were dropped, the rest is kept.
+                    self.issues.append(
+                        {
+                            "code": "invalid_items",
+                            "stage": stage,
+                            "call": self.used,
+                            "items": dropped,
+                        }
+                    )
                 self.trace.append(
                     {
                         "stage": stage,
@@ -489,7 +502,7 @@ async def _process_document(
     # Pydantic can copy containers on construction; use the actual run
     # containers.
     metadata, trace = run.metadata, run.trace
-    budget = _Budget(provider, settings, trace, event)
+    budget = _Budget(provider, settings, trace, event, metadata["issues"])
     # Providers that do not use CALL_LOG (test doubles) keep a plain list.
     call_offset = len(getattr(provider, "calls", []))
     _emit(event, stage="plan", status="running")

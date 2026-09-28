@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import re
 import weakref
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -117,13 +118,20 @@ def _finite_numbers(value: Any) -> None:
 
 
 def _validate(schema: Type[T], answer: Any) -> T:
+    from .contracts import LocalModel, validate_items
+
     try:
         if isinstance(answer, BaseModel):
             answer = answer.model_dump(mode="python")
         if isinstance(answer, str):
-            result = schema.model_validate_json(answer)
-        else:
+            answer = json.loads(answer)
+        try:
             result = schema.model_validate(answer)
+        except ValidationError:
+            if not issubclass(schema, LocalModel):
+                raise
+            # One bad element must not cost the whole packet (B-5).
+            result = validate_items(schema, answer)
         _finite_numbers(result.model_dump(mode="python"))
         return result
     except (ValidationError, ValueError, TypeError):
@@ -252,11 +260,25 @@ def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _strip_fence(content: str) -> str:
-    """Some providers wrap requested JSON in a Markdown code fence."""
+    """The JSON object of a response, without Markdown or a preamble.
+
+    Some providers wrap the requested JSON in a code fence or add a sentence
+    before it.
+    """
     text = content.strip()
     fence = "`" * 3
     if text.startswith(fence) and text.endswith(fence) and "\n" in text:
         return text[text.index("\n") + 1 : -3].strip()
+    if text.startswith("{"):
+        return text
+    block = re.search(
+        fence + r"(?:json)?[ \t]*\n(.*?)\n?" + fence, text, re.S | re.I
+    )
+    if block:
+        return block.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        return text[start : end + 1]
     return text
 
 

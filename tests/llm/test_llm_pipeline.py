@@ -1163,3 +1163,43 @@ def test_context_rounds_of_an_early_packet_leave_calls_for_later_ones():
     ] * 3
     assert result.run.metadata["coverage"]["unprocessed_chunk_ids"] == []
     assert "call_budget" not in codes(result)
+
+
+def test_one_malformed_element_does_not_cost_the_packet():
+    # B-5: extra="forbid" on the whole response dropped every claim.
+    doc = document()
+    response = extracted(doc)
+    response["entities"][0]["confidence"] = 0.9  # an unknown field
+    response["entities"].append(
+        {
+            "local_id": "data",
+            "label": "Sensor",
+            "kind": "Dataset",  # not a kind of this schema
+            "evidence": [{"chunk_id": "c1", "quote": "Sensor"}],
+        }
+    )
+    response["claims"][0]["status"] = "accepted"  # never read from a model
+    provider = RecordingReplay([response, reviewed()])
+    result = asyncio.run(process_document(doc, provider, settings=settings()))
+    assert [item.status for item in result.assertions] == ["accepted"]
+    issue = next(
+        item
+        for item in result.run.metadata["issues"]
+        if item.get("code") == "invalid_items"
+    )
+    assert issue["items"] == [
+        {"field": "entities", "index": 2, "reasons": ["enum"]}
+    ]
+    assert "invalid_schema" not in codes(result)
+
+
+def test_json_after_a_preamble_or_inside_a_fence_is_read():
+    from lctrend.llm.client import _strip_fence, _validate
+
+    body = json.dumps({"entities": [], "claims": [], "context_requests": []})
+    for content in (
+        "Here is the JSON:\n```json\n" + body + "\n```\nDone.",
+        "Ответ: " + body,
+        "```\n" + body + "\n```",
+    ):
+        assert _validate(Extraction, _strip_fence(content)).claims == []
