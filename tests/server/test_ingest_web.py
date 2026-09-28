@@ -101,7 +101,8 @@ def api(tmp_path):
         environment_path=tmp_path / ".env",
         status_reader=lambda: status,
     )
-    with TestClient(app) as client:
+    # The API trusts only local Host names (G-1).
+    with TestClient(app, base_url="http://localhost") as client:
         yield client, manager, tmp_path
 
 
@@ -293,6 +294,104 @@ def test_proxy_preserves_same_origin_on_custom_frontend_port(api):
     assert manager.jobs[0]["query"] == "robotics"
 
 
+def test_foreign_host_is_rejected_even_with_a_matching_origin(api):
+    # G-1: Host = Origin = attacker passed the same-origin check.
+    client, manager, root = api
+    response = client.post(
+        "/api/ingest/settings",
+        json={"model": "m", "base_url": "https://attacker.example/v1"},
+        headers={
+            "Host": "attacker.example",
+            "Origin": "http://attacker.example",
+        },
+    )
+    assert response.status_code == 400
+    assert not (root / ".env").exists()
+    assert (
+        client.post(
+            "/api/ingest/jobs",
+            json={"query": "x"},
+            headers={"Host": "attacker.example"},
+        ).status_code
+        == 400
+    )
+    assert not manager.jobs
+
+
+def test_configured_host_is_trusted(tmp_path, monkeypatch):
+    monkeypatch.setenv("LCTREND_ALLOWED_HOSTS", "lctrend.lan")
+    app = create_app(
+        Manager(),
+        crawl_manager=Crawls(),
+        frontend_dir=tmp_path,
+        upload_root=tmp_path / "uploads",
+        environment_path=tmp_path / ".env",
+        status_reader=lambda: {},
+    )
+    with TestClient(app, base_url="http://lctrend.lan") as client:
+        assert client.get("/api/ingest/jobs").status_code == 200
+    with TestClient(app, base_url="http://other.lan") as client:
+        assert client.get("/api/ingest/jobs").status_code == 400
+
+
+def test_stored_key_never_follows_settings_to_another_host(api, monkeypatch):
+    # G-1: a blank key field must not send the old key to a new host.
+    client, _, root = api
+    for key in (
+        "LLM_MODEL",
+        "LLM_EXTRACT_MODEL",
+        "LLM_REVIEW_MODEL",
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    assert (
+        client.post(
+            "/api/ingest/settings",
+            json={
+                "model": "m",
+                "base_url": "https://api.provider.example/v1",
+                "api_key": "sk-ORIGINAL-SECRET",
+            },
+        ).status_code
+        == 200
+    )
+    moved = client.post(
+        "/api/ingest/settings",
+        json={"model": "m", "base_url": "https://attacker.example/v1"},
+    )
+    assert moved.status_code == 400
+    assert "ключ" in moved.json()["detail"]
+    saved = (root / ".env").read_text(encoding="utf-8")
+    assert "attacker.example" not in saved
+    import os
+
+    assert os.environ["LLM_BASE_URL"] == "https://api.provider.example/v1"
+    # The same host keeps the stored key; a new key may go anywhere.
+    assert (
+        client.post(
+            "/api/ingest/settings",
+            json={
+                "model": "m2",
+                "base_url": "https://api.provider.example/v2",
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/ingest/settings",
+            json={
+                "model": "m",
+                "base_url": "https://other.example/v1",
+                "api_key": "sk-NEW",
+            },
+        ).status_code
+        == 200
+    )
+
+
 def test_settings_validate_locally_preserve_secret_and_do_not_return_it(
     api, monkeypatch
 ):
@@ -376,7 +475,8 @@ def test_container_ui_writes_settings_to_persistent_directory(
     ):
         monkeypatch.delenv(key, raising=False)
     app = create_app(Manager(), status_reader=lambda: {"ok": True})
-    with TestClient(app) as client:
+    # The API trusts only local Host names (G-1).
+    with TestClient(app, base_url="http://localhost") as client:
         response = client.post(
             "/api/ingest/settings",
             json={
