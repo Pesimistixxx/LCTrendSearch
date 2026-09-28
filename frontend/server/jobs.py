@@ -1066,7 +1066,37 @@ class JobManager:
                 with self._lock:
                     if self._cancel[job_id].is_set():
                         return
-                await self._process_document(job_id, doc_id, source, context)
+                try:
+                    await self._process_document(
+                        job_id, doc_id, source, context
+                    )
+                except Exception as exc:
+                    # The document's own error handler failed (e.g. a disk
+                    # error): fail this document, never its siblings.
+                    logger.error(
+                        "Job %s document %s: error handling failed (%s)",
+                        job_id,
+                        doc_id,
+                        type(exc).__name__,
+                    )
+                    with self._lock:
+                        record = next(
+                            item
+                            for item in self._jobs[job_id]["documents"]
+                            if item["doc_id"] == doc_id
+                        )
+                        if record["status"] not in TERMINAL_DOCUMENT_STATUSES:
+                            record.update(
+                                interrupted_stage=record.get("stage"),
+                                status="failed",
+                                stage="interrupted",
+                                finished_at=_now(),
+                                error=_error(exc, "storage"),
+                            )
+                        try:
+                            self._save(self._jobs[job_id])
+                        except OSError:
+                            self._dirty.add(job_id)
 
         return {
             asyncio.create_task(one(doc_id, source))
@@ -1081,8 +1111,13 @@ class JobManager:
         Cancellation stops new starts; running documents finish.
         """
         tasks = self._schedule(job_id, batch, context)
-        if tasks:
-            await asyncio.gather(*tasks)
+        try:
+            await _settle(tasks)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _process_document(
         self, job_id: str, doc_id: str, source, context: dict

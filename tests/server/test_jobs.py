@@ -1033,6 +1033,41 @@ def test_failed_page_lets_running_documents_finish(tmp_path):
         instance.close(wait=True)
 
 
+def test_failing_error_handler_fails_one_document_only(tmp_path):
+    # G-3: an error inside the error handler must not end the job while
+    # other documents run (the crawl would then run them twice).
+    calls = []
+
+    def process(doc, **kwargs):
+        calls.append(doc.document_id)
+        if doc.document_id == "study-0":
+            raise RuntimeError("model failed")
+        return extraction(doc)
+
+    instance = manager(tmp_path, document_processor=process)
+    original = instance._update_document
+
+    def update(job_id, doc_id, force=None, **updates):
+        if updates.get("status") == "failed":
+            raise OSError("disk full")
+        return original(job_id, doc_id, force=force, **updates)
+
+    instance._update_document = update
+    try:
+        final = finish(
+            instance, instance.create_files(files(tmp_path, 2), workers=2)
+        )
+        statuses = {doc["title"]: doc["status"] for doc in final["documents"]}
+        assert statuses == {
+            "study-0.txt": "failed",
+            "study-1.txt": "succeeded",
+        }
+        assert final["status"] == "completed"
+        assert sorted(calls) == ["study-0", "study-1"]
+    finally:
+        instance.close(wait=True)
+
+
 def test_finished_job_has_only_terminal_documents(tmp_path):
     instance = manager(tmp_path)
     try:
