@@ -298,7 +298,7 @@ def _semantic(snapshot, config):
             snapshot.technologies[key].first_seen,
             [
                 trace.first_visible
-                for trace in snapshot.technologies[key].documents
+                for trace in snapshot.technologies[key].dated_documents
             ],
         )
         for key in vectors
@@ -319,6 +319,7 @@ def _semantic(snapshot, config):
             other
             for other in vectors
             if other != key
+            and snapshot.technologies[other].first_seen is not None
             and snapshot.technologies[other].first_seen < snapshot.cutoff
         ]
         distances = (

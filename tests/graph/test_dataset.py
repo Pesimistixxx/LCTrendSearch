@@ -142,6 +142,53 @@ def test_as_known_mode_keeps_collection_and_processing_gates():
     assert row["first_seen_date"] == "2026-09-21"
 
 
+def with_undated_upload(data):
+    """A file uploaded in 2026 without any publication date."""
+    upload = version("upload", None)
+    upload.update(
+        retrieved_at=COLLECTED, metrics_observed_at=None, extracted_at=None
+    )
+    data["versions"].append(upload)
+    data["mentions"] += [
+        {
+            "technology_id": technology,
+            "version_id": "upload-v1",
+            # Legacy graphs stored the upload time as the mention date.
+            "observed_at": COLLECTED[:10],
+            "mentions": 5,
+            "accepted": 5,
+        }
+        for technology in ("t", "only-upload")
+    ]
+    return data
+
+
+def test_undated_documents_stay_out_of_dynamics_and_first_seen(tmp_path):
+    corpus = TemporalCorpus(with_undated_upload(collected_in_2026()))
+    # Collected in 2026, so no earlier snapshot can know the upload.
+    assert build_snapshot_rows(corpus, "2025-01-01")[0]["document_count"] == 8
+    rows = {
+        row["technology_id"]: row
+        for row in build_snapshot_rows(corpus, "2026-09-21")
+    }
+    row = rows["t"]
+    assert row["first_seen_date"] == "2016-03-01"
+    assert row["document_count"] == 9
+    assert row["mention_count"] == 13
+    assert row["documents_last_year"] == 0
+    assert row["publication_growth"] == 0.0
+    assert row["mention_growth_12m"] == 0.0
+    assert row["burst_score"] == 0.0
+    upload_only = rows["only-upload"]
+    assert upload_only["first_seen_date"] is None
+    assert upload_only["technology_age_days"] is None
+    assert upload_only["documents_last_year"] == 0
+    output = tmp_path / "snapshot.csv"
+    write_snapshot_rows(output, list(rows.values()), corpus)
+    manifest = json.loads(output.with_suffix(".csv.manifest.json").read_text())
+    assert manifest["undated_documents"] == 1
+
+
 def at_2020(data):
     return next(
         row

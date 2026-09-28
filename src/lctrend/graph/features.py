@@ -87,7 +87,10 @@ def activity_features(view: TechnologyView, cutoff: date) -> Row:
     first_seen = view.first_seen
     year_ago = months_before(cutoff, 12)
     two_years_ago = months_before(cutoff, 24)
-    dated_documents = [(item.first_visible, 1.0) for item in documents]
+    # Undated documents count in totals but cannot be placed in a window.
+    dated_documents = [
+        (item.first_visible, 1.0) for item in view.dated_documents
+    ]
     recent = _window(dated_documents, year_ago, cutoff)
     previous = _window(dated_documents, two_years_ago, year_ago)
     citations, citations_known = 0.0, False
@@ -118,7 +121,7 @@ def activity_features(view: TechnologyView, cutoff: date) -> Row:
 def _mention_series(view: TechnologyView) -> List[Tuple[date, float]]:
     return [
         (day.observed, float(day.mentions))
-        for document in view.documents
+        for document in view.dated_documents
         for day in document.mentions
     ]
 
@@ -139,7 +142,7 @@ def dynamics_features(
     for family, name in families.items():
         dated = [
             (item.first_visible, 1.0)
-            for item in view.documents
+            for item in view.dated_documents
             if item.family == family
         ]
         row[f"publication_growth_{name}"] = log_growth(
@@ -209,13 +212,10 @@ def convergence_features(
     families = Counter(item.family for item in documents)
     groups = Counter(item.version.independence_key for item in documents)
     year_ago = months_before(cutoff, 12)
+    dated = view.dated_documents
     first = {
         family: min(
-            (
-                item.first_visible
-                for item in documents
-                if item.family == family
-            ),
+            (item.first_visible for item in dated if item.family == family),
             default=None,
         )
         for family in (SCHOLARLY, CODE, PACKAGE, PATENT)
@@ -239,11 +239,7 @@ def convergence_features(
         "source_entropy": entropy(families.values()),
         "independence_group_entropy": entropy(groups.values()),
         "recent_source_convergence": len(
-            {
-                item.family
-                for item in documents
-                if item.first_visible > year_ago
-            }
+            {item.family for item in dated if item.first_visible > year_ago}
         ),
         "paper_to_package_lag_days": _days(first[PACKAGE], paper),
         "paper_to_repository_lag_days": _days(first[CODE], paper),
@@ -270,8 +266,9 @@ def _parties(document: DocumentTrace) -> Tuple[str, ...]:
 def participant_features(view: TechnologyView, cutoff: date) -> Row:
     year_ago = months_before(cutoff, 12)
     documents = view.documents
-    recent = [item for item in documents if item.first_visible > year_ago]
-    earlier = [item for item in documents if item.first_visible <= year_ago]
+    dated = view.dated_documents
+    recent = [item for item in dated if item.first_visible > year_ago]
+    earlier = [item for item in dated if item.first_visible <= year_ago]
     authors = {a for item in documents for a in item.version.contributors}
     recent_authors = {a for item in recent for a in item.version.contributors}
     earlier_authors = {
@@ -599,10 +596,14 @@ def maturity_features(
         for value in item.history.get("contributor_first_weeks", [])
     ]
     patent_dates = [
-        parse_date(item.history.get("priority_date"))
-        or item.version.document_date
-        or item.first_visible
+        when
         for item in patents
+        if (
+            when := parse_date(item.history.get("priority_date"))
+            or item.version.document_date
+            or (None if item.undated else item.first_visible)
+        )
+        is not None
     ]
     family_ids = [
         item.history.get("family_id")

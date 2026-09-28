@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 def _version_date(document: DocumentEnvelope) -> Any:
+    """Content date of a version. Collection time is not a publication
+    date: undated content stays undated (``None``).
+    """
     return getattr(document, "version_published_at", None) or getattr(
-        document, "retrieved_at", None
+        document, "published_at", None
     )
 
 
