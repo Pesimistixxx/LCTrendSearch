@@ -507,6 +507,7 @@ async def _process_document(
     budget = _Budget(provider, settings, trace, event, metadata["issues"])
     # Providers that do not use CALL_LOG (test doubles) keep a plain list.
     call_offset = len(getattr(provider, "calls", []))
+    event_offset = len(getattr(provider, "model_events", []))
     _emit(event, stage="plan", status="running")
     plan = plan_packets(document, settings)
     budget.limit = settings.call_limit(len(plan.packets))
@@ -1054,10 +1055,18 @@ async def _process_document(
         "effective_model_calls": budget.limit,
     }
     metadata["model_calls"] = budget.used
+    # A document without calls of its own must not take the calls that a
+    # concurrent document made meanwhile (B-9); the plain-list fallback is
+    # only for providers that do not report into CALL_LOG.
     metadata["provider_calls"] = deepcopy(
-        call_log or list(getattr(provider, "calls", []))[call_offset:]
+        call_log
+        if call_log or not budget.used
+        else list(getattr(provider, "calls", []))[call_offset:]
     )
-    metadata["model_events"] = deepcopy(getattr(provider, "model_events", []))
+    # Model retirements are provider-wide; report those seen meanwhile.
+    metadata["model_events"] = deepcopy(
+        list(getattr(provider, "model_events", []))[event_offset:]
+    )
     trace.append(
         {
             "stage": "resolution",

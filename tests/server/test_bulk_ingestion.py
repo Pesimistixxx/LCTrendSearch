@@ -244,3 +244,24 @@ def test_late_full_text_of_a_processed_version_is_extracted(tmp_path):
         assert final["documents"][0]["stage"] == "already_processed"
     finally:
         instance.close(wait=True)
+
+
+def test_document_without_calls_does_not_take_a_neighbours_calls():
+    # B-9: `call_log or provider.calls[offset:]` gave an empty document
+    # the calls another document made meanwhile, and all model events.
+    provider = InterleavingProvider()
+    provider.model_events = [{"model": "old", "event": "retired"}]
+    empty = document(["   "])
+    busy = document(["Beta sensor.", "Gamma sensor.", "Delta sensor."])
+
+    async def both():
+        return await asyncio.gather(
+            process_document(busy, provider, settings=settings()),
+            process_document(empty, provider, settings=settings()),
+        )
+
+    loaded, quiet = asyncio.run(both())
+    assert len(loaded.run.metadata["provider_calls"]) == 3
+    assert quiet.run.metadata["provider_calls"] == []
+    assert quiet.run.metadata["model_events"] == []
+    assert loaded.run.metadata["model_events"] == []
