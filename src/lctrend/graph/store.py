@@ -1092,7 +1092,10 @@ class GraphStore:
         query = "\nUNION\n".join(
             f"MATCH (c:{cypher_identifier(label)}) "
             "WHERE c.concept_id IS NOT NULL AND c.kind IS NOT NULL "
-            "RETURN properties(c) AS properties"
+            # Only the fields the registry reads: properties(c) also sent
+            # every embedding (~0.5 GB at 20k concepts x 2560) (D-6).
+            "RETURN c {.concept_id, .kind, .preferred_label, .definition, "
+            ".language, .status, .names_json, .aliases} AS properties"
             for label in CONCEPT_LABELS
         )
         async with self._driver.session(database=self._database) as session:

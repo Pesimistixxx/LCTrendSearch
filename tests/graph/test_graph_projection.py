@@ -671,3 +671,32 @@ def test_import_without_extraction_keeps_chunks_of_a_published_run():
     assert "WHERE $publishing OR NOT EXISTS" in unlink[0]
     assert "run.published = true OR run.status = 'succeeded'" in unlink[0]
     assert unlink[1]["publishing"] is False
+
+
+def test_registry_read_does_not_transfer_embeddings():
+    # D-6: properties(c) pulled every stored vector at each job start.
+    queries = []
+
+    class Session(ReadSession):
+        async def run(self, query, **parameters):
+            queries.append(query)
+            return [
+                {
+                    "properties": {
+                        "concept_id": "c1",
+                        "kind": "Technology",
+                        "preferred_label": "Sparse attention",
+                    }
+                }
+            ]
+
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: Session(queries)}
+    )()
+    store._database = "neo4j"
+    concepts = asyncio.run(store.read_concepts())
+    assert concepts and concepts[0].preferred_label == "Sparse attention"
+    assert "properties(c)" not in queries[0]
+    assert "embedding" not in queries[0]
+    assert ".names_json" in queries[0]
