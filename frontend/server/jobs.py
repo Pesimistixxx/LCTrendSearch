@@ -83,6 +83,42 @@ def _write_json(path: Path, value: Any) -> None:
         temporary.unlink(missing_ok=True)
 
 
+GRAPH_RETRY_DELAYS = (2.0, 5.0, 10.0, 20.0)
+
+
+def _transient_graph_error(exc: BaseException) -> bool:
+    try:
+        from neo4j.exceptions import (
+            ServiceUnavailable,
+            SessionExpired,
+            TransientError,
+        )
+    except ImportError:  # pragma: no cover - neo4j is a base dependency
+        return isinstance(exc, OSError)
+    return isinstance(
+        exc, (ServiceUnavailable, SessionExpired, TransientError, OSError)
+    )
+
+
+async def _graph_retry(call, job_id: str):
+    """Run a graph call, retrying connection drops with growing pauses."""
+    for attempt, delay in enumerate((*GRAPH_RETRY_DELAYS, None)):
+        try:
+            return await aio.call(call)
+        except Exception as exc:
+            if delay is None or not _transient_graph_error(exc):
+                raise
+            logger.warning(
+                "Job %s: Neo4j unavailable (%s), retry %d/%d in %.0fs",
+                job_id,
+                type(exc).__name__,
+                attempt + 1,
+                len(GRAPH_RETRY_DELAYS),
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+
 async def _settle(tasks) -> None:
     """Wait for every document task; one failure never cancels the rest."""
     if not tasks:
@@ -874,10 +910,12 @@ class JobManager:
             logger.info("Job %s started", job_id)
             store = await aio.call(self._store_factory)
             # All graph connectivity checks precede any potentially paid call.
+            # A remote Neo4j drops connections for seconds at a time: one
+            # blip must not cancel the whole job.
             verify = getattr(store, "verify_connectivity", None)
             if verify is not None:
-                await aio.call(verify)
-            await aio.call(store.ensure_schema)
+                await _graph_retry(verify, job_id)
+            await _graph_retry(store.ensure_schema, job_id)
             if self._cancel[job_id].is_set():
                 with self._lock:
                     self._finish(job, "cancelled")
@@ -912,7 +950,9 @@ class JobManager:
 
                 # Read once; the job keeps it current as documents resolve.
                 await seed_semantic(store)
-                registry = ConceptRegistry(await aio.call(store.read_concepts))
+                registry = ConceptRegistry(
+                    await _graph_retry(store.read_concepts, job_id)
+                )
                 logger.info(
                     "Job %s: %d registry concepts", job_id, len(registry)
                 )

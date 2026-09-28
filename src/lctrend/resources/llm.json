@@ -22,14 +22,16 @@
     "max_output_tokens": {"extract": 8192, "review": 4096},
     "response_mode": "json_schema",
     "json_schema_strict": true,
+    "schema_free_models_note": "Sent without response_format: under a strict schema these models fill JSON indentation with stray words on long answers (seen 2026-09-28 on 10-20 item answers); the schema in the system message plus validation keep the shape.",
+    "schema_free_models": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
     "temperature": 0.001,
     "model_ladder": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
     "model_routes": {
-      "note": "Used when no model is pinned (LLM_MODEL, LLM_*_MODEL, LLM_MODEL_LADDER). Each route starts with its own model and falls through to every other ladder model when tokens run out (402 or low /balance); a model out of tokens is skipped on all routes.",
+      "note": "Used when no model is pinned (LLM_MODEL, LLM_*_MODEL, LLM_MODEL_LADDER). Each route starts with its own model and falls through to every other ladder model when tokens run out (402 or low /balance); a model out of tokens is skipped on all routes. 2026-09-28: GigaChat-2-Max answered every strict-schema review and topic request with invalid JSON, so every route starts with 3-Ultra until 2-Max is verified on live calls.",
       "short_packet_chars": 8000,
       "extract": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro"],
-      "extract_short": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-3-Ultra"],
-      "review": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-3-Ultra"]
+      "extract_short": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro"],
+      "review": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro"]
     },
     "model_fallback": {"exhausted_statuses": [402], "unavailable_statuses": [403, 404]},
     "balance": {

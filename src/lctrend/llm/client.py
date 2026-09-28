@@ -224,7 +224,14 @@ def _tokens(usage: Any) -> Dict[str, int]:
     if not isinstance(usage, dict):
         return {}
     result = {}
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        # GigaChat: prompt tokens served from its cache (X-Session-ID),
+        # not billed.
+        "precached_prompt_tokens",
+    ):
         value = usage.get(key)
         if (
             isinstance(value, int)
@@ -515,6 +522,12 @@ class JsonLLM:
             raise LLMError("configuration", "CA bundle file does not exist")
         self.verify: Any = str(Path(bundle).expanduser()) if bundle else True
         self.response_mode = self.config.get("response_mode")
+        self.schema_free_models = frozenset(
+            _names(
+                self.config.get("schema_free_models", []),
+                "schema_free_models",
+            )
+        )
         if self.response_mode not in ("json_object", "json_schema"):
             raise LLMError(
                 "configuration",
@@ -1027,7 +1040,12 @@ class JsonLLM:
             "max_tokens": self.max_output_tokens[stage],
             "temperature": self.temperature,
         }
-        if self.response_mode == "json_schema":
+        if model in self.schema_free_models:
+            # Constrained decoding of these models fills JSON indentation
+            # with stray words on long answers; the schema in the system
+            # message and validation keep the shape.
+            pass
+        elif self.response_mode == "json_schema":
             body["response_format"] = {
                 "type": "json_schema",
                 "schema": _inline_refs(schema_json),
@@ -1093,9 +1111,17 @@ class JsonLLM:
                 # This call did not request tokens. Historical response
                 # usage is separate; do not attribute its cost to this run.
                 return result
+            # GigaChat caches a session's prompt prefix: calls sharing the
+            # model and the long system message (prompt + schema) reuse it,
+            # and precached tokens are not billed.
+            session = (
+                {"X-Session-ID": _hash([model, system_message])[:32]}
+                if self.provider == "gigachat"
+                else {}
+            )
             response = await client.post(
                 self.base_url + "/chat/completions",
-                headers=await self._headers(client),
+                headers={**await self._headers(client), **session},
                 json=body,
             )
             if response.status_code == 401 and self.provider == "gigachat":
@@ -1104,7 +1130,7 @@ class JsonLLM:
                 self._token = None
                 response = await client.post(
                     self.base_url + "/chat/completions",
-                    headers=await self._headers(client),
+                    headers={**await self._headers(client), **session},
                     json=body,
                 )
             call["http_status"] = response.status_code

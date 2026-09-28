@@ -105,21 +105,49 @@ def test_a_pinned_model_disables_routes(monkeypatch):
     assert provider.ladders["extract"][0] == "ultra"
 
 
-def test_bundled_gigachat_routes_abstracts_and_reviews_to_max():
+def test_bundled_gigachat_routes_start_with_ultra_and_fall_back():
+    # 2-Max broke the strict review and topic schemas on live calls, so
+    # every bundled route starts with 3-Ultra; 2-Max is the token fallback.
+    from tests.llm.test_llm_provider import GigaChatServer, gigachat
+
+    server = GigaChatServer(balance=None, statuses={"GigaChat-3-Ultra": 402})
+    provider = gigachat(server, routes=True)
+    asyncio.run(provider.generate(Answer, "s", {"abstract": "short"}))
+    asyncio.run(provider.generate(Answer, "s", {}, stage="review"))
+    assert [body["model"] for body in server.chat] == [
+        "GigaChat-3-Ultra",
+        "GigaChat-2-Max",
+        "GigaChat-2-Max",
+    ]
+    assert {provider.ladders[key][0] for key in provider.ladders} == {
+        "GigaChat-3-Ultra"
+    }
+
+
+def test_schema_free_models_get_no_response_format_and_a_session():
     from tests.llm.test_llm_provider import GigaChatServer, gigachat
 
     server = GigaChatServer(balance=None)
-    provider = gigachat(server, routes=True)
-    asyncio.run(provider.generate(Answer, "s", {"abstract": "short"}))
-    asyncio.run(provider.generate(Answer, "s", {"packet": "x" * 20000}))
+    headers = []
+    original = server.__call__
+
+    def record(request):
+        if request.url.path.endswith("/chat/completions"):
+            headers.append(request.headers.get("x-session-id"))
+        return original(request)
+
+    config = deepcopy(load_catalog("llm"))
+    provider = gigachat(record, config=config)
+    provider.ladders["review"] = ["GigaChat-2-Max"]
+    asyncio.run(provider.generate(Answer, "s", {}))
     asyncio.run(provider.generate(Answer, "s", {}, stage="review"))
-    assert [body["model"] for body in server.chat] == [
-        "GigaChat-2-Max",
-        "GigaChat-3-Ultra",
-        "GigaChat-2-Max",
-    ]
-    # The output limit follows the stage, not the route.
-    assert server.chat[0]["max_tokens"] == server.chat[1]["max_tokens"]
+    ultra, lite = server.chat
+    assert ultra["model"] == "GigaChat-3-Ultra"
+    assert ultra["response_format"]["type"] == "json_schema"
+    # Long strict answers of GigaChat-2 models broke the JSON (live, 2026).
+    assert lite["model"] == "GigaChat-2-Max" and "response_format" not in lite
+    # One cached prompt prefix per model and system message.
+    assert all(headers) and headers[0] != headers[1]
 
 
 def test_route_naming_an_unknown_model_is_rejected():

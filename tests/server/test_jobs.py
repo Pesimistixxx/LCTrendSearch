@@ -1177,3 +1177,35 @@ def test_stop_past_the_grace_records_the_job_as_interrupted(tmp_path):
         assert document["error"]["code"] == "interrupted"
     finally:
         release.set()
+
+
+def test_graph_connection_drop_is_retried(monkeypatch):
+    import asyncio
+
+    from neo4j.exceptions import ServiceUnavailable
+
+    from frontend.server import jobs
+
+    pauses, calls = [], []
+
+    async def no_sleep(seconds):
+        pauses.append(seconds)
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise ServiceUnavailable("connection reset")
+        return "ok"
+
+    monkeypatch.setattr(jobs.asyncio, "sleep", no_sleep)
+    assert asyncio.run(jobs._graph_retry(flaky, "job")) == "ok"
+    assert pauses == [2.0, 5.0]
+
+    def broken():
+        raise ValueError("bad query")
+
+    try:
+        asyncio.run(jobs._graph_retry(broken, "job"))
+    except ValueError:
+        pass
+    assert pauses == [2.0, 5.0], "a non-connection error is not retried"

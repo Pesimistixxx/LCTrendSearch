@@ -137,7 +137,14 @@ class GraphStore:
             raise RuntimeError(
                 "Install the project first: pip install -e ."
             ) from exc
-        self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        self._driver = AsyncGraphDatabase.driver(
+            uri,
+            auth=(user, password),
+            # A remote server drops connections for seconds at a time;
+            # managed transactions retry them for up to two minutes
+            # (driver default: 30 s) instead of failing the document.
+            max_transaction_retry_time=120.0,
+        )
         self._database = database
         self._schema_key = (uri, database)
         self._vector_indexes: set = set()
