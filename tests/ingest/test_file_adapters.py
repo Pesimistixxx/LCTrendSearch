@@ -47,11 +47,29 @@ def test_txt_snapshot_identity_dates_and_source_offsets(
         )
         assert chunk.locator["line_start"] >= 1
         assert "page" not in chunk.locator
+    # A-6: identity is the content, not the path. Other bytes at the same
+    # path are another document; the old snapshot is untouched.
     path.write_text("Changed content", encoding="utf-8")
     third = parse_file(path)
-    assert third.document_id == first.document_id
+    assert third.document_id != first.document_id
     assert third.document_version_id != first.document_version_id
     assert snapshot.read_bytes() == raw
+
+
+def test_the_same_bytes_uploaded_twice_are_one_document(tmp_path):
+    # A-6: every web upload lands in a new folder.
+    raw = b"Sparse attention reduces memory use."
+    first_path = tmp_path / "upload-1" / "paper.txt"
+    second_path = tmp_path / "upload-2" / "renamed.txt"
+    for path in (first_path, second_path):
+        path.parent.mkdir()
+        path.write_bytes(raw)
+    first, second = parse_file(first_path), parse_file(second_path)
+    assert first.document_id == second.document_id
+    assert first.document_version_id == second.document_version_id
+    assert [chunk.chunk_id for chunk in first.chunks] == [
+        chunk.chunk_id for chunk in second.chunks
+    ]
 
 
 def test_markdown_sections_and_long_fragments_keep_literal_source(tmp_path):

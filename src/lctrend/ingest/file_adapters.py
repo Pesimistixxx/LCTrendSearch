@@ -12,7 +12,6 @@ import hashlib
 import inspect
 import io
 import json
-import os
 import re
 import tempfile
 import threading
@@ -808,7 +807,9 @@ def parse_file(path: Union[Path, str]) -> DocumentEnvelope:
         )
     sha256 = hashlib.sha256(raw).hexdigest()
     snapshot_path = snapshot_bytes(raw)
-    document_id = stable_id("document", "local", os.path.normcase(str(path)))
+    # The content is the identity: the same bytes uploaded again (each web
+    # upload gets a new folder) must not become a new, paid document.
+    document_id = stable_id("document", "local", sha256)
     version_id = stable_id("version", document_id, sha256, ADAPTER_VERSION)
     adapter = spec["adapter"]
     warnings, title = [], path.stem
