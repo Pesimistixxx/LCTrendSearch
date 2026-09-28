@@ -108,3 +108,39 @@ def test_russian_false_merges_are_separated(left, right, kind):
 @pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C2)
 def test_russian_forms_are_joined(left, right, kind):
     assert same_concept(left, right, kind)
+
+
+# C-7: symbols were dropped as punctuation, script twins and digit
+# boundaries split one name.
+FALSE_MERGES_C7 = [
+    ("C", "C++", T),
+    ("C", "C#", T),
+    ("C++", "C#", T),
+    ("F#", "F", T),
+    ("LoRA", "LoRa", T),
+]
+
+FALSE_SPLITS_C7 = [
+    ("C++", "c++", T),
+    ("GPT-4", "GPT4", T),
+    ("H100", "H 100", T),
+    ("5G", "5 G", T),
+    # Cyrillic С and О written for Latin C and O, and the reverse.
+    ("С", "C", T),
+    ("СО2", "CO2", T),
+    ("Тrаnsformer", "Transformer", T),
+    ("cеть", "сеть", T),
+    ("захват CO2", "захват СО2", T),
+    ("naïve Bayes", "naive Bayes", T),
+    ("ＧＰＴ－４", "GPT-4", T),
+]
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_MERGES_C7)
+def test_symbol_names_are_separated(left, right, kind):
+    assert not same_concept(left, right, kind)
+
+
+@pytest.mark.parametrize("left,right,kind", FALSE_SPLITS_C7)
+def test_script_twins_and_digit_boundaries_are_joined(left, right, kind):
+    assert same_concept(left, right, kind)
