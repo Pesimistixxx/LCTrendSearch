@@ -403,3 +403,56 @@ def test_undated_document_evidence_is_not_dated_by_its_upload():
         for value in _observed_values(parameters)
     ]
     assert observed and uploaded not in observed
+
+
+def test_redownload_keeps_the_first_retrieval_for_visibility():
+    document = parse_openalex(
+        {"id": "https://openalex.org/W1", "title": "Example"}
+    )
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document))
+    query = " ".join(
+        next(q for q, _ in tx.queries if "MERGE (v:DocumentVersion" in q)
+        .split()
+    )
+    # A later download must not move the version out of past snapshots.
+    assert "v.retrieved_at =" not in query
+    first = re.search(r"v\.first_retrieved_at = CASE (.*?) END", query)
+    last = re.search(r"v\.last_retrieved_at = CASE (.*?) END", query)
+    assert first and "$retrieved_at <" in first.group(1)
+    assert last and "$retrieved_at >" in last.group(1)
+
+
+class ReadSession:
+    def __init__(self, queries):
+        self.queries = queries
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def run(self, query, **parameters):
+        self.queries.append(query)
+        if "db.labels" in query:
+            return [{"label": "DocumentVersion"}]
+        return []
+
+
+def test_temporal_read_uses_first_retrieval_with_legacy_fallback():
+    queries = []
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: ReadSession(queries)}
+    )()
+    store._database = "neo4j"
+    asyncio.run(store.read_temporal_data())
+    versions = " ".join(
+        next(q for q in queries if "MATCH (d:Document)" in q).split()
+    )
+    assert (
+        "coalesce(v.first_retrieved_at, v.retrieved_at) AS retrieved_at"
+        in versions
+    )
+    assert "AS last_retrieved_at" in versions
