@@ -136,8 +136,10 @@ def test_future_documents_relations_and_vectors_do_not_change_features():
 
 def test_missing_embedding_does_not_invent_semantic_novelty():
     data = corpus_data()
+    # Vectors are dated by the concept (N-3), so an undated vector is still
+    # a vector; a missing one is what must not invent novelty.
     for row in data["technologies"]:
-        row.pop("embedding_observed_at")
+        row.pop("embedding")
     rows = novelty_features(TemporalCorpus(data).view(date(2020, 1, 1)))
     assert rows["a"]["semantic_novelty"] is None
     assert rows["a"]["cluster_centroid_distance"] is None
@@ -222,3 +224,36 @@ def test_novelty_fields_have_no_duplicate_columns():
         "taxonomy_depth",
     }
     assert not duplicates & set(NOVELTY_FIELDS)
+
+
+def embedded_today():
+    """The emerging cluster, with every vector computed in 2026."""
+    data = emerging_cluster()
+    for row in data["technologies"]:
+        row["embedding_observed_at"] = "2026-09-28"
+    return data
+
+
+def test_name_vectors_are_dated_by_the_concepts_first_appearance():
+    # A name's vector does not depend on when it was computed: a
+    # historical snapshot sees it once the concept itself is visible, so
+    # training rows carry the same semantic columns as inference (N-3).
+    rows = novelty_features(
+        TemporalCorpus(embedded_today()).view(date(2020, 1, 1))
+    )
+    assert rows["t3"]["semantic_novelty"] > 0.5
+    assert rows["t0"]["nearest_known_distance"] is not None
+    early = novelty_features(
+        TemporalCorpus(embedded_today()).view(date(2019, 7, 1))
+    )
+    # t4 (first seen 2019-07-01) is visible, t5 (2019-08-01) is not yet.
+    assert "t5" not in early and early["t4"]["semantic_novelty"] > 0.5
+
+
+def test_strict_mode_dates_vectors_by_their_computation():
+    rows = novelty_features(
+        TemporalCorpus(embedded_today(), as_known=True).view(date(2027, 1, 1))
+    )
+    assert rows["t3"]["semantic_novelty"] is not None
+    strict = TemporalCorpus(embedded_today(), as_known=True)
+    assert strict.embeddings_at(date(2020, 1, 1)) == {}

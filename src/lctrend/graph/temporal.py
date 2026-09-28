@@ -30,6 +30,10 @@ The strict ``as_known`` mode reproduces what this system itself knew at
 extraction (``recorded_at`` / run start). A corpus collected today is
 empty in every past snapshot of that mode.
 
+Name vectors are dated by their concept's first appearance, not by the
+day they were computed (``embeddings_at``); in the strict mode they wait
+for their computation too.
+
 Parties of a version (authors, organizations, countries, domains) come from
 the version itself, so later updates of the Document node cannot leak.
 """
@@ -361,9 +365,12 @@ class TemporalCorpus:
                 row.get("technology") or technology_id
             )
             embedding_date = parse_date(row.get("embedding_observed_at"))
-            if row.get("embedding") and embedding_date is not None:
+            if row.get("embedding") and (
+                embedding_date is not None or not as_known
+            ):
                 self.embeddings[technology_id] = list(row["embedding"])
-                self.embedding_dates[technology_id] = embedding_date
+                if embedding_date is not None:
+                    self.embedding_dates[technology_id] = embedding_date
 
         # technology -> document -> version -> mention days
         self.mentions: Dict[str, Dict[str, Dict[str, List[MentionDay]]]] = {}
@@ -625,7 +632,19 @@ class TemporalCorpus:
         return technology_id in ids or bool(label and query == label)
 
     def embeddings_at(self, cutoff: date) -> Dict[str, List[float]]:
-        """Current vectors whose actual observation is known by T."""
+        """Name vectors usable at T.
+
+        A vector embeds the concept's name, which does not change with the
+        date it was computed on, so it is dated by the concept's first
+        appearance: a snapshot uses the vectors of the concepts visible at
+        T (the snapshot selects them). Training and inference rows then
+        carry the same semantic columns. The embedding model itself is
+        current, so it may encode relations between terms learned after T
+        (a limitation, see docs). The strict ``as_known`` mode dates a
+        vector by its computation (``embedding_observed_at``) instead.
+        """
+        if not self.as_known:
+            return dict(self.embeddings)
         return {
             key: vector
             for key, vector in self.embeddings.items()

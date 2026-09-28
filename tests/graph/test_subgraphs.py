@@ -81,10 +81,8 @@ def test_sample_is_typed_dated_and_excludes_future_values(tmp_path):
     assert nodes["DocumentVersion:v1"]["features"]["stars"] is None
     assert nodes["DocumentVersion:v1"]["missing_mask"]["stars"] == 1
     assert not any("future" in node_id for node_id in nodes)
-    assert not any(
-        key.startswith("embedding_")
-        for key in nodes["Technology:same"]["features"]
-    )
+    # N-3: the name vector (computed 2021) is dated by the concept (2019).
+    assert nodes["Technology:same"]["features"]["embedding_0"] == 1.0
     assert all(
         node["timestamp"] <= sample["snapshot"] for node in sample["nodes"]
     )
@@ -152,9 +150,14 @@ def test_cached_graph_is_shared_without_mutating_root_features():
 def test_manifest_aligns_pyg_columns_for_missing_vectors(
     tmp_path, monkeypatch
 ):
-    corpus = TemporalCorpus(data())
-    early = sample_subgraph(corpus.view(date(2020, 1, 1)), "same")
-    later = sample_subgraph(corpus.view(date(2021, 1, 1)), "same")
+    unembedded = data()
+    unembedded["technologies"][0].pop("embedding")
+    early = sample_subgraph(
+        TemporalCorpus(unembedded).view(date(2020, 1, 1)), "same"
+    )
+    later = sample_subgraph(
+        TemporalCorpus(data()).view(date(2021, 1, 1)), "same"
+    )
     path = tmp_path / "graphs.jsonl"
     write_subgraph_rows(path, [early, later])
     manifest = json.loads(
