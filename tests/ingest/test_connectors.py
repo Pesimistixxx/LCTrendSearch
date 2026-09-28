@@ -236,3 +236,16 @@ def test_openalex_rate_limit_reset_is_a_duration():
         request=httpx.Request("GET", "https://api.openalex.org/works"),
     )
     assert connectors._retry_after(response) == 31
+
+
+def test_github_secondary_rate_limit_is_retried():
+    request = httpx.Request("GET", "https://api.github.com/repos/a/b")
+    secondary = httpx.Response(
+        403,
+        headers={"Retry-After": "7", "X-RateLimit-Remaining": "4000"},
+        request=request,
+    )
+    forbidden = httpx.Response(403, request=request)
+    assert connectors._rate_limited(secondary)
+    assert connectors._retry_after(secondary) == 7
+    assert not connectors._rate_limited(forbidden)

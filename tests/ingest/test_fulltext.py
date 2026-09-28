@@ -493,3 +493,22 @@ def test_prior_run_covers_only_the_input_it_read():
     assert not covers([pdf_run], with_pdf)
     # A run from before inputs were recorded is not paid for again.
     assert covers([run_input({})], with_pdf)
+
+
+def test_pubmed_rate_limit_works_across_event_loops(monkeypatch):
+    import asyncio
+
+    from lctrend.ingest import connectors
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(connectors.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(connectors, "_pubmed_next_slot", 0.0)
+    # Each web job has its own loop; an asyncio.Lock would be bound to one.
+    asyncio.run(connectors._pubmed_slot())
+    asyncio.run(connectors._pubmed_slot())
+    assert len(waits) == 2
+    assert waits[1] > 0.3, "the second request waits for its slot"

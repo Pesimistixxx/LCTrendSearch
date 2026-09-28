@@ -262,7 +262,7 @@ def test_incomplete_run_preserves_prior_active_projection(
     staged = stored_metadata["staged_result"]
     # Label vectors are recomputable and would bloat the run audit.
     assert staged == extraction.model_dump(
-        mode="json", exclude={"run", "concept_embeddings"}
+        mode="json", exclude={"run", "concept_embeddings", "chunk_embeddings"}
     )
     assert stored_metadata["staged_chunks"] == [
         chunk.model_dump(mode="json") for chunk in document.chunks

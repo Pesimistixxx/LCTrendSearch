@@ -683,7 +683,12 @@ class GigaChatServer:
         )
 
 
-def gigachat(server, **kwargs):
+def gigachat(server, routes=False, **kwargs):
+    # Ladder mechanics are tested without task routes (test_model_routes).
+    config = deepcopy(load_catalog("llm"))
+    if not routes:
+        config["gigachat"].pop("model_routes", None)
+    kwargs.setdefault("config", config)
     return JsonLLM(
         provider="gigachat",
         api_key="basic-secret",

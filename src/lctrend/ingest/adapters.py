@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -391,6 +392,15 @@ def _abstract_from_inverted_index(
     return " ".join(word for _, word in sorted(positioned))
 
 
+def _plain_title(value: Any) -> Optional[str]:
+    """OpenAlex titles carry publisher markup (<i>, <sub>, &amp;), which
+    leaked into the graph and the UI (A-14)."""
+    if not isinstance(value, str):
+        return None
+    text = html.unescape(re.sub(r"<[^>]{1,200}>", "", value))
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
 def parse_openalex(
     payload: Mapping[str, Any], raw: Optional[bytes] = None
 ) -> DocumentEnvelope:
@@ -569,7 +579,9 @@ def parse_openalex(
         document_id=document_id,
         document_version_id=version_id,
         document_type=DocumentType.ARTICLE,
-        title=payload.get("title") or payload.get("display_name") or identity,
+        title=_plain_title(payload.get("title"))
+        or _plain_title(payload.get("display_name"))
+        or identity,
         language=payload.get("language"),
         published_at=payload.get("publication_date"),
         version_published_at=payload.get("publication_date"),

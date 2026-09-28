@@ -407,3 +407,15 @@ def test_pypi_new_release_of_another_line_keeps_the_version():
         parse_pypi(package).document_version_id
         == parse_pypi(backport).document_version_id
     )
+
+
+def test_openalex_title_markup_is_removed():
+    from lctrend.ingest.adapters import parse_openalex
+
+    document = parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "Li<sub>2</sub>S &amp; <i>solid-state</i>  cells",
+        }
+    )
+    assert document.title == "Li2S & solid-state cells"

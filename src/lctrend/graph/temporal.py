@@ -471,6 +471,7 @@ class TemporalCorpus:
                 self.embeddings[technology_id] = list(row["embedding"])
                 if embedding_date is not None:
                     self.embedding_dates[technology_id] = embedding_date
+        self._keep_one_embedding_space(data.get("technologies", []))
 
         # technology -> document -> version -> mention days
         self.mentions: Dict[str, Dict[str, Dict[str, List[MentionDay]]]] = {}
@@ -732,6 +733,30 @@ class TemporalCorpus:
             re.findall(r"\w+", self.labels.get(technology_id, "").casefold())
         )
         return technology_id in ids or bool(label and query == label)
+
+    def _keep_one_embedding_space(self, rows: List[Dict[str, Any]]) -> None:
+        """Vectors of different models are not comparable (N-5): keep the
+        most common (model, dimension) space, ties broken by name, so the
+        first id in sort order no longer decides it.
+        """
+        spaces: Dict[str, Tuple[str, int]] = {}
+        for row in rows:
+            technology_id = str(row["technology_id"])
+            if technology_id in self.embeddings:
+                spaces[technology_id] = (
+                    str(row.get("embedding_model") or ""),
+                    len(self.embeddings[technology_id]),
+                )
+        if len(set(spaces.values())) <= 1:
+            return
+        counts: Dict[Tuple[str, int], int] = {}
+        for space in spaces.values():
+            counts[space] = counts.get(space, 0) + 1
+        chosen = min(counts, key=lambda space: (-counts[space], space))
+        for technology_id, space in spaces.items():
+            if space != chosen:
+                self.embeddings.pop(technology_id, None)
+                self.embedding_dates.pop(technology_id, None)
 
     def embeddings_at(self, cutoff: date) -> Dict[str, List[float]]:
         """Name vectors usable at T.

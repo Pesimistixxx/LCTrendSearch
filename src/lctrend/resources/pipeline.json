@@ -47,5 +47,5 @@
     "html": ["html_rendered_text; scripts_styles_templates_not_extracted; browser_layout_not_rendered", "html_table_cells_retained_without_row_column_geometry"],
     "pdf": ["pdf_layout_and_ocr_require_validation; table_markdown_is_a_derived_representation"]
   },
-  "graph_context": {"enabled": true, "max_documents": 3, "max_chunks": 4, "max_chars": 6000, "max_search_chars": 200}
+  "graph_context": {"enabled": true, "max_documents": 3, "max_chunks": 4, "max_chars": 6000, "max_search_chars": 200, "semantic_min_score": 0.75, "evidence_embedding_max_chunks": 64, "semantic_note": "search_graph unites the full-text match with a vector search over evidence chunks (chunks cited by accepted claims) at cosine >= semantic_min_score, so a query finds context in another language or wording."}
 }

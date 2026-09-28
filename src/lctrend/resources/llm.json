@@ -3,7 +3,7 @@
   "provider": "openai_compatible",
   "base_url": "https://api.openai.com/v1",
   "response_mode": "json_object",
-  "timeouts_seconds": {"connect": 10, "read": 90, "write": 30, "pool": 10},
+  "timeouts_seconds": {"connect": 20, "read": 180, "write": 30, "pool": 20},
   "max_concurrent_requests": 4,
   "max_output_tokens": {"extract": 4096, "review": 4096},
   "temperature": 0,
@@ -24,6 +24,13 @@
     "json_schema_strict": true,
     "temperature": 0.001,
     "model_ladder": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
+    "model_routes": {
+      "note": "Used when no model is pinned (LLM_MODEL, LLM_*_MODEL, LLM_MODEL_LADDER). Each route starts with its own model and falls through to every other ladder model when tokens run out (402 or low /balance); a model out of tokens is skipped on all routes.",
+      "short_packet_chars": 8000,
+      "extract": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro"],
+      "extract_short": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-3-Ultra"],
+      "review": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-3-Ultra"]
+    },
     "model_fallback": {"exhausted_statuses": [402], "unavailable_statuses": [403, 404]},
     "balance": {
       "enabled": true,

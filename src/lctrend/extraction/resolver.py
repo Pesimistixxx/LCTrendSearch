@@ -6,7 +6,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from functools import lru_cache
-from time import monotonic
+from time import monotonic, sleep
 from typing import (
     Dict,
     Iterable,
@@ -16,6 +16,8 @@ from typing import (
     Sequence,
     Tuple,
 )
+
+import numpy as np
 
 from ..core.config import load_catalog
 from ..core.models import (
@@ -62,6 +64,11 @@ EMBEDDING_PROVIDERS = ("gigachat", "transformers")
 # After a failure (no credentials, no torch, HTTP 5xx) resolution continues
 # lexically; the semantic layer is retried after this pause.
 SEMANTIC_RETRY_SECONDS = 300.0
+# A transient embedding error (timeout, 429, 5xx) is retried before the
+# layer is paused: one slow response must not leave a document unembedded.
+EMBEDDING_ATTEMPTS = 3
+EMBEDDING_RETRY_SECONDS = 1.0
+EMBEDDING_MAX_RETRY_SECONDS = 20.0
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +131,23 @@ class SemanticDeduplicator:
         self._cache: Dict[str, List[float]] = {}
         self.failure: Optional[str] = None
         self._failed_at = 0.0
+        # The cross-encoder (local torch) failing is not the embeddings
+        # failing: vectors are still stored, only candidates stop.
+        self.decision_failure: Optional[str] = None
+        self.seeded_model: Optional[str] = None
+
+    def seed(self, labeled: Iterable[Tuple[str, Sequence[float]]]) -> int:
+        """Preload label vectors stored in the graph (same model), so a new
+        process does not re-embed the whole registry on its first match
+        (C-9). Returns how many labels were added."""
+        added = 0
+        for label, vector in labeled:
+            key = normalize_name(label)
+            if key and vector and key not in self._cache:
+                self._cache[key] = _unit([float(value) for value in vector])
+                added += 1
+        self.seeded_model = self.embedding_model_name
+        return added
 
     def available(self) -> bool:
         return (
@@ -140,15 +164,21 @@ class SemanticDeduplicator:
             SEMANTIC_RETRY_SECONDS,
         )
 
-    def embed(self, texts: Sequence[str]) -> Optional[List[List[float]]]:
+    def embed(
+        self, texts: Sequence[str], cache: bool = True
+    ) -> Optional[List[List[float]]]:
         """Unit vectors of labels, or None when the layer is unavailable.
 
+        ``cache=False`` for long texts (evidence chunks, search queries):
+        they rarely repeat and would only grow the label cache.
         Synchronous: call it from a worker thread, as resolution does.
         """
         if not self.available():
             return None
         try:
-            vectors = self._embed(texts)
+            vectors = (
+                self._embed(texts) if cache else self._embed_uncached(texts)
+            )
         except Exception as exc:
             self._fail(exc)
             return None
@@ -187,11 +217,49 @@ class SemanticDeduplicator:
             # Reuses GIGACHAT_CREDENTIALS, scope, base URL and CA bundle.
             self._embedder = JsonLLM(provider="gigachat")
         from ..core.aio import resolve, run_sync
+        from ..llm.client import LLMError
 
-        # Resolution runs in a worker thread, off the event loop.
-        return run_sync(
-            resolve(self._embedder.embed(texts, self.embedding_model_name))
+        for attempt in range(EMBEDDING_ATTEMPTS):
+            try:
+                # Resolution runs in a worker thread, off the event loop.
+                return run_sync(
+                    resolve(
+                        self._embedder.embed(texts, self.embedding_model_name)
+                    )
+                )
+            except LLMError as exc:
+                if not exc.retryable or attempt == EMBEDDING_ATTEMPTS - 1:
+                    raise
+                delay = min(
+                    exc.retry_after
+                    if exc.retry_after is not None
+                    else EMBEDDING_RETRY_SECONDS * 2**attempt,
+                    EMBEDDING_MAX_RETRY_SECONDS,
+                )
+                logger.info(
+                    "Embedding request failed (%s); retry %d/%d in %.1fs",
+                    exc.code,
+                    attempt + 1,
+                    EMBEDDING_ATTEMPTS - 1,
+                    delay,
+                )
+                sleep(max(0.0, delay))
+        raise AssertionError("unreachable")
+
+    def _compute(self, texts: List[str]) -> List[List[float]]:
+        return (
+            self._remote_embeddings(texts)
+            if self.embedding_provider == "gigachat"
+            else self._local_embeddings(texts)
         )
+
+    def _embed_uncached(self, texts: Iterable[str]) -> List[List[float]]:
+        texts = list(texts)
+        vectors: List[List[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vectors += [_unit(vector) for vector in self._compute(batch)]
+        return vectors
 
     def _embed(self, texts: Iterable[str]) -> List[List[float]]:
         """Unit vectors for texts; one batched request per uncached group."""
@@ -204,11 +272,7 @@ class SemanticDeduplicator:
                 if key not in self._cache
             )
         )
-        compute = (
-            self._remote_embeddings
-            if self.embedding_provider == "gigachat"
-            else self._local_embeddings
-        )
+        compute = self._compute
         for start in range(0, len(missing), self.batch_size):
             batch = missing[start : start + self.batch_size]
             for text, vector in zip(batch, compute(batch)):
@@ -264,14 +328,28 @@ class SemanticDeduplicator:
         source, *targets = self._embed(
             [text, *(concept.preferred_label for concept in concepts)]
         )
-        scored = [
-            (sum(a * b for a, b in zip(source, target)), concept)
-            for target, concept in zip(targets, concepts)
-        ]
-        cosine, concept = max(scored, key=lambda item: item[0])
+        # One matrix product over the registry instead of a Python loop
+        # per concept (C-8); vectors are unit length, so dot = cosine.
+        scores = np.asarray(targets, dtype=float) @ np.asarray(
+            source, dtype=float
+        )
+        best = int(np.argmax(scores))
+        cosine, concept = float(scores[best]), concepts[best]
         if cosine < self.cosine_threshold:
             return None, cosine, 0.0
-        decision = self._decision_score(text, concept.preferred_label)
+        if self.decision_failure is not None:
+            return None, cosine, 0.0
+        try:
+            decision = self._decision_score(text, concept.preferred_label)
+        except Exception as exc:
+            self.decision_failure = type(exc).__name__
+            logger.warning(
+                "Cross-encoder %s unavailable (%s); embeddings are still "
+                "stored, semantic review candidates are skipped",
+                self.decision_model_name,
+                self.decision_failure,
+            )
+            return None, cosine, 0.0
         return (
             (concept if decision >= self.decision_threshold else None),
             cosine,
@@ -554,6 +632,18 @@ def resolve_mentions(
     groups = alias_groups()
     touched: Dict[str, Concept] = {}
     decisions: List[ResolutionDecision] = []
+
+    if isinstance(semantic, SemanticDeduplicator) and semantic.available():
+        embedded = set(load_catalog("resolver")["semantic"]["embedded_kinds"])
+        names = [
+            mention.canonical_text or mention.surface_text
+            for mention in mentions
+            if any(kind.value in embedded for kind in mention.type_candidates)
+        ]
+        if names:
+            # One batched request for the document's names instead of one
+            # request per mention inside the loop; failures pause the layer.
+            semantic.embed(names)
 
     for mention in mentions:
         canonical_text = mention.canonical_text or mention.surface_text

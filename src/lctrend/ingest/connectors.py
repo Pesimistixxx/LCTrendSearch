@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -28,7 +29,22 @@ logger = logging.getLogger(__name__)
 
 # Tests inject an httpx.MockTransport here; production uses the network.
 TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
-_PUBMED_REQUEST_LOCK = asyncio.Lock()
+# Without an NCBI API key PubMed allows three requests per second per
+# process. Web jobs run in their own event loops, so an asyncio.Lock bound
+# to the first loop would fail in the next one (NEW-3): request start times
+# are reserved under a thread lock instead.
+_PUBMED_INTERVAL_SECONDS = 0.4
+_PUBMED_SLOT_LOCK = threading.Lock()
+_pubmed_next_slot = 0.0
+
+
+async def _pubmed_slot() -> None:
+    global _pubmed_next_slot
+    with _PUBMED_SLOT_LOCK:
+        now = time.monotonic()
+        start = max(now, _pubmed_next_slot)
+        _pubmed_next_slot = start + _PUBMED_INTERVAL_SECONDS
+    await asyncio.sleep(start - now)
 
 
 class SourceHTTPError(RuntimeError):
@@ -78,9 +94,11 @@ def _retry_after(response: httpx.Response) -> Optional[float]:
 
 
 def _rate_limited(response: httpx.Response) -> bool:
-    return (
-        response.status_code == 403
-        and response.headers.get("X-RateLimit-Remaining") == "0"
+    # Primary limit: remaining=0. Secondary (abuse) limit: 403 with
+    # Retry-After and requests still remaining (A-12).
+    return response.status_code == 403 and (
+        response.headers.get("X-RateLimit-Remaining") == "0"
+        or "Retry-After" in response.headers
     )
 
 
@@ -309,12 +327,10 @@ async def fetch_pubmed_xml(pmid: str) -> bytes:
         )
     )
     logger.debug("GET PubMed PMID %s", pmid)
-    # Without an NCBI API key, keep this process below three requests/second.
-    async with _PUBMED_REQUEST_LOCK:
-        await asyncio.sleep(0.4)
-        response = await request(
-            url, {"Accept": "application/xml"}, max_bytes=1_000_000
-        )
+    await _pubmed_slot()
+    response = await request(
+        url, {"Accept": "application/xml"}, max_bytes=1_000_000
+    )
     return response.content
 
 

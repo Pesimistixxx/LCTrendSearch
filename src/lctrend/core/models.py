@@ -297,6 +297,9 @@ class ExtractionResult(BaseModel):
     # Unit vectors of concept labels (semantic layer), keyed by concept_id;
     # stored on concept nodes for similarity search and taxonomy building.
     concept_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
+    # Unit vectors of evidence chunks (text of accepted claims), keyed by
+    # chunk_id; semantic retrieval of related context across documents.
+    chunk_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
     embedding_model: Optional[str] = None
 
 
@@ -315,6 +318,12 @@ def validate_extraction(
     chunks = {chunk.chunk_id: chunk for chunk in document.chunks}
     concept_ids = {concept.concept_id for concept in result.concepts}
     mention_ids = {mention.mention_id for mention in result.mentions}
+
+    for chunk_id in result.chunk_embeddings:
+        if chunk_id not in chunks:
+            raise ValueError(
+                f"embedded chunk {chunk_id} is not in the document"
+            )
 
     for mention in result.mentions:
         chunk = chunks.get(mention.chunk_id)

@@ -5,7 +5,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from ..core.aio import resolve
 from ..core.config import cypher_identifier, load_catalog, resource_path
@@ -353,9 +353,7 @@ class GraphStore:
                 if country.role == "jurisdiction"
                 else "WRITTEN_IN"
             )
-            countries.setdefault(relationship, []).append(
-                country.model_dump()
-            )
+            countries.setdefault(relationship, []).append(country.model_dump())
         for relationship, rows in countries.items():
             await _run(
                 tx,
@@ -940,9 +938,13 @@ class GraphStore:
         Schema changes cannot share the write transaction, and a Neo4j
         without vector support must not block publication.
         """
-        if not result.concept_embeddings:
+        vectors = [
+            *result.concept_embeddings.values(),
+            *result.chunk_embeddings.values(),
+        ]
+        if not vectors:
             return
-        dimensions = len(next(iter(result.concept_embeddings.values())))
+        dimensions = len(vectors[0])
         kinds = {
             concept.concept_id: concept.kind.value
             for concept in result.concepts
@@ -952,6 +954,9 @@ class GraphStore:
             for concept_id in result.concept_embeddings
             if concept_id in kinds
         }
+        if result.chunk_embeddings:
+            # Evidence chunks: semantic retrieval of related context.
+            labels.add("Chunk")
         async with self._driver.session(database=self._database) as session:
             for label in sorted(labels - self._vector_indexes):
                 name = re.sub(r"(?<!^)(?=[A-Z])", "_", label).lower()
@@ -1061,7 +1066,10 @@ class GraphStore:
                 UNWIND $ids AS id
                 MATCH (v:DocumentVersion {document_version_id: id})
                       <-[:PROCESSED]-(r:ProcessingRun)
-                WHERE r.status = 'succeeded' AND r.parser <> 'metadata'
+                // Runs of the removed GLiNER extractor never close a version
+                // for LLM processing (D-4).
+                WHERE r.status = 'succeeded'
+                  AND NOT r.parser IN ['metadata', 'gliner']
                 RETURN DISTINCT id
                 """,
                 ids=list(version_ids),
@@ -1087,7 +1095,10 @@ class GraphStore:
                 UNWIND $ids AS id
                 MATCH (v:DocumentVersion {document_version_id: id})
                       <-[:PROCESSED]-(r:ProcessingRun)
-                WHERE r.status = 'succeeded' AND r.parser <> 'metadata'
+                // Runs of the removed GLiNER extractor never close a version
+                // for LLM processing (D-4).
+                WHERE r.status = 'succeeded'
+                  AND NOT r.parser IN ['metadata', 'gliner']
                 RETURN id, r.metadata_json AS metadata_json
                 """,
                 ids=list(version_ids),
@@ -1123,6 +1134,93 @@ class GraphStore:
             ]
         logger.debug("Read %d concepts from Neo4j", len(concepts))
         return concepts
+
+    @staticmethod
+    async def _write_embeddings(
+        tx: Any,
+        embedded: Dict[str, List[Dict[str, Any]]],
+        model: str | None,
+        recorded_at: str,
+    ) -> None:
+        """Store label vectors, grouped by node label."""
+        for label, rows in embedded.items():
+            for batch in _batches(rows):
+                await _run(
+                    tx,
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (c:{cypher_identifier(label)}
+                           {{concept_id: row.concept_id}})
+                    // The same vector of the same model keeps the date on
+                    // which past snapshots already saw it.
+                    WITH c, row,
+                         c.embedding = row.vector
+                         AND c.embedding_model = $model
+                         AND c.embedding_observed_at IS NOT NULL
+                         AS unchanged
+                    SET c.embedding_observed_at = CASE WHEN unchanged
+                            THEN c.embedding_observed_at
+                            ELSE $recorded_at END,
+                        c.embedding = row.vector,
+                        c.embedding_model = $model
+                    """,
+                    rows=batch,
+                    model=model,
+                    recorded_at=recorded_at,
+                )
+
+    async def read_label_vectors(
+        self, kinds: List[str], model: str
+    ) -> List[Tuple[str, List[float]]]:
+        """Stored label vectors of ``model`` for the semantic cache."""
+        query = "\nUNION\n".join(
+            f"MATCH (c:{cypher_identifier(label)}) "
+            "WHERE c.embedding IS NOT NULL AND c.embedding_model = $model "
+            "AND c.preferred_label IS NOT NULL "
+            "RETURN c.preferred_label AS label, c.embedding AS vector"
+            for label in kinds
+        )
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(session, query, model=model)
+        return [
+            (record["label"], list(record["vector"])) for record in records
+        ]
+
+    async def read_concepts_to_embed(
+        self, kinds: List[str], model: str, force: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Concepts of ``kinds`` without a vector of ``model``."""
+        query = "\nUNION\n".join(
+            f"MATCH (c:{cypher_identifier(label)}) "
+            f"WHERE c.concept_id IS NOT NULL AND c.kind = $kinds[{index}] "
+            "AND coalesce(c.status, '') <> 'merged' "
+            "AND ($force OR c.embedding IS NULL "
+            "     OR coalesce(c.embedding_model, '') <> $model) "
+            "RETURN c.concept_id AS concept_id, c.kind AS node_label, "
+            "c.preferred_label AS label"
+            for index, label in enumerate(kinds)
+        )
+        async with self._driver.session(database=self._database) as session:
+            records = await _records(
+                session, query, kinds=list(kinds), model=model, force=force
+            )
+        unique = {row["concept_id"]: row for row in map(_data, records)}
+        return sorted(unique.values(), key=lambda row: row["concept_id"])
+
+    async def write_concept_embeddings(
+        self, rows: List[Dict[str, Any]], model: str
+    ) -> None:
+        """Backfill vectors for concepts stored without them."""
+        embedded: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            embedded.setdefault(row["node_label"], []).append(
+                {"concept_id": row["concept_id"], "vector": row["vector"]}
+            )
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(
+                self._write_embeddings, embedded, model, recorded_at
+            )
 
     async def merge_concepts(
         self, source_id: str, target_id: str, reason: str | None = None
@@ -1387,6 +1485,7 @@ class GraphStore:
                    t.kind AS kind,
                    t.first_seen_at AS first_seen_at,
                    t.status AS status, t.embedding AS embedding,
+                   t.embedding_model AS embedding_model,
                    t.embedding_observed_at AS embedding_observed_at
         """
         relations = """
@@ -1538,11 +1637,15 @@ class GraphStore:
         limit_documents: int,
         limit_chunks: int,
         max_chars: int,
+        query_vector: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
-        """Literal retrieval of whole original chunks from published successes.
+        """Whole original chunks from published successes.
 
-        Related sources are context, not evidence for the current document.
-        Oversized chunks are skipped rather than truncated or summarized.
+        A literal full-text match comes first; with ``query_vector`` the
+        evidence chunks nearest to the query (another language, a synonym)
+        follow, best first. Related sources are context, not evidence for
+        the current document. Oversized chunks are skipped rather than
+        truncated or summarized.
         """
         query = str(query).strip().casefold()
         if not query or len(query) > 1000:
@@ -1554,45 +1657,80 @@ class GraphStore:
             return []
         # Full-text indexes find candidates (D-7: CONTAINS alone scanned
         # every chunk); the literal CONTAINS check keeps the old meaning.
-        statement = """
-            CALL {
+        lexical = """
                 CALL db.index.fulltext.queryNodes('chunk_text', $phrase)
                 YIELD node
                 MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
                       -[:HAS_CHUNK]->(node)
-                RETURN node AS c, v, d
+                RETURN node AS c, v, d, 2.0 AS score
                 UNION
                 CALL db.index.fulltext.queryNodes('document_title', $phrase)
                 YIELD node
                 MATCH (node)-[:HAS_VERSION]->(v:DocumentVersion)
                       -[:HAS_CHUNK]->(c:Chunk)
-                RETURN c, v, node AS d
-            }
+                RETURN c, v, node AS d, 2.0 AS score
+        """
+        # Vector hits carry a cosine < 2, so literal matches stay first.
+        semantic = """
+                UNION
+                CALL db.index.vector.queryNodes(
+                    'chunk_embedding', $vector_limit, $vector)
+                YIELD node, score
+                WITH node, score WHERE score >= $min_score
+                MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
+                      -[:HAS_CHUNK]->(node)
+                RETURN node AS c, v, d, score
+        """
+        body = """
             MATCH (run:ProcessingRun)-[:PROCESSED]->(v)
             WHERE run.status = 'succeeded'
               AND (run.published = true OR run.published IS NULL)
               AND run.parser <> 'metadata'
               AND v.document_version_id <> $exclude_version_id
               AND c.parse_status = 'accepted'
-              AND (toLower(c.text) CONTAINS $search_text
+              AND (score < 2.0
+                   OR toLower(c.text) CONTAINS $search_text
                    OR toLower(d.title) CONTAINS $search_text)
-            RETURN DISTINCT c.chunk_id AS chunk_id, c.text AS text,
+            WITH c, v, d, max(score) AS score
+            RETURN c.chunk_id AS chunk_id, c.text AS text,
                    c.kind AS kind, c.locator_json AS locator_json,
                    d.document_id AS document_id, d.title AS title,
                    v.document_version_id AS document_version_id,
-                   c.order AS chunk_order
-            ORDER BY document_id, document_version_id, chunk_order, chunk_id
+                   c.order AS chunk_order, score
+            ORDER BY score DESC, document_id, document_version_id,
+                     chunk_order, chunk_id
             LIMIT $candidate_limit
         """
+        settings = load_catalog("pipeline").get("graph_context", {})
+        parameters = {
+            "search_text": query,
+            "phrase": _lucene_phrase(query),
+            "exclude_version_id": exclude_version_id,
+            "candidate_limit": min(2000, limit_documents * limit_chunks * 4),
+            "vector": query_vector,
+            "vector_limit": min(200, limit_documents * limit_chunks * 4),
+            "min_score": float(settings.get("semantic_min_score", 0.75)),
+        }
         async with self._driver.session(database=self._database) as session:
-            records = await _records(
-                session,
-                statement,
-                search_text=query,
-                phrase=_lucene_phrase(query),
-                exclude_version_id=exclude_version_id,
-                candidate_limit=min(2000, limit_documents * limit_chunks * 4),
-            )
+            records = None
+            if query_vector:
+                try:
+                    records = await _records(
+                        session,
+                        f"CALL {{{lexical}{semantic}}}{body}",
+                        **parameters,
+                    )
+                except Exception as exc:
+                    # No vector index yet (no evidence embedded) or a Neo4j
+                    # without vector search: the literal match still works.
+                    logger.debug(
+                        "Vector context search unavailable (%s)",
+                        type(exc).__name__,
+                    )
+            if records is None:
+                records = await _records(
+                    session, f"CALL {{{lexical}}}{body}", **parameters
+                )
         output, documents, seen = [], set(), set()
         used = 0
         for record in records:
@@ -1623,6 +1761,9 @@ class GraphStore:
                 except (TypeError, ValueError):
                     pass
             row.pop("chunk_order", None)
+            score = row.pop("score", None)
+            if isinstance(score, (int, float)) and score < 2.0:
+                row["similarity"] = round(float(score), 4)
             output.append(row)
             if len(output) >= limit_chunks:
                 break
@@ -2058,7 +2199,8 @@ class GraphStore:
             # Preserve reviewable partial results without replacing an earlier
             # good graph.
             metadata["staged_result"] = result.model_dump(
-                exclude={"run", "concept_embeddings"}, mode="json"
+                exclude={"run", "concept_embeddings", "chunk_embeddings"},
+                mode="json",
             )
             metadata["staged_chunks"] = [
                 chunk.model_dump(mode="json") for chunk in document.chunks
@@ -2242,30 +2384,25 @@ class GraphStore:
                 embedded.setdefault(labels[concept_id], []).append(
                     {"concept_id": concept_id, "vector": vector}
                 )
-        for label, rows in embedded.items():
-            for batch in _batches(rows):
-                await _run(
-                    tx,
-                    f"""
-                    UNWIND $rows AS row
-                    MATCH (c:{label} {{concept_id: row.concept_id}})
-                    // The same vector of the same model keeps the date on
-                    // which past snapshots already saw it.
-                    WITH c, row,
-                         c.embedding = row.vector
-                         AND c.embedding_model = $model
-                         AND c.embedding_observed_at IS NOT NULL
-                         AS unchanged
-                    SET c.embedding_observed_at = CASE WHEN unchanged
-                            THEN c.embedding_observed_at
-                            ELSE $recorded_at END,
-                        c.embedding = row.vector,
-                        c.embedding_model = $model
-                    """,
-                    rows=batch,
-                    model=result.embedding_model,
-                    recorded_at=run.started_at,
-                )
+        await GraphStore._write_embeddings(
+            tx, embedded, result.embedding_model, run.started_at
+        )
+        for batch in _batches(
+            [
+                {"chunk_id": chunk_id, "vector": vector}
+                for chunk_id, vector in result.chunk_embeddings.items()
+            ]
+        ):
+            await _run(
+                tx,
+                """
+                UNWIND $rows AS row
+                MATCH (c:Chunk {chunk_id: row.chunk_id})
+                SET c.embedding = row.vector, c.embedding_model = $model
+                """,
+                rows=batch,
+                model=result.embedding_model,
+            )
 
         # A semantic match is a review candidate, never an identity.
         candidates: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
@@ -2381,9 +2518,7 @@ class GraphStore:
                 "accepted",
                 "provisional",
             ):
-                targets = [
-                    (decision.concept_id, labels[decision.concept_id])
-                ]
+                targets = [(decision.concept_id, labels[decision.concept_id])]
             else:
                 continue
             for concept_id, label in targets:
@@ -2395,9 +2530,7 @@ class GraphStore:
                         "score": decision.score,
                         "resolution_status": decision.status,
                         "basis": decision.basis,
-                        "observed_at": _chunk_date(
-                            document, mention.chunk_id
-                        ),
+                        "observed_at": _chunk_date(document, mention.chunk_id),
                     }
                 )
         for label, rows in mention_rows.items():

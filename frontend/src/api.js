@@ -9,7 +9,10 @@ export const DEMO_DATA = MOCK
 /*
 Контракт бэкенда.
 
-GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.graph.search)
+Логика получения ответа (отбор кандидатов и ранжирование) пока НЕ сделана:
+lctrend.ranking — подготовленная заготовка, её выдача не является результатом анализа.
+
+GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search)
 {
   query: string,
   snapshot: 'YYYY-MM-DD',             // дата T: всё посчитано по данным ≤ T

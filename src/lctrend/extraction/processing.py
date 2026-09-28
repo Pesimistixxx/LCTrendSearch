@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -10,6 +11,8 @@ from ..core.config import load_catalog
 from ..core.models import ExtractionResult, ProcessingRun, stable_id
 from ..llm.pipeline import process_document
 from .resolver import SemanticDeduplicator
+
+logger = logging.getLogger(__name__)
 
 
 def _semantic_deduplicator() -> SemanticDeduplicator:
@@ -69,6 +72,27 @@ def _llm_semantic() -> SemanticDeduplicator | None:
         _SHARED_SEMANTIC.clear()
         _SHARED_SEMANTIC[key] = _semantic_deduplicator()
     return _SHARED_SEMANTIC[key]
+
+
+async def seed_semantic(store) -> None:
+    """Fill the process-wide label-vector cache from the graph once."""
+    semantic = _llm_semantic()
+    reader = getattr(store, "read_label_vectors", None)
+    if (
+        semantic is None
+        or reader is None
+        or semantic.seeded_model == semantic.embedding_model_name
+    ):
+        return
+    kinds = list(load_catalog("resolver")["semantic"]["embedded_kinds"])
+    try:
+        rows = await reader(kinds, semantic.embedding_model_name)
+    except Exception as exc:
+        # A cold cache only costs embedding requests, never a job.
+        logger.warning("Label vectors not preloaded (%s)", type(exc).__name__)
+        return
+    added = semantic.seed(rows)
+    logger.info("Semantic cache preloaded with %d label vectors", added)
 
 
 async def process_material(

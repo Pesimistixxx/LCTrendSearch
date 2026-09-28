@@ -38,6 +38,7 @@ CREATE INDEX targets_market_version IF NOT EXISTS FOR ()-[r:TARGETS_MARKET]-() O
 CREATE INDEX manufactured_in_version IF NOT EXISTS FOR ()-[r:MANUFACTURED_IN]-() ON (r.document_version_id);
 CREATE INDEX tested_in_version IF NOT EXISTS FOR ()-[r:TESTED_IN]-() ON (r.document_version_id);
 CREATE INDEX deployed_in_version IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.document_version_id);
+CREATE CONSTRAINT crawl_run_id IF NOT EXISTS FOR (n:CrawlRun) REQUIRE n.crawl_id IS UNIQUE;
 CREATE CONSTRAINT taxonomy_node_id IF NOT EXISTS FOR (n:TaxonomyNode) REQUIRE n.node_id IS UNIQUE;
 CREATE INDEX taxonomy_node_version IF NOT EXISTS FOR (n:TaxonomyNode) ON (n.taxonomy_version);
 CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (n:Chunk) ON EACH [n.text];

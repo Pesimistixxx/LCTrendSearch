@@ -180,3 +180,108 @@ def test_gigachat_embeddings_batch_and_cache_candidates():
     ]
     semantic.best_match("Carbon  Capture", concepts)
     assert len(requests) == 1, "normalized texts are embedded once"
+
+
+def _semantic_with(embedder):
+    from lctrend.extraction.resolver import SemanticDeduplicator
+
+    return SemanticDeduplicator(embedder=embedder)
+
+
+def test_transient_embedding_errors_are_retried(monkeypatch):
+    from lctrend.extraction import resolver
+    from lctrend.llm.client import LLMError
+
+    monkeypatch.setattr(resolver, "sleep", lambda seconds: None)
+    calls = []
+
+    class FlakyEmbedder:
+        def embed(self, texts, model):
+            calls.append(list(texts))
+            if len(calls) < 3:
+                raise LLMError("timeout", "slow", retryable=True)
+            return [[1.0, 0.0] for _ in texts]
+
+    semantic = _semantic_with(FlakyEmbedder())
+    assert semantic.embed(["edge ai"]) == [[1.0, 0.0]]
+    assert len(calls) == 3 and semantic.failure is None
+
+
+def test_permanent_embedding_error_is_not_retried(monkeypatch):
+    from lctrend.extraction import resolver
+    from lctrend.llm.client import LLMError
+
+    monkeypatch.setattr(resolver, "sleep", lambda seconds: None)
+    calls = []
+
+    class BrokenEmbedder:
+        def embed(self, texts, model):
+            calls.append(list(texts))
+            raise LLMError("http_error", "forbidden", retryable=False)
+
+    semantic = _semantic_with(BrokenEmbedder())
+    assert semantic.embed(["edge ai"]) is None
+    assert len(calls) == 1 and semantic.failure == "LLMError"
+
+
+def test_missing_cross_encoder_keeps_the_embedding_layer():
+    class Embedder:
+        def embed(self, texts, model):
+            return [[1.0, 0.0] for _ in texts]
+
+    semantic = _semantic_with(Embedder())
+
+    def no_torch(left, right):
+        raise ModuleNotFoundError("torch")
+
+    semantic._decision_score = no_torch
+    concept = Concept(
+        concept_id="tech:a",
+        kind=ConceptKind.TECHNOLOGY,
+        preferred_label="carbon capture",
+        status="accepted",
+    )
+    match, cosine, decision = semantic.best_match(
+        "carbon conversion", [concept]
+    )
+    assert match is None and cosine > 0.99 and decision == 0.0
+    assert semantic.decision_failure == "ModuleNotFoundError"
+    assert semantic.available() and semantic.failure is None
+    assert semantic.embed(["quantum annealing"]) == [[1.0, 0.0]]
+
+
+def test_document_names_are_embedded_in_one_request():
+    requests = []
+
+    class Embedder:
+        def embed(self, texts, model):
+            requests.append(list(texts))
+            return [[1.0, float(index)] for index, _ in enumerate(texts)]
+
+    semantic = _semantic_with(Embedder())
+    semantic._decision_score = lambda left, right: 0.0
+    mentions = [
+        mention(text).model_copy(update={"mention_id": f"m{index}"})
+        for index, text in enumerate(
+            ["edge ai", "quantum annealing", "digital twin"]
+        )
+    ]
+    resolve_mentions(mentions, [], semantic)
+    assert requests[0] == ["edge ai", "quantum annealing", "digital twin"]
+    # Later lookups hit the cache: no request per mention.
+    assert all(len(batch) > 1 for batch in requests)
+
+
+def test_stored_label_vectors_seed_the_cache():
+    requests = []
+
+    class Embedder:
+        def embed(self, texts, model):
+            requests.append(list(texts))
+            return [[0.0, 1.0] for _ in texts]
+
+    semantic = _semantic_with(Embedder())
+    assert semantic.seed([("Carbon capture", [3.0, 4.0]), ("", [1.0])]) == 1
+    assert semantic.seeded_model == "EmbeddingsGigaR"
+    assert semantic.embed(["carbon  capture"]) == [[0.6, 0.8]]
+    assert requests == [], "a preloaded label is not requested again"

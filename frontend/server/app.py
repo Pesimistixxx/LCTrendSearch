@@ -1,6 +1,6 @@
 """Local ingestion controls and the graph TOP-15 search.
 
-Trends are selected and ranked in ``lctrend.graph.ranking``; this module
+Trends are selected and ranked in ``lctrend.ranking.scoring``; this module
 only serves them.
 """
 
@@ -11,6 +11,7 @@ import importlib.util
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -38,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from lctrend.core import aio
 from lctrend.core.config import load_catalog, load_environment
 
-from .jobs import MAX_WORKERS, default_workers
+from .jobs import MAX_WORKERS, _provider_factory, default_workers
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,23 @@ class CrawlRequest(BaseModel):
     @classmethod
     def clean_topic(cls, value: str) -> str:
         return value.strip()
+
+
+class TopicRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    direction: str = Field(min_length=1, max_length=500)
+    count: int = Field(default=10, ge=1, le=30)
+    # Queue a crawl per proposed topic right away (else only propose).
+    queue: bool = False
+    limit: Optional[int] = Field(default=None, ge=1, le=10000)
+
+    @field_validator("direction")
+    @classmethod
+    def clean_direction(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("direction must not be empty")
+        return value
 
 
 # The UI is local: a request naming another host is a DNS-rebinding or
@@ -213,9 +231,20 @@ async def _read_graph() -> dict:
         return await store.read_temporal_data()
 
 
-def _status() -> dict:
-    """Read-only readiness; never return secrets or call a language model."""
-    load_environment()
+# The page polls readiness every few seconds; a fresh Neo4j driver per poll
+# cost a TCP+TLS handshake each time (G-7). The result is reused briefly.
+NEO4J_STATUS_TTL_SECONDS = 15.0
+_neo4j_status: dict = {}
+
+
+def _neo4j_ready() -> dict:
+    key = (
+        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        os.getenv("NEO4J_USER", "neo4j"),
+    )
+    cached = _neo4j_status.get(key)
+    if cached and time.monotonic() - cached[0] < NEO4J_STATUS_TTL_SECONDS:
+        return dict(cached[1])
     neo = {"available": False, "message": "Neo4j недоступен"}
     try:
         from lctrend.graph.store import GraphStore
@@ -234,6 +263,15 @@ def _status() -> dict:
     except Exception as exc:
         # Polled every few seconds by the page: keep it out of the console.
         logger.debug("Neo4j status check failed: %s", exc)
+    _neo4j_status.clear()
+    _neo4j_status[key] = (time.monotonic(), dict(neo))
+    return neo
+
+
+def _status() -> dict:
+    """Read-only readiness; never return secrets or call a language model."""
+    load_environment()
+    neo = _neo4j_ready()
     catalog = load_catalog("llm")
     provider_name = os.getenv(
         "LLM_PROVIDER", catalog.get("provider", "openai_compatible")
@@ -265,6 +303,9 @@ def _status() -> dict:
         llm.update(
             configured=True,
             models=provider.models,
+            # Task routes pick models automatically; the settings form must
+            # not pin the current extract model by saving it back.
+            routes=bool(getattr(provider, "short_packet_chars", 0)),
             base_url=provider.base_url,
             message=(
                 "Подключение настроено; доступ к модели проверяется "
@@ -509,7 +550,7 @@ def create_app(
         except ValueError:
             raise HTTPException(422, "date: ожидается YYYY-MM-DD") from None
         if app.state.search is None:
-            from lctrend.graph.search import SearchService
+            from lctrend.ranking.search import SearchService
 
             app.state.search = SearchService(_read_graph)
         try:
@@ -539,6 +580,39 @@ def create_app(
             return known(
                 get_crawls().create, topic=body.topic, limit=body.limit
             )
+
+    @app.post("/api/ingest/topics/suggest")
+    async def suggest_crawl_topics(body: TopicRequest):
+        """The model proposes search topics; optionally queue them.
+
+        Crawls run one at a time, so queued topics wait their turn.
+        """
+        from lctrend.ingest.topics import suggest_topics
+        from lctrend.llm.client import LLMError
+
+        crawls = get_crawls()
+        exclude = [item.get("topic") or "" for item in crawls.list_crawls()]
+        factory = getattr(app.state.manager, "_provider_factory", None)
+        try:
+            provider = await aio.call(factory or _provider_factory)
+            topics = await suggest_topics(
+                provider, body.direction, body.count, exclude
+            )
+        except LLMError as exc:
+            logger.warning("Topic suggestion failed: %s", exc.code)
+            raise HTTPException(
+                409 if exc.code == "configuration" else 502,
+                f"Модель не предложила темы ({exc.code})",
+            ) from None
+        created = []
+        if body.queue:
+            with settings_lock:
+                for topic in topics:
+                    crawl = known(
+                        crawls.create, topic=topic["query"], limit=body.limit
+                    )
+                    created.append(crawl["crawl_id"])
+        return {"topics": topics, "crawl_ids": created}
 
     @app.get("/api/ingest/crawls/{crawl_id}")
     def crawl(crawl_id: str):

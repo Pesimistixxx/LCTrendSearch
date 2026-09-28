@@ -7,6 +7,7 @@ The caller publishes its validated result to Neo4j.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -170,9 +171,81 @@ async def _concept_embeddings(
         "embedded_concepts": len(chosen),
         "candidates": candidates,
     }
+    if getattr(semantic, "decision_failure", None):
+        # Vectors are stored; only the cross-encoder candidates are missing.
+        metadata["semantic"]["decision_error"] = semantic.decision_failure
     return {
         concept.concept_id: vector for concept, vector in zip(chosen, vectors)
     }, model
+
+
+async def _evidence_embeddings(
+    document: DocumentEnvelope,
+    assertions: list,
+    economic: list,
+    semantic: Any,
+    metadata: dict,
+) -> dict[str, list[float]]:
+    """Vectors of the chunks that accepted claims quote.
+
+    Only evidence is embedded: it is the text the graph vouches for, and it
+    keeps the cost bounded (full texts have hundreds of chunks).
+    """
+    limit = int(
+        load_catalog("pipeline")
+        .get("graph_context", {})
+        .get("evidence_embedding_max_chunks", 0)
+    )
+    embed = getattr(semantic, "embed", None)
+    status = metadata.get("semantic", {}).get("status")
+    if embed is None or not limit or status != "ok":
+        return {}
+    texts = {chunk.chunk_id: chunk.text for chunk in document.chunks}
+    chosen = list(
+        dict.fromkeys(
+            [
+                span.chunk_id
+                for assertion in assertions
+                if assertion.status == "accepted"
+                for span in assertion.evidence
+            ]
+            + [item.chunk_id for item in economic]
+        )
+    )
+    chosen = [chunk_id for chunk_id in chosen if texts.get(chunk_id)][:limit]
+    if not chosen:
+        return {}
+    vectors = await asyncio.to_thread(
+        embed, [texts[chunk_id] for chunk_id in chosen], False
+    )
+    if vectors is None:
+        metadata["semantic"]["evidence_error"] = getattr(
+            semantic, "failure", None
+        )
+        return {}
+    metadata["semantic"]["embedded_evidence_chunks"] = len(chosen)
+    return dict(zip(chosen, vectors))
+
+
+def _semantic_reader(reader, semantic):
+    """Give graph search the query vector when the store can use it."""
+    embed = getattr(semantic, "embed", None)
+    if reader is None or embed is None:
+        return reader
+    try:
+        accepts = "query_vector" in inspect.signature(reader).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    if not accepts:
+        return reader
+
+    async def read(**kwargs):
+        vectors = await asyncio.to_thread(embed, [kwargs["query"]], False)
+        if vectors:
+            kwargs["query_vector"] = vectors[0]
+        return await resolve(reader(**kwargs))
+
+    return read
 
 
 def _pending_claims(requests) -> Any:
@@ -444,7 +517,7 @@ async def process_document(
             semantic,
             event,
             log,
-            context_reader,
+            _semantic_reader(context_reader, semantic),
         )
     finally:
         CALL_LOG.reset(token)
@@ -586,9 +659,7 @@ async def _process_document(
             # early packet's context rounds must not starve the rest. A
             # budget below that minimum cannot cover all packets anyway.
             reserved = (
-                2 * len(queue)
-                if budget.limit >= 2 * len(plan.packets)
-                else 0
+                2 * len(queue) if budget.limit >= 2 * len(plan.packets) else 0
             )
             for context_round in range(settings.max_context_rounds):
                 if (
@@ -1092,6 +1163,14 @@ async def _process_document(
     embeddings, embedding_model = await _concept_embeddings(
         concepts, resolutions, semantic, metadata
     )
+    economic = extract_economic_evidence(
+        document.chunks, list(mentions.values()), concepts, resolutions
+    ) + economic_evidence_from_assertions(
+        document, list(assertions.values()), concepts
+    )
+    chunk_embeddings = await _evidence_embeddings(
+        document, list(assertions.values()), economic, semantic, metadata
+    )
     result = ExtractionResult(
         document_version_id=document.document_version_id,
         run=run,
@@ -1099,13 +1178,9 @@ async def _process_document(
         concepts=concepts,
         resolutions=resolutions,
         assertions=list(assertions.values()),
-        economic_evidence=extract_economic_evidence(
-            document.chunks, list(mentions.values()), concepts, resolutions
-        )
-        + economic_evidence_from_assertions(
-            document, list(assertions.values()), concepts
-        ),
+        economic_evidence=economic,
         concept_embeddings=embeddings,
+        chunk_embeddings=chunk_embeddings,
         embedding_model=embedding_model,
     )
     validate_extraction(document, result)

@@ -25,6 +25,7 @@ export const api = {
   crawls: () => request('/crawls'),
   crawl: id => request(`/crawls/${encodeURIComponent(id)}`),
   createCrawl: (topic, limit) => request('/crawls', { method: 'POST', body: JSON.stringify({ topic, limit }) }),
+  suggestTopics: (direction, count, queue, limit) => request('/topics/suggest', { method: 'POST', body: JSON.stringify({ direction, count, queue, limit }) }),
   pauseCrawl: id => request(`/crawls/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
   resumeCrawl: id => request(`/crawls/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   retryFailedCrawl: id => request(`/crawls/${encodeURIComponent(id)}/retry-failed`, { method: 'POST' }),

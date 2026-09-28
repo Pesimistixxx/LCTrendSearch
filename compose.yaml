@@ -20,8 +20,6 @@ services:
     # Includes OPENALEX_API_KEY and OPENALEX_MAILTO for server-side requests.
     env_file: .env
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
       LCTREND_SETTINGS_FILE: /app/artifacts/ingestion/settings.env
       HF_HOME: /app/model-cache/huggingface
       TORCH_HOME: /app/model-cache/torch
@@ -32,9 +30,6 @@ services:
       - ingestion_ledger:/app/artifacts/ingestion/crawl
       - ./logs:/app/logs
       - model_cache:/app/model-cache
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
@@ -43,8 +38,11 @@ services:
       start_period: 30s
       retries: 12
 
+  # No code reads Postgres yet (audit H-2): it starts only on request,
+  # `docker compose --profile postgres up`, and no longer blocks the stack.
   postgres:
     image: postgres:16-alpine
+    profiles: ["postgres"]
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     environment:

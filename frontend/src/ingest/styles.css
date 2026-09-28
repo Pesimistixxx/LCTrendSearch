@@ -7,6 +7,12 @@
 .ingest h2 { font: 600 20px var(--sans); margin: 0; }
 .ingest h3 { font-size: 15px; margin: 18px 0 8px; }
 .ingest p { margin: 10px 0; }
+.ingest .ai-topics { padding: 24px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); margin: 20px 0; }
+.ingest .ai-topics h2 { margin: 0 0 6px; font-size: 18px; }
+.ingest .ai-topics .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ingest .suggested { margin: 16px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+.ingest .suggested span { color: var(--muted); }
+.ingest textarea.topics { display: block; width: 100%; padding: 10px 12px; margin-top: 7px; border: 1px solid var(--line-hi); border-radius: 10px; background: var(--bg2); color: var(--text); font: inherit; resize: vertical; box-sizing: border-box; }
 .ingest form, .ingest .settings, .ingest .run { padding: 24px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); margin: 20px 0; }
 .ingest label { display: block; font-size: 14px; margin: 13px 0; }
 .ingest input, .ingest select { display: block; width: 100%; min-height: 44px; padding: 10px 12px; margin-top: 7px; border: 1px solid var(--line-hi); border-radius: 10px; background: var(--bg2); color: var(--text); font: inherit; }
@@ -44,4 +50,4 @@
 .ingest .chunks li small { color: var(--muted); }
 .ingest .chunks li.skipped p { opacity: .55; }
 @media (max-width: 760px) { .top-in { flex-wrap: wrap; gap: 12px; } .top-in > .search { order: 3; width: 100%; } }
-@media (max-width: 540px) { .ingest { padding: 24px 0 45px; } .ingest form, .ingest .settings, .ingest .run { padding: 16px; } .ingest .run-heading { align-items: flex-start; } .ingest .run-heading h2 { font-size: 17px; } .top-nav { gap: 0; font-size: 12px; } .top-nav a { padding: 7px; } }
+@media (max-width: 540px) { .ingest { padding: 24px 0 45px; } .ingest form, .ingest .settings, .ingest .run, .ingest .ai-topics { padding: 16px; } .ingest .run-heading { align-items: flex-start; } .ingest .run-heading h2 { font-size: 17px; } .top-nav { gap: 0; font-size: 12px; } .top-nav a { padding: 7px; } }

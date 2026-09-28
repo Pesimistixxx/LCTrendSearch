@@ -656,3 +656,32 @@ def test_old_upload_folders_are_swept_unless_a_job_reads_them(tmp_path):
     active = {str((busy / "paper.txt").resolve())}
     assert _sweep_uploads(tmp_path, active, 3600) == 1
     assert not old.exists() and busy.exists() and fresh.exists()
+
+
+def test_neo4j_readiness_is_reused_between_polls(monkeypatch):
+    from frontend.server import app as app_module
+    from lctrend.graph import store as store_module
+
+    checks = []
+
+    class Store:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def verify_connectivity(self):
+            checks.append(1)
+
+    monkeypatch.setattr(store_module, "GraphStore", Store)
+    monkeypatch.setattr(app_module, "_neo4j_status", {})
+    assert app_module._neo4j_ready()["available"] is True
+    assert app_module._neo4j_ready()["available"] is True
+    assert len(checks) == 1, "a poll within the TTL reuses the result"
+    monkeypatch.setattr(app_module, "NEO4J_STATUS_TTL_SECONDS", 0.0)
+    app_module._neo4j_ready()
+    assert len(checks) == 2

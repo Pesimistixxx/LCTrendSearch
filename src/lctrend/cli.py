@@ -17,7 +17,7 @@ from uuid import uuid4
 from .core.aio import resolve
 from .core.config import load_catalog, load_environment
 from .core.logging_config import setup_logging
-from .extraction.processing import process_material
+from .extraction.processing import process_material, seed_semantic
 from .extraction.resolver import ConceptRegistry
 from .graph.store import GraphStore
 from .graph.subgraphs import sample_subgraph, write_subgraph_rows
@@ -110,6 +110,7 @@ async def _write_ingested_async(
 ) -> None:
     result = None
     if extract:
+        await seed_semantic(store)
         result = await process_material(
             document,
             mode=extractor,
@@ -192,7 +193,8 @@ def _crawl_run(platform: str, query: str, filter: Optional[str] = None):
     for part in (filter or "").split(","):
         key, separator, value = part.partition(":")
         if separator and key in (
-            "from_publication_date", "to_publication_date"
+            "from_publication_date",
+            "to_publication_date",
         ):
             bounds[key] = date.fromisoformat(value).isoformat()
     return {
@@ -246,6 +248,7 @@ async def _job_registry(store, extract: bool):
     """One in-memory registry for a whole crawl, read from the graph once."""
     if not extract:
         return None
+    await seed_semantic(store)
     return ConceptRegistry(await resolve(store.read_concepts()))
 
 
@@ -389,8 +392,9 @@ def _crawl_openalex(
         crawl_run = _crawl_run("openalex", query, filter)
         # Number of works matching the search, as reported by OpenAlex.
         total = None
-        async with _opened(_store()) as store, _crawl_audit(
-            store, crawl_run, checkpoint
+        async with (
+            _opened(_store()) as store,
+            _crawl_audit(store, crawl_run, checkpoint),
         ):
             await resolve(store.ensure_schema())
             registry = await _job_registry(store, extract)
@@ -500,6 +504,19 @@ def _crawl_openalex(
     asyncio.run(crawl())
 
 
+def _env_workers(default: int) -> int:
+    """LCTREND_WORKERS, or the default when it is empty or not a number:
+    a typo in .env must not break every command, --help included (H-8)."""
+    value = os.getenv("LCTREND_WORKERS", "").strip()
+    try:
+        return int(value) if value else int(default)
+    except ValueError:
+        logger.warning(
+            "LCTREND_WORKERS=%r is not a number; using %s", value, default
+        )
+        return int(default)
+
+
 def _uniform_sample(
     names: List[str], limit: int, phase: float = 0.0
 ) -> List[str]:
@@ -562,8 +579,9 @@ def _crawl_pypi(
             "pypi",
             json.dumps(requested_packages or {"sample_phase": sample_phase}),
         )
-        async with _opened(_store()) as store, _crawl_audit(
-            store, crawl_run, checkpoint
+        async with (
+            _opened(_store()) as store,
+            _crawl_audit(store, crawl_run, checkpoint),
         ):
             await resolve(store.ensure_schema())
             registry = await _job_registry(store, extract)
@@ -636,6 +654,7 @@ def main() -> None:
     load_environment()
     log_path = setup_logging()
     from .core.catalog_validation import validate_catalogs
+
     validate_catalogs()
     settings = load_catalog("runtime")
     default_extractor = "llm"
@@ -747,10 +766,7 @@ def main() -> None:
     crawl_command.add_argument(
         "--workers",
         type=int,
-        default=int(
-            os.getenv("LCTREND_WORKERS", "").strip()
-            or settings.get("ingestion", {}).get("workers", 1)
-        ),
+        default=_env_workers(settings.get("ingestion", {}).get("workers", 1)),
         help="Works processed concurrently (LLM, PDF, Neo4j), 1..16",
     )
 
@@ -911,6 +927,17 @@ def main() -> None:
         "--apply", action="store_true", help="Write keys and run the merges"
     )
 
+    embed_command = subparsers.add_parser(
+        "embed-concepts",
+        help="Compute missing label vectors of stored concepts (novelty and "
+        "taxonomy read them)",
+    )
+    embed_command.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute every vector, not only missing or other-model ones",
+    )
+
     subparsers.add_parser("init-graph", help="Create Neo4j constraints")
     args = parser.parse_args()
     logger.debug("Command %s started, log file: %s", args.command, log_path)
@@ -935,6 +962,42 @@ async def _graph(action):
 
 async def _ensure_schema(store):
     await resolve(store.ensure_schema())
+
+
+async def _embed_concepts(store, force=False):
+    """Backfill label vectors, e.g. for documents processed while the
+    embedding endpoint was unavailable. A vector is dated by its concept's
+    first appearance in snapshots, so a late backfill changes no history.
+    """
+    from .extraction.processing import _semantic_deduplicator
+
+    semantic = _semantic_deduplicator()
+    model = semantic.embedding_model_name
+    kinds = list(load_catalog("resolver")["semantic"]["embedded_kinds"])
+    pending = await resolve(store.read_concepts_to_embed(kinds, model, force))
+    written = 0
+    for start in range(0, len(pending), semantic.batch_size):
+        batch = pending[start : start + semantic.batch_size]
+        vectors = await asyncio.to_thread(
+            semantic.embed, [row["label"] for row in batch]
+        )
+        if vectors is None:
+            raise RuntimeError(
+                "Embedding endpoint unavailable "
+                f"({semantic.failure}); {written} vectors written"
+            )
+        await resolve(
+            store.write_concept_embeddings(
+                [
+                    {**row, "vector": vector}
+                    for row, vector in zip(batch, vectors)
+                ],
+                model,
+            )
+        )
+        written += len(batch)
+        logger.info("Embedded %d/%d concepts", written, len(pending))
+    return {"model": model, "pending": len(pending), "embedded": written}
 
 
 async def _temporal_data(store, as_known=False):
@@ -996,10 +1059,15 @@ def _run(args: argparse.Namespace) -> None:
             _graph(lambda store: apply_key_migration(store, args.apply))
         )
         print(
-            json.dumps(
-                plan.summary(args.apply), ensure_ascii=False, indent=2
-            )
+            json.dumps(plan.summary(args.apply), ensure_ascii=False, indent=2)
         )
+        return
+
+    if args.command == "embed-concepts":
+        summary = asyncio.run(
+            _graph(lambda store: _embed_concepts(store, args.force))
+        )
+        print(json.dumps(summary, ensure_ascii=False))
         return
 
     if args.command == "merge-concepts":
@@ -1079,7 +1147,7 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "backtest-top15":
-        from .graph.ranking import backtest
+        from .ranking.scoring import backtest
 
         if min(args.horizon_years, args.top_k, args.trials) < 1:
             raise ValueError("horizon, top-k and trials must be positive")

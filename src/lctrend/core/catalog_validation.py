@@ -266,6 +266,18 @@ def _pipeline(catalog: Mapping) -> None:
         "max_search_chars",
     ):
         _number(context[key], "pipeline.graph_context." + key, 1, integer=True)
+    _number(
+        context["evidence_embedding_max_chunks"],
+        "pipeline.graph_context.evidence_embedding_max_chunks",
+        0,
+        integer=True,
+    )
+    _number(
+        context["semantic_min_score"],
+        "pipeline.graph_context.semantic_min_score",
+        -1,
+        1,
+    )
     for extension, spec in catalog["file_formats"].items():
         if not extension.startswith("."):
             _fail(
@@ -485,6 +497,30 @@ def _models(catalogs: Mapping) -> None:
         )
     for key, value in llm["timeouts_seconds"].items():
         _number(value, "llm.timeouts_seconds." + key, 0.001)
+    for section, path in ((llm, "llm"), (llm["gigachat"], "llm.gigachat")):
+        routes = section.get("model_routes")
+        if routes is None:
+            continue
+        routes = _mapping(routes, path + ".model_routes")
+        _number(
+            routes.get("short_packet_chars", 0),
+            path + ".model_routes.short_packet_chars",
+            0,
+            integer=True,
+        )
+        for key in ("extract", "extract_short", "review"):
+            if key not in routes:
+                continue
+            _strings(routes[key], f"{path}.model_routes.{key}")
+            unknown = set(routes[key]) - set(section["model_ladder"])
+            if unknown:
+                # A typo would silently send calls to a model the account
+                # may not have.
+                _fail(
+                    f"{path}.model_routes.{key}",
+                    "names models outside model_ladder: "
+                    + ", ".join(sorted(unknown)),
+                )
 
 
 def _analytics(catalogs: Mapping) -> None:
@@ -614,12 +650,8 @@ def _ranking(catalogs: Mapping) -> None:
         _fail("ranking.score.weights", "must name at least one feature")
     for name, weight in weights.items():
         _number(weight, "ranking.score.weights." + name, -math.inf)
-        _text(
-            score["labels"].get(name), "ranking.score.labels." + name
-        )
-    _number(
-        ranking["api"]["cache_seconds"], "ranking.api.cache_seconds", 0
-    )
+        _text(score["labels"].get(name), "ranking.score.labels." + name)
+    _number(ranking["api"]["cache_seconds"], "ranking.api.cache_seconds", 0)
     for key, value in ranking["explanation"].items():
         _number(value, "ranking.explanation." + key, 1, integer=True)
     backtest = ranking["backtest"]

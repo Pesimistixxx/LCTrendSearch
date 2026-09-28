@@ -372,3 +372,63 @@ def test_related_chunk_search_uses_full_text_indexes_with_literal_phrase():
     schema = resource_path("schema", ".cypher").read_text(encoding="utf-8")
     assert "CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS" in schema
     assert "CREATE FULLTEXT INDEX document_title IF NOT EXISTS" in schema
+
+
+def test_related_context_adds_evidence_vector_search_when_given_a_vector():
+    rows = [
+        {
+            "chunk_id": "ru",
+            "text": "Большие языковые модели",
+            "document_id": "d1",
+            "document_version_id": "v1",
+            "score": 0.81234,
+        }
+    ]
+    store, session = store_with_rows(rows)
+    result = asyncio.run(
+        store.read_related_chunks(
+            "LLM", "current", 3, 3, 1000, query_vector=[1.0, 0.0]
+        )
+    )
+    assert result[0]["similarity"] == 0.8123
+    query, parameters = session.queries[0]
+    assert "db.index.vector.queryNodes" in query
+    assert "'chunk_embedding'" in query
+    assert parameters["vector"] == [1.0, 0.0]
+    assert parameters["min_score"] == 0.75
+    # Without a vector the query stays literal.
+    asyncio.run(store.read_related_chunks("LLM", "current", 3, 3, 1000))
+    assert "vector.queryNodes" not in session.queries[-1][0]
+
+
+def test_related_context_falls_back_to_literal_search_without_index():
+    class FailingVectorSession(Session):
+        def run(self, query, **parameters):
+            if "vector.queryNodes" in query:
+                raise RuntimeError("no such index")
+            return super().run(query, **parameters)
+
+    session = FailingVectorSession(
+        [
+            {
+                "chunk_id": "c",
+                "text": "LLM",
+                "document_id": "d",
+                "document_version_id": "v",
+            }
+        ]
+    )
+
+    class Driver:
+        def session(self, **kwargs):
+            return session
+
+    store = object.__new__(GraphStore)
+    store._driver, store._database = Driver(), "offline"
+    result = asyncio.run(
+        store.read_related_chunks(
+            "LLM", "current", 3, 3, 1000, query_vector=[1.0]
+        )
+    )
+    assert [row["chunk_id"] for row in result] == ["c"]
+    assert "similarity" not in result[0]

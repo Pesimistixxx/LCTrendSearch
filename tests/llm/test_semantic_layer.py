@@ -192,3 +192,63 @@ def test_llm_runs_share_one_semantic_layer_unless_disabled(monkeypatch):
     assert len(created) == 1
     monkeypatch.setenv("DEDUP_IN_LLM", "0")
     assert processing._llm_semantic() is None
+
+
+def test_evidence_chunks_of_accepted_claims_are_embedded_and_stored():
+    result = run(semantic())
+    assert set(result.chunk_embeddings) == {"c1"}
+    assert result.run.metadata["semantic"]["embedded_evidence_chunks"] == 1
+
+    tx = Transaction()
+    asyncio.run(GraphStore._write_extraction(tx, document(), result))
+    stored = next(
+        parameters
+        for query, parameters in tx.queries
+        if "MATCH (c:Chunk {chunk_id: row.chunk_id})" in query
+        and "c.embedding = row.vector" in query
+    )
+    assert [row["chunk_id"] for row in stored["rows"]] == ["c1"]
+    assert stored["model"] == "EmbeddingsGigaR"
+
+
+def test_no_evidence_vectors_without_the_semantic_layer():
+    assert run(semantic(fail=True)).chunk_embeddings == {}
+
+
+def test_graph_search_receives_the_query_vector():
+    from lctrend.llm.pipeline import _semantic_reader
+
+    seen = {}
+
+    async def reader(
+        query,
+        exclude_version_id,
+        limit_documents,
+        limit_chunks,
+        max_chars,
+        query_vector=None,
+    ):
+        seen.update(query=query, vector=query_vector)
+        return []
+
+    wrapped = _semantic_reader(reader, semantic())
+    asyncio.run(
+        wrapped(
+            query="carbon capture",
+            exclude_version_id="v",
+            limit_documents=1,
+            limit_chunks=1,
+            max_chars=100,
+        )
+    )
+    assert seen == {"query": "carbon capture", "vector": [1.0, 0.0]}
+
+
+def test_graph_search_without_vector_support_is_left_alone():
+    from lctrend.llm.pipeline import _semantic_reader
+
+    async def reader(query, **kwargs):
+        return []
+
+    assert _semantic_reader(reader, semantic()) is reader
+    assert _semantic_reader(reader, None) is reader

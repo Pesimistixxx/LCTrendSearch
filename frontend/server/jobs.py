@@ -57,8 +57,14 @@ def _write_json(path: Path, value: Any) -> None:
     temporary = Path(filename)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            # Compact: a 5000-document job is rewritten on every flush and
+            # indentation alone made it about a third larger (G-6).
             json.dump(
-                value, output, ensure_ascii=False, indent=2, allow_nan=False
+                value,
+                output,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
             )
             output.flush()
             os.fsync(output.fileno())
@@ -901,9 +907,11 @@ class JobManager:
             )
             registry = None
             if requires_models and job["mode"] != "none":
+                from lctrend.extraction.processing import seed_semantic
                 from lctrend.extraction.resolver import ConceptRegistry
 
                 # Read once; the job keeps it current as documents resolve.
+                await seed_semantic(store)
                 registry = ConceptRegistry(await aio.call(store.read_concepts))
                 logger.info(
                     "Job %s: %d registry concepts", job_id, len(registry)

@@ -257,3 +257,13 @@ def test_strict_mode_dates_vectors_by_their_computation():
     assert rows["t3"]["semantic_novelty"] is not None
     strict = TemporalCorpus(embedded_today(), as_known=True)
     assert strict.embeddings_at(date(2020, 1, 1)) == {}
+
+
+def test_vectors_of_a_minority_model_are_not_mixed_in():
+    data = corpus_data()
+    for row in data["technologies"]:
+        row["embedding_model"] = "EmbeddingsGigaR"
+    # A vector of another model, even of the same size, is not comparable.
+    data["technologies"][0]["embedding_model"] = "all-MiniLM-L6-v2"
+    corpus = TemporalCorpus(data)
+    assert set(corpus.embeddings_at(date(2020, 1, 1))) == {"b", "c"}

@@ -39,6 +39,9 @@ from ..core.config import load_catalog
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 STAGES = frozenset(("extract", "review"))
+# Ladder key of short extraction packets (abstracts) in llm.json
+# model_routes; the stage and its output limit stay "extract".
+SHORT_EXTRACT_ROUTE = "extract_short"
 # Calls of the document being processed. One provider serves concurrent
 # documents, so each document task collects its own call audit here.
 CALL_LOG: ContextVar[Optional[list]] = ContextVar("llm_call_log", default=None)
@@ -406,7 +409,21 @@ class JsonLLM:
             "model_ladder",
         )
         self.ladders: Dict[str, list] = {}
+        # Routes spread calls over models by task when nothing is pinned:
+        # an explicit model or ladder (argument, env) always wins.
+        pinned_any = bool(
+            overrides
+            or self.model
+            or os.getenv("LLM_MODEL_LADDER")
+            or any(os.getenv(f"LLM_{s.upper()}_MODEL") for s in STAGES)
+        )
+        routes = self.config.get("model_routes") if not pinned_any else None
+        self.short_packet_chars = 0
+        if routes:
+            self._route_ladders(routes, ladder)
         for stage in STAGES:
+            if stage in self.ladders:
+                continue
             pinned = (
                 overrides.get(stage)
                 or os.getenv(f"LLM_{stage.upper()}_MODEL")
@@ -667,6 +684,43 @@ class JsonLLM:
         """Environment values are read at construction; secrets not logged."""
         return cls(**kwargs)
 
+    def _route_ladders(self, routes: Any, ladder: list) -> None:
+        """Ladders per route; each ends with every other known model, so a
+        route whose models run out of tokens falls through to the rest."""
+        if not isinstance(routes, dict):
+            raise LLMError("configuration", "model_routes must be an object")
+        short = routes.get("short_packet_chars", 0)
+        if isinstance(short, bool) or not isinstance(short, int) or short < 0:
+            raise LLMError(
+                "configuration",
+                "model_routes.short_packet_chars must be a non-negative int",
+            )
+        self.short_packet_chars = short
+        for key in (*STAGES, SHORT_EXTRACT_ROUTE):
+            if key not in routes:
+                continue
+            names = _names(routes[key], f"model_routes.{key}")
+            if not names:
+                raise LLMError(
+                    "configuration", f"model_routes.{key} must name a model"
+                )
+            self.ladders[key] = [
+                *names,
+                *(name for name in ladder if name not in names),
+            ]
+
+    def _route(self, stage: str, payload: Dict[str, Any]) -> str:
+        """Ladder key of a call: short extraction packets (abstracts) take
+        their own, usually lighter, route."""
+        if (
+            stage == "extract"
+            and SHORT_EXTRACT_ROUTE in self.ladders
+            and self.short_packet_chars
+            and len(_json(payload)) <= self.short_packet_chars
+        ):
+            return SHORT_EXTRACT_ROUTE
+        return stage
+
     @property
     def models(self) -> Dict[str, Optional[str]]:
         """Model each stage would use now; changes as models are retired."""
@@ -840,10 +894,13 @@ class JsonLLM:
         self.balance_status = "ok"
         logger.debug("Token balance: %s", self.balance)
 
-    async def _select(self, stage: str, client: httpx.AsyncClient) -> str:
+    async def _select(
+        self, stage: str, client: httpx.AsyncClient, route: str = ""
+    ) -> str:
+        route = route or stage
         if self.balance_enabled:
             await self._refresh_balance(client)
-            for model in self.ladders[stage]:
+            for model in self.ladders[route]:
                 if (
                     model in self.balance
                     and self.balance[model]
@@ -852,14 +909,14 @@ class JsonLLM:
                     self._retire(
                         model, "low_balance", balance=self.balance[model]
                     )
-        model = self.models[stage]
+        model = self.models[route]
         if model is None:
             raise LLMError(
                 "models_exhausted",
                 "Every model in the ladder is exhausted or unavailable: "
                 + ", ".join(
                     f"{name}={self.retired[name]}"
-                    for name in self.ladders[stage]
+                    for name in self.ladders[route]
                 ),
             )
         return model
@@ -920,13 +977,14 @@ class JsonLLM:
         stage: str = "extract",
     ) -> T:
         _stage(stage)
+        route = self._route(stage, payload)
         async with AsyncExitStack() as stack:
             client = await self._open(stack)
             while True:
                 try:
-                    model = await self._select(stage, client)
+                    model = await self._select(stage, client, route)
                     return await self._attempt(
-                        client, schema, system, payload, stage, model
+                        client, schema, system, payload, stage, model, route
                     )
                 except LLMError as exc:
                     if exc.code not in (
@@ -934,7 +992,8 @@ class JsonLLM:
                         "model_unavailable",
                     ):
                         raise
-                    self._retire(model, exc.code, stage=stage)
+                    # Retired for every route: its token package is shared.
+                    self._retire(model, exc.code, stage=stage, route=route)
 
     async def _attempt(
         self,
@@ -944,7 +1003,9 @@ class JsonLLM:
         payload: Dict[str, Any],
         stage: str,
         model: str,
+        route: str = "",
     ) -> T:
+        route = route or stage
         schema_json = schema.model_json_schema()
         strict = self.config.get("json_schema_strict") is True
         if self.provider == "gigachat" and strict:
@@ -988,8 +1049,9 @@ class JsonLLM:
             if self.provider == "gigachat"
             else "json_llm",
             "stage": stage,
+            "route": route,
             "model": model,
-            "ladder_position": self.ladders[stage].index(model),
+            "ladder_position": self.ladders[route].index(model),
             "schema": schema.__name__,
             "prompt_sha256": _hash(body["messages"]),
             "request_sha256": request_hash,

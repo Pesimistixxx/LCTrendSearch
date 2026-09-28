@@ -32,6 +32,8 @@ export default function Ingestion() {
   const [crawlId, setCrawlId] = useState(''), [crawl, setCrawl] = useState(null), [topic, setTopic] = useState('')
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0), [limit, setLimit] = useState('50')
+  const [direction, setDirection] = useState(''), [count, setCount] = useState('10')
+  const [suggested, setSuggested] = useState([]), [notice, setNotice] = useState('')
   useEffect(() => {
     let stopped = false, timer
     async function poll() {
@@ -51,11 +53,38 @@ export default function Ingestion() {
     return () => { stopped = true; clearTimeout(timer) }
   }, [crawlId, refresh])
 
+  // One line — one topic — one crawl; crawls run one after another.
+  const topics = [...new Map(topic.split('\n').map(line => line.trim()).filter(Boolean).map(line => [line.toLowerCase(), line])).values()]
+  const limitValue = limit ? Number(limit) : null
+  const limitValid = limit === '' || (Number(limit) >= 1 && Number(limit) <= 10000 && Number.isInteger(Number(limit)))
+  const queued = crawls.filter(item => item.status === 'queued').length
+
   async function upload(event) {
-    event.preventDefault(); setBusy(true); setError('')
+    event.preventDefault(); setBusy(true); setError(''); setNotice('')
     try {
-      const created = await api.createCrawl(topic.trim(), limit ? Number(limit) : null)
-      setCrawlId(created.crawl_id); setCrawl(created); setRefresh(value => value + 1)
+      const created = []
+      for (const item of topics.length ? topics : ['']) created.push(await api.createCrawl(item, limitValue))
+      if (!crawlId || !active) { setCrawlId(created[0].crawl_id); setCrawl(created[0]) }
+      setNotice(created.length > 1 ? `В очередь поставлено тем: ${created.length}. Обходы идут по одному.` : active ? 'Тема поставлена в очередь после текущего обхода.' : '')
+      setTopic(''); setSuggested([]); setRefresh(value => value + 1)
+    } catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+  async function suggest(queue) {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const result = await api.suggestTopics(direction.trim(), Number(count), queue, limitValue)
+      const found = result.topics || []
+      if (!found.length) { setNotice('Модель не предложила новых тем: все похожие уже собирались.'); return }
+      if (queue) {
+        setNotice(`В очередь поставлено тем: ${result.crawl_ids.length}. Обходы идут по одному.`)
+        if (!active && result.crawl_ids.length) setCrawlId(result.crawl_ids[0])
+        setRefresh(value => value + 1)
+      } else {
+        const lines = [...topics, ...found.map(item => item.query)]
+        setTopic([...new Map(lines.map(line => [line.toLowerCase(), line])).values()].join('\n'))
+      }
+      setSuggested(found)
     } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
@@ -75,14 +104,27 @@ export default function Ingestion() {
     <p className="status">База: {service ? service.neo4j?.available ? 'подключена' : 'недоступна' : 'проверяем'} · LLM: {service?.llm?.configured ? 'настроена' : 'нужна настройка'}</p>
     <p className="status">OpenAlex: {service?.sources?.openalex?.configured ? 'ключ настроен' : 'без ключа — ограниченный доступ'}</p>
     <form onSubmit={upload}>
-      <label>Тематика<input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Пусто — все настроенные направления" maxLength={1000} /></label>
+      <label>Темы — по одной на строку<textarea className="topics" rows={Math.min(12, Math.max(3, topics.length + 1))} value={topic} onChange={event => setTopic(event.target.value)} placeholder={'Пусто — все настроенные направления\nsodium-ion battery\nretrieval-augmented generation'} maxLength={20000} /></label>
       <label>Лимит на направление и источник<input type="number" min="1" max="10000" value={limit} onChange={event => setLimit(event.target.value)} placeholder="Пусто — вся выдача" /></label>
-      <p className="hint">{topic.trim() ? 'Одно направление — введённая тема.' : `Пустая тема — направления: ${(service?.directions || []).join(', ') || 'из sources.json'}.`} {limit ? `До ${limit} статей OpenAlex и до ${limit} репозиториев GitHub на каждое направление; PyPI-пакеты из README сверх лимита.` : 'Без лимита OpenAlex идёт до конца выдачи — по широкой теме это тысячи статей.'}</p>
+      <p className="hint">{topics.length > 1 ? `${topics.length} тем — ${topics.length} обходов в очереди, по одному за раз.` : topics.length ? 'Одно направление — введённая тема.' : `Пустая тема — направления: ${(service?.directions || []).join(', ') || 'из sources.json'}.`} {limit ? `До ${limit} статей OpenAlex и до ${limit} репозиториев GitHub на каждое направление; PyPI-пакеты из README сверх лимита.` : 'Без лимита OpenAlex идёт до конца выдачи — по широкой теме это тысячи статей.'}</p>
       <p className="hint">Отправляем тему в API OpenAlex и GitHub, получаем карточки статей и репозитории, затем извлекаем текст; пакеты PyPI берём из ссылок в README.</p>
       <p className="pipeline">Текст → LLM: извлечение и проверка → Neo4j</p>
-      <button type="submit" disabled={busy || !ready || active || (limit !== '' && !(Number(limit) >= 1 && Number(limit) <= 10000 && Number.isInteger(Number(limit))))}>{busy ? 'Подождите…' : 'Собирать'}</button>
+      <button type="submit" disabled={busy || !ready || !limitValid}>{busy ? 'Подождите…' : active ? 'Добавить в очередь' : topics.length > 1 ? `Собирать ${topics.length} тем` : 'Собирать'}</button>
+      {queued > 0 && <p className="hint">В очереди обходов: {queued}.</p>}
       {!ready && service && <p className="hint">Перед загрузкой нужно подключить базу и настроить модели.{!service.pdf?.installed && ' Для получения PDF требуется модуль Docling.'}</p>}
     </form>
+    <section className="ai-topics">
+      <h2>Темы от ИИ</h2>
+      <p className="hint">Модель предлагает конкретные поисковые запросы вокруг направления и не повторяет уже собранные темы. Запрос к модели ждёт в общей очереди LLM, поэтому во время обработки может занять минуту.</p>
+      <label>Направление<input value={direction} onChange={event => setDirection(event.target.value)} placeholder="Например: накопители энергии для дата-центров" maxLength={500} /></label>
+      <label>Сколько тем<select value={count} onChange={event => setCount(event.target.value)}>{['5', '10', '15', '20', '30'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      <div className="actions">
+        <button type="button" className="secondary" disabled={busy || !direction.trim() || !service?.llm?.configured} onClick={() => suggest(false)}>Предложить темы</button>
+        <button type="button" disabled={busy || !direction.trim() || !ready || !limitValid} onClick={() => suggest(true)}>Предложить и сразу в очередь</button>
+      </div>
+      {suggested.length > 0 && <ul className="suggested">{suggested.map(item => <li key={item.query}><strong>{item.query}</strong>{item.why && <span> — {item.why}</span>}</li>)}</ul>}
+    </section>
+    {notice && <p className="status" role="status">{notice}</p>}
     <SourceSettings service={service} active={active} onSave={status => { setService(status); setRefresh(value => value + 1) }} />
     <Settings service={service} active={active} onSave={status => { setService(status); setRefresh(value => value + 1) }} />
     {error && <p className="error" role="alert">{error}</p>}
@@ -134,7 +176,7 @@ function Settings({ service, active, onSave }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [initialized, setInitialized] = useState(false)
   useEffect(() => {
     if (!service || initialized) return
-    setProvider(service.llm?.provider || 'openai_compatible'); setModel(service.llm?.models?.extract || '')
+    setProvider(service.llm?.provider || 'openai_compatible'); setModel(service.llm?.routes ? '' : service.llm?.models?.extract || '')
     setUrl(service.llm?.base_url || 'https://api.openai.com/v1'); setInitialized(true)
   }, [service, initialized])
   async function save(event) {
