@@ -712,7 +712,9 @@ class GraphStore:
         logger.debug("Document %s written", document.document_version_id)
 
     @staticmethod
-    async def _write_document(tx: Any, document: DocumentEnvelope) -> None:
+    async def _write_document(
+        tx: Any, document: DocumentEnvelope, publishing: bool = False
+    ) -> None:
         # Mutable metadata overwritten on a content-identical version needs
         # the current observation, never the earliest collection timestamp.
         observed = (
@@ -870,16 +872,52 @@ class GraphStore:
                 rows=batch,
             )
 
+        chunk_ids = [chunk.chunk_id for chunk in document.chunks]
+        if publishing:
+            # A new run replaces the chunk set: evidence on chunks that leave
+            # the version must go with them, not outlive the run that made
+            # it (extraction cleanup only sees the chunks still linked).
+            await _run(
+                tx,
+                """
+                MATCH (v:DocumentVersion {document_version_id: $version_id})
+                      -[:HAS_CHUNK]->(c:Chunk)
+                WHERE NOT c.chunk_id IN $chunk_ids
+                MATCH (c)-[r:MENTIONS]->()
+                DELETE r
+                """,
+                version_id=document.document_version_id,
+                chunk_ids=chunk_ids,
+            )
+            await _run(
+                tx,
+                """
+                MATCH (v:DocumentVersion {document_version_id: $version_id})
+                      -[:HAS_CHUNK]->(c:Chunk)
+                WHERE NOT c.chunk_id IN $chunk_ids
+                MATCH ()-[r:HAS_ECONOMIC_EVIDENCE|HAS_MATURITY_EVIDENCE]->(c)
+                DELETE r
+                """,
+                version_id=document.document_version_id,
+                chunk_ids=chunk_ids,
+            )
+        # An import without extraction (e.g. without the PDF this time)
+        # must not hide the chunks a published run's evidence stands on.
         await _run(
             tx,
             """
             MATCH (v:DocumentVersion {document_version_id: $version_id})
-                  -[active:HAS_CHUNK]->(c:Chunk)
+            WHERE $publishing OR NOT EXISTS {
+                MATCH (v)<-[:PROCESSED]-(run:ProcessingRun)
+                WHERE run.published = true OR run.status = 'succeeded'
+            }
+            MATCH (v)-[active:HAS_CHUNK]->(c:Chunk)
             WHERE NOT c.chunk_id IN $chunk_ids
             DELETE active
             """,
             version_id=document.document_version_id,
-            chunk_ids=[chunk.chunk_id for chunk in document.chunks],
+            chunk_ids=chunk_ids,
+            publishing=publishing,
         )
 
     async def ensure_vector_indexes(self, result: ExtractionResult) -> None:
@@ -983,7 +1021,9 @@ class GraphStore:
             status == "partial" and not existing.get("published")
         )
         if publish or not existing.get("count"):
-            await resolve(GraphStore._write_document(tx, document))
+            await resolve(
+                GraphStore._write_document(tx, document, publishing=publish)
+            )
         await resolve(
             GraphStore._write_extraction(tx, document, result, publish)
         )

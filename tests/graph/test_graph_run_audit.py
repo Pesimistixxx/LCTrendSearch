@@ -316,7 +316,7 @@ def test_processed_write_keeps_existing_chunks_on_incomplete_rerun(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc: calls.append(
+            lambda transaction, doc, publishing=False: calls.append(
                 ("document", transaction, doc)
             )
         ),
@@ -382,7 +382,9 @@ def test_document_and_extraction_share_one_execute_write_transaction(
         GraphStore,
         "_write_document",
         staticmethod(
-            lambda transaction, doc: writes.append(("document", transaction))
+            lambda transaction, doc, publishing=False: writes.append(
+                ("document", transaction)
+            )
         ),
     )
     monkeypatch.setattr(

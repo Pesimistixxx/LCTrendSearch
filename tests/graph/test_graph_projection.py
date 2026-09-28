@@ -628,3 +628,46 @@ def test_schema_is_ensured_once_per_process_and_graph(monkeypatch):
     assert len(statements) == once
     asyncio.run(open_store("bolt://b").ensure_schema())
     assert len(statements) == 2 * once
+
+
+def test_published_run_clears_evidence_of_chunks_leaving_the_version():
+    # D-2: HAS_CHUNK was cut before extraction cleanup, which only sees the
+    # chunks still linked, so evidence of dropped chunks outlived its run.
+    document = parse_openalex(
+        {
+            "id": "https://openalex.org/W1",
+            "title": "Example",
+            "abstract_inverted_index": {"Sensor": [0], "study": [1]},
+        }
+    )
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document, publishing=True))
+    statements = [" ".join(query.split()) for query, _ in tx.queries]
+    stale = [
+        index
+        for index, query in enumerate(statements)
+        if "WHERE NOT c.chunk_id IN $chunk_ids" in query
+    ]
+    kinds = [statements[index] for index in stale]
+    assert "MATCH (c)-[r:MENTIONS]->() DELETE r" in kinds[0]
+    assert "HAS_MATURITY_EVIDENCE" in kinds[1]
+    assert "DELETE active" in kinds[2]
+    assert tx.queries[stale[2]][1]["publishing"] is True
+
+
+def test_import_without_extraction_keeps_chunks_of_a_published_run():
+    # D-2: a re-import without the PDF unlinked the PDF chunks and hid the
+    # published run's mentions (50 visible mentions became 2).
+    document = parse_openalex({"id": "https://openalex.org/W1", "title": "X"})
+    tx = Transaction()
+    asyncio.run(GraphStore._write_document(tx, document))
+    statements = [" ".join(query.split()) for query, _ in tx.queries]
+    assert not any("[r:MENTIONS]" in query for query in statements)
+    unlink = next(
+        (query, parameters)
+        for query, parameters in zip(statements, (p for _, p in tx.queries))
+        if "DELETE active" in query
+    )
+    assert "WHERE $publishing OR NOT EXISTS" in unlink[0]
+    assert "run.published = true OR run.status = 'succeeded'" in unlink[0]
+    assert unlink[1]["publishing"] is False
