@@ -990,3 +990,88 @@ def test_restart_preserves_interrupted_publication_stage(tmp_path):
         )
     finally:
         restored.close(wait=True)
+
+
+def test_failed_page_lets_running_documents_finish(tmp_path):
+    # G-2: a 429 on the next page must not abandon paid extractions.
+    started = Barrier(3, timeout=5)
+
+    def fetch(query, cursor, per_page, mailto, filter):
+        if cursor == "*":
+            return {
+                "results": [
+                    {"id": f"https://openalex.org/W{i}", "title": f"P{i}"}
+                    for i in (1, 2)
+                ],
+                "meta": {"next_cursor": "next"},
+            }
+        started.wait()  # both documents are being processed
+        raise RuntimeError("HTTP 429")
+
+    def process(doc, **kwargs):
+        started.wait()
+        sleep(0.1)
+        return extraction(doc)
+
+    instance = manager(
+        tmp_path,
+        source_fetcher=fetch,
+        document_processor=process,
+        fulltext_attacher=lambda doc, payload: doc,
+    )
+    try:
+        final = finish(
+            instance, instance.create_openalex("sensors", 5, workers=2)
+        )
+        assert final["status"] == "failed"
+        assert [doc["status"] for doc in final["documents"]] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert len(instance.fixture_store.writes) == 2
+    finally:
+        instance.close(wait=True)
+
+
+def test_finished_job_has_only_terminal_documents(tmp_path):
+    instance = manager(tmp_path)
+    try:
+        job = {
+            "job_id": "a" * 32,
+            "limit": 3,
+            "status": "running",
+            "created_at": "2026-09-28T00:00:00+00:00",
+            "documents": [
+                {
+                    "doc_id": "d1",
+                    "status": "running",
+                    "stage": "publication",
+                    "llm_status": "running",
+                },
+                {
+                    "doc_id": "d2",
+                    "status": "queued",
+                    "stage": "queued",
+                    "llm_status": "queued",
+                },
+                {
+                    "doc_id": "d3",
+                    "status": "succeeded",
+                    "stage": "done",
+                    "llm_status": "succeeded",
+                },
+            ],
+        }
+        with instance._lock:
+            instance._jobs[job["job_id"]] = job
+            instance._finish(job, "interrupted")
+        assert [doc["status"] for doc in job["documents"]] == [
+            "failed",
+            "cancelled",
+            "succeeded",
+        ]
+        assert job["documents"][0]["interrupted_stage"] == "publication"
+        assert job["documents"][0]["llm_status"] == "failed"
+        assert job["counts"]["running"] == 0
+    finally:
+        instance.close(wait=True)

@@ -76,6 +76,19 @@ def _write_json(path: Path, value: Any) -> None:
         temporary.unlink(missing_ok=True)
 
 
+async def _settle(tasks) -> None:
+    """Wait for every document task; one failure never cancels the rest."""
+    if not tasks:
+        return
+    for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(outcome, BaseException) and not isinstance(
+            outcome, asyncio.CancelledError
+        ):
+            logger.error(
+                "Document task ended with %s", type(outcome).__name__
+            )
+
+
 def _error(exc: Exception, stage: str) -> dict[str, str]:
     # Exceptions can contain request URLs, authorization headers or server
     # bodies. Keep only a bounded identifier and a message controlled by this
@@ -697,6 +710,8 @@ class JobManager:
         self, job: dict, status: str, error: dict | None = None
     ) -> None:
         finished = _now()
+        # A finished job has only terminal documents: nothing stays
+        # "running" forever after a page failure or a shutdown.
         for document in job["documents"]:
             if document["status"] == "queued":
                 document.update(
@@ -704,6 +719,24 @@ class JobManager:
                 )
                 if document["llm_status"] == "queued":
                     document["llm_status"] = "cancelled"
+            elif document["status"] == "running":
+                document.update(
+                    # The crawl reuses a result interrupted at publication.
+                    interrupted_stage=document.get("stage"),
+                    status="failed",
+                    stage="interrupted",
+                    finished_at=finished,
+                    error={
+                        "code": "interrupted",
+                        "message": "Обработка документа была прервана.",
+                    },
+                )
+                if document["llm_status"] in {"queued", "running"}:
+                    document["llm_status"] = (
+                        "not_started"
+                        if document["llm_status"] == "queued"
+                        else "failed"
+                    )
         job.update(
             status=status, stage=status, finished_at=finished, error=error
         )
@@ -880,6 +913,20 @@ class JobManager:
                     )
                 else:
                     self._finish(job, "completed")
+        except asyncio.CancelledError:
+            # Shutdown cancelled the job task: record it, never leave it
+            # "running" on disk.
+            logger.warning("Job %s interrupted at stage %s", job_id, stage)
+            with self._lock:
+                self._finish(
+                    self._jobs[job_id],
+                    "interrupted",
+                    {
+                        "code": "interrupted",
+                        "message": "Задание прервано остановкой сервера.",
+                    },
+                )
+            raise
         except Exception as exc:
             if self._cancel[job_id].is_set():
                 logger.debug(
@@ -995,12 +1042,16 @@ class JobManager:
                 pending |= self._schedule(job_id, batch, context)
                 pending = {task for task in pending if not task.done()}
                 cursor = next_cursor
-            if pending:
-                await asyncio.gather(*pending)
-        except BaseException:
+        except asyncio.CancelledError:
             for waiting in pending:
                 waiting.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
             raise
+        except Exception:
+            # A failed page stops discovery, not documents already paid for.
+            await _settle(pending)
+            raise
+        await _settle(pending)
         with self._lock:
             job["discovery_finished"] = not self._cancel[job_id].is_set()
             self._save(job)
