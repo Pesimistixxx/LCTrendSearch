@@ -797,6 +797,14 @@ def main() -> None:
         "<snapshot>.json)",
     )
 
+    merge_command = subparsers.add_parser(
+        "merge-concepts",
+        help="Merge a duplicate concept into another of its kind family",
+    )
+    merge_command.add_argument("source", help="concept_id to merge away")
+    merge_command.add_argument("target", help="concept_id that remains")
+    merge_command.add_argument("--reason", help="Why they are one concept")
+
     subparsers.add_parser("init-graph", help="Create Neo4j constraints")
     args = parser.parse_args()
     logger.debug("Command %s started, log file: %s", args.command, log_path)
@@ -873,6 +881,19 @@ def _taxonomy_tree(taxonomy) -> Dict[str, Any]:
 def _run(args: argparse.Namespace) -> None:
     if args.command == "init-graph":
         asyncio.run(_graph(_ensure_schema))
+        return
+
+    if args.command == "merge-concepts":
+        summary = asyncio.run(
+            _graph(
+                lambda store: resolve(
+                    store.merge_concepts(
+                        args.source, args.target, reason=args.reason
+                    )
+                )
+            )
+        )
+        print(json.dumps(summary, ensure_ascii=False))
         return
 
     if args.command == "crawl-openalex":

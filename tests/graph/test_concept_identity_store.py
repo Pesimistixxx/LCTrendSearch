@@ -143,3 +143,77 @@ def test_a_lower_family_kind_never_downgrades_the_stored_node():
         query for query, _ in queries if "MERGE (chunk)-[r:MENTIONS" in query
     )
     assert "concept:Technology" in mentions
+
+
+def ambiguous_extraction():
+    document, result = extraction(ConceptKind.TECHNOLOGY)
+    result.concepts = []
+    result.resolutions = [
+        ResolutionDecision(
+            resolution_id="r1",
+            mention_id="m1",
+            status="ambiguous",
+            method="deterministic_alias_collision",
+            candidates=[
+                {"concept_id": "concept:a", "kind": "Technology", "score": 1},
+                {"concept_id": "concept:b", "kind": "Method", "score": 1},
+            ],
+        )
+    ]
+    return document, result
+
+
+def test_an_ambiguous_mention_links_every_candidate():
+    document, result = ambiguous_extraction()
+    tx = Transaction({"concept:b": ["Technology"]})
+    asyncio.run(GraphStore._write_extraction(tx, document, result))
+    rows = {
+        (row["concept_id"], row["resolution_status"], label)
+        for query, parameters in tx.queries
+        if "MERGE (chunk)-[r:MENTIONS" in query
+        for label in ("Technology", "Method")
+        if f"concept:{label} {{" in query
+        for row in parameters["rows"]
+    }
+    # concept:b is stored as a Technology already: the link follows it.
+    assert rows == {
+        ("concept:a", "ambiguous", "Technology"),
+        ("concept:b", "ambiguous", "Technology"),
+    }
+
+
+class ReadSession:
+    def __init__(self, queries):
+        self.queries = queries
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def run(self, query, **parameters):
+        self.queries.append(" ".join(query.split()))
+        if "db.labels" in query:
+            return [{"label": "Technology"}]
+        return []
+
+
+def reader(queries):
+    store = GraphStore.__new__(GraphStore)
+    store._driver = type(
+        "Driver", (), {"session": lambda self, **_: ReadSession(queries)}
+    )()
+    store._database = "neo4j"
+    return store
+
+
+def test_ambiguous_links_are_not_counted_as_mentions():
+    queries = []
+    asyncio.run(reader(queries).read_temporal_data())
+    mentions = next(q for q in queries if "[m:MENTIONS]" in q)
+    assert "m.resolution_status, '') <> 'ambiguous'" in mentions
+    queries.clear()
+    asyncio.run(reader(queries).read_taxonomy_input(["Technology"]))
+    taxonomy = next(q for q in queries if "MENTIONS" in q)
+    assert "m.resolution_status, '') <> 'ambiguous'" in taxonomy

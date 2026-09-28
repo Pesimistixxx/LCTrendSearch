@@ -19,6 +19,7 @@ from typing import (
 
 from ..core.config import load_catalog
 from ..core.models import (
+    AMBIGUOUS_COLLISION_METHOD,
     SEMANTIC_CANDIDATE_METHOD,
     Concept,
     ConceptKind,
@@ -384,6 +385,11 @@ class ConceptIndex:
             self._normalized[name].add(concept_id)
         self._indexed[concept_id] = (keys, normalized)
 
+    def named(self, concept: Concept, text: str) -> bool:
+        """Whether a reviewed name of the concept is exactly this form."""
+        _, normalized = self._indexed.get(concept.concept_id, ((), ()))
+        return normalize_name(text) in normalized
+
     def _unindex(self, concept_id: str) -> None:
         keys, normalized = self._indexed.pop(
             concept_id, (frozenset(), frozenset())
@@ -542,6 +548,17 @@ def resolve_mentions(
             "resolution", mention.mention_id, "cascade-v1"
         )
 
+        if len(deterministic) > 1:
+            # Duplicates share a key; the one reviewed under exactly this
+            # written form is the identity.
+            exact = [
+                concept
+                for concept in deterministic
+                if concepts.named(concept, canonical_text)
+            ]
+            if len(exact) == 1:
+                deterministic = exact
+
         if len(deterministic) == 1:
             concept = deterministic[0]
             _observe(concept, mention, groups)
@@ -567,11 +584,17 @@ def resolve_mentions(
                     resolution_id=resolution_id,
                     mention_id=mention.mention_id,
                     status="ambiguous",
+                    # Every candidate keeps the mention (an ambiguous
+                    # MENTIONS link) until the duplicates are merged.
                     candidates=[
-                        {"concept_id": item.concept_id, "score": 1.0}
+                        {
+                            "concept_id": item.concept_id,
+                            "kind": item.kind.value,
+                            "score": 1.0,
+                        }
                         for item in deterministic
                     ],
-                    method="deterministic_alias_collision",
+                    method=AMBIGUOUS_COLLISION_METHOD,
                     score=1.0,
                     basis=["alias maps to multiple compatible concepts"],
                 )

@@ -19,6 +19,9 @@ def stable_id(namespace: str, *parts: object) -> str:
 # A semantic match proposes a review candidate; the mention keeps its own
 # provisional concept (see resolver.json semantic.use_in_llm).
 SEMANTIC_CANDIDATE_METHOD = "new_provisional_semantic_candidate"
+# Several concepts share the identity key of a mention; it is linked to all
+# of them as ambiguous until they are merged.
+AMBIGUOUS_COLLISION_METHOD = "deterministic_alias_collision"
 
 
 class DocumentType(str, Enum):
