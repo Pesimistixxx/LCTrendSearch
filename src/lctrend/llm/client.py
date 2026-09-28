@@ -885,10 +885,13 @@ class JsonLLM:
         model: str,
     ) -> T:
         schema_json = schema.model_json_schema()
-        if self.provider == "gigachat" and self.config.get("json_schema_strict") is True:
+        strict = self.config.get("json_schema_strict") is True
+        if self.provider == "gigachat" and strict:
             # GigaChat treats a schema without root-level required fields as
             # an unconstrained JSON object, even when strict mode is enabled.
-            schema_json.setdefault("required", list(schema_json.get("properties", {})))
+            schema_json.setdefault(
+                "required", list(schema_json.get("properties", {}))
+            )
         system_message = (
             system + "\n\nReturn exactly one JSON object. No Markdown. "
             "The JSON object must match this schema:\n" + _json(schema_json)

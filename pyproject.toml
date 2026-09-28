@@ -44,6 +44,8 @@ lctrend = ["resources/*.json", "resources/*.cypher", "resources/prompts/*.txt"]
 [tool.ruff]
 line-length = 79
 target-version = "py39"
+# research/ holds third-party reference notebooks, not project code.
+extend-exclude = ["research"]
 
 [tool.ruff.lint]
 preview = true
