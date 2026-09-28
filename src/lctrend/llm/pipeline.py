@@ -344,6 +344,8 @@ async def _process_document(
         "issues": [],
         "unresolved_claims": [],
         "invalid_entities": [],
+        # Non-blocking anchoring choices; see validate_local_extraction.
+        "anchoring_notes": [],
         "source_truth_assessed": False,
         "demo": bool(getattr(provider, "demo", False)),
         "source_snapshot": document.artifact.model_dump(),
@@ -553,8 +555,12 @@ async def _process_document(
                 status="running",
                 packet_id=packet.packet_id,
             )
+            anchoring: list = []
             extraction, issues = validate_local_extraction(
-                document, extraction, visible
+                document, extraction, visible, notes=anchoring
+            )
+            metadata["anchoring_notes"].extend(
+                {"packet_id": packet.packet_id, **note} for note in anchoring
             )
             _emit(
                 event,

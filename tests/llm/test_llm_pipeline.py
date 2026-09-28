@@ -783,3 +783,99 @@ def test_failed_context_reextraction_keeps_initial_source_response_in_audit():
         and event.get("code") == "timeout"
         for event in result.run.trace
     )
+
+
+def test_technology_named_three_times_reaches_assertions_with_its_claims():
+    abstract = (
+        "We study a sulfide solid-state electrolyte for batteries. "
+        "The sulfide solid-state electrolyte enables fast charging. "
+        "A prototype cell with the sulfide solid-state electrolyte was built."
+    )
+    doc = document([abstract])
+    technology = "sulfide solid-state electrolyte"
+    assert abstract.count(technology) == 3
+    response = {
+        "entities": [
+            {
+                "local_id": "e1",
+                "label": technology,
+                "kind": "Technology",
+                "evidence": [{"chunk_id": "c1", "quote": technology}],
+            },
+            {
+                "local_id": "e2",
+                "label": "fast charging",
+                "kind": "Task",
+                "evidence": [{"chunk_id": "c1", "quote": "fast charging"}],
+            },
+        ],
+        "claims": [
+            {
+                "claim_id": "k1",
+                "predicate": "solves_task",
+                "roles": {"subject": "e1", "task": "e2"},
+                "qualifiers": {},
+                "values": [],
+                "polarity": "affirmed",
+                "modality": "reported",
+                "attribution_kind": "author_reported",
+                "evidence": [
+                    {
+                        "chunk_id": "c1",
+                        "quote": "The sulfide solid-state electrolyte "
+                        "enables fast charging.",
+                    }
+                ],
+            },
+            {
+                "claim_id": "k2",
+                "predicate": "reports_maturity_stage",
+                "roles": {"subject": "e1"},
+                "qualifiers": {"stage": "prototype"},
+                "values": [],
+                "polarity": "affirmed",
+                "modality": "observed",
+                "attribution_kind": "author_reported",
+                # Wrong offsets from the model fall back to literal search.
+                "evidence": [
+                    {
+                        "chunk_id": "c1",
+                        "quote": "A prototype cell with the sulfide "
+                        "solid-state electrolyte was built.",
+                        "start": 0,
+                        "end": 10,
+                    }
+                ],
+            },
+        ],
+        "context_requests": [],
+    }
+    review = {
+        "items": [
+            {"claim_id": claim, "decision": "supported", "reason": "Checked."}
+            for claim in ("k1", "k2")
+        ]
+    }
+    result = asyncio.run(
+        process_document(
+            doc, RecordingReplay([response, review]), settings=settings()
+        )
+    )
+    concept = next(
+        c for c in result.concepts if c.kind == ConceptKind.TECHNOLOGY
+    )
+    assert concept.preferred_label == technology
+    assert len(result.assertions) == 2
+    assert all(
+        a.status == "accepted" and a.roles["subject"] == concept.concept_id
+        for a in result.assertions
+    )
+    assert result.run.metadata["invalid_entities"] == []
+    notes = result.run.metadata["anchoring_notes"]
+    assert {
+        (note["item"], note["code"], note["occurrences"]) for note in notes
+    } == {
+        ("entity:e1", "ambiguous_quote_first_occurrence", 3),
+        ("claim:k2", "quote_offsets_corrected", 1),
+    }
+    assert result.run.status == "succeeded"
