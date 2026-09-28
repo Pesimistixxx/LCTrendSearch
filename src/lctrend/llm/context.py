@@ -678,3 +678,88 @@ def review_payload(
     if _payload_size(payload) > settings.max_payload_chars:
         raise ContextBudgetError("review_payload_chars_limit")
     return payload
+
+
+def _claim_entities(claim: Dict[str, Any]) -> set:
+    refs = set((claim.get("roles") or {}).values())
+    pending = [claim.get("qualifiers"), claim.get("values")]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "entity_ref" and isinstance(item, str):
+                    refs.add(item)
+                else:
+                    pending.append(item)
+        elif isinstance(value, list):
+            pending.extend(value)
+    return refs
+
+
+def _claim_group(
+    extractiondict: Dict[str, Any], claims: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """The extraction restricted to ``claims`` and the entities they use."""
+    refs = set().union(*(_claim_entities(claim) for claim in claims))
+    return {
+        **extractiondict,
+        "entities": [
+            entity
+            for entity in extractiondict.get("entities", [])
+            if entity.get("local_id") in refs
+        ],
+        "claims": claims,
+    }
+
+
+def review_batches(
+    document: DocumentEnvelope,
+    extractiondict: Dict[str, Any],
+    visible_ids: Iterable[str],
+    settings: PipelineSettings,
+    related_context: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Tuple[List[str], Dict[str, Any]]], List[str]]:
+    """Split review into consecutive claim groups that fit the budget.
+
+    A full packet fills the extraction budget with source text; the same
+    text plus the extracted claims cannot fit one review payload. Each group
+    carries only its claims, their entities and the chunks they cite.
+    Returns ``(claim_ids, payload)`` batches and claims too large to review
+    even alone.
+    """
+    visible = list(visible_ids)
+
+    def build(claims):
+        return review_payload(
+            document,
+            _claim_group(extractiondict, claims),
+            visible,
+            settings,
+            related_context=related_context,
+        )
+
+    claims = list(extractiondict.get("claims", []))
+    try:
+        return [([c["claim_id"] for c in claims], build(claims))], []
+    except ContextBudgetError:
+        pass
+    batches: List[Tuple[List[str], Dict[str, Any]]] = []
+    unfit: List[str] = []
+    group: List[Dict[str, Any]] = []
+    payload: Optional[Dict[str, Any]] = None
+    for claim in claims:
+        try:
+            payload, group = build([*group, claim]), [*group, claim]
+            continue
+        except ContextBudgetError:
+            pass
+        if group:
+            batches.append(([c["claim_id"] for c in group], payload))
+        try:
+            payload, group = build([claim]), [claim]
+        except ContextBudgetError:
+            unfit.append(claim["claim_id"])
+            payload, group = None, []
+    if group:
+        batches.append(([c["claim_id"] for c in group], payload))
+    return batches, unfit

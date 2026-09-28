@@ -3,6 +3,7 @@ benchmarks.
 """
 
 import asyncio
+import json
 from copy import deepcopy
 
 import pytest
@@ -18,7 +19,7 @@ from lctrend.core.models import (
 )
 from lctrend.graph.store import GraphStore
 from lctrend.llm.client import LLMError, ReplayProvider
-from lctrend.llm.context import PipelineSettings
+from lctrend.llm.context import PipelineSettings, build_payload, plan_packets
 from lctrend.llm.contracts import Extraction
 from lctrend.llm.pipeline import process_document
 
@@ -879,3 +880,120 @@ def test_technology_named_three_times_reaches_assertions_with_its_claims():
         ("claim:k2", "quote_offsets_corrected", 1),
     }
     assert result.run.status == "succeeded"
+
+
+class FullPacketProvider:
+    """Extract two claims per focus chunk; support every reviewed claim."""
+
+    demo = False
+    models = {"extract": "offline-extractor", "review": "offline-reviewer"}
+
+    def __init__(self):
+        self.calls = []
+        self.review_sizes = []
+
+    def generate(self, schema, system, payload, *, stage="extract"):
+        self.calls.append({"stage": stage})
+        if stage == "review":
+            self.review_sizes.append(
+                len(json.dumps(payload, ensure_ascii=False))
+            )
+            return schema.model_validate(
+                {
+                    "items": [
+                        {
+                            "claim_id": claim["claim_id"],
+                            "decision": "supported",
+                            "reason": "Checked.",
+                        }
+                        for claim in payload["extraction"]["claims"]
+                    ]
+                }
+            )
+        texts = {c["chunk_id"]: c["text"] for c in payload["chunks"]}
+        entities, claims = [], []
+        for chunk_id in payload["packet"]["focus_chunk_ids"]:
+            number = chunk_id[1:].zfill(2)
+            technology, task = f"array #{number}", f"task #{number}"
+            entities += [
+                {
+                    "local_id": f"t{number}",
+                    "label": technology,
+                    "kind": "Technology",
+                    "evidence": [{"chunk_id": chunk_id, "quote": technology}],
+                },
+                {
+                    "local_id": f"g{number}",
+                    "label": task,
+                    "kind": "Task",
+                    "evidence": [{"chunk_id": chunk_id, "quote": task}],
+                },
+            ]
+            sentences = texts[chunk_id].split(" | ")
+            claims += [
+                {
+                    "claim_id": f"k{number}-{index}",
+                    "predicate": "solves_task",
+                    "roles": {"subject": f"t{number}", "task": f"g{number}"},
+                    "qualifiers": {},
+                    "values": [],
+                    "polarity": "affirmed",
+                    "modality": "reported",
+                    "attribution_kind": "author_reported",
+                    "evidence": [
+                        {"chunk_id": chunk_id, "quote": sentences[index]}
+                    ],
+                }
+                for index in range(2)
+            ]
+        return schema.model_validate(
+            {"entities": entities, "claims": claims, "context_requests": []}
+        )
+
+
+def full_text(chunks=30, sentences=20):
+    return document(
+        [
+            " | ".join(
+                f"Result {k} of part {n:02d}: the array #{n:02d} solves "
+                f"task #{n:02d} in trial {k}."
+                for k in range(sentences)
+            )
+            for n in range(1, chunks + 1)
+        ],
+        shared_stream=True,
+    )
+
+
+def test_full_size_packets_are_reviewed_with_the_shipped_pipeline_budget():
+    doc = full_text()
+    shipped = PipelineSettings.from_catalog()
+    provider = FullPacketProvider()
+    result = asyncio.run(process_document(doc, provider, settings=shipped))
+    extract_calls = [c for c in provider.calls if c["stage"] == "extract"]
+    assert len(extract_calls) < len(doc.chunks)
+    assert provider.review_sizes
+    assert max(provider.review_sizes) <= shipped.max_payload_chars
+    assert len(result.assertions) == 2 * len(doc.chunks)
+    assert {a.status for a in result.assertions} == {"accepted"}
+    assert not {"review_contract", "review_payload_budget"} & codes(result)
+    assert result.run.status == "succeeded"
+
+
+def test_claim_too_large_for_review_is_reported_as_budget_not_contract():
+    doc = document()
+    tight = settings()
+    packet = plan_packets(doc, tight).packets[0]
+    limit = len(
+        json.dumps(build_payload(doc, packet, tight), ensure_ascii=False)
+    )
+    provider = RecordingReplay([extracted(doc)])
+    result = asyncio.run(
+        process_document(
+            doc, provider, settings=settings(max_payload_chars=limit)
+        )
+    )
+    assert "review_payload_budget" in codes(result)
+    assert "review_contract" not in codes(result)
+    assert [item["stage"] for item in provider.payloads] == ["extract"]
+    assert result.assertions[0].status == "needs_review"
