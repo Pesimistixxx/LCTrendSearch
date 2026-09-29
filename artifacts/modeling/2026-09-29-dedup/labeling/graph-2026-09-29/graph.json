@@ -1,0 +1,13 @@
+{
+  "written": 4478,
+  "not_in_graph": [
+    "concept:4465b11276257837e09363f5"
+  ],
+  "graph": {
+    "all": 4583,
+    "scored": 4478,
+    "llm": 0,
+    "noise": 0
+  },
+  "stale_scores_removed": 0
+}

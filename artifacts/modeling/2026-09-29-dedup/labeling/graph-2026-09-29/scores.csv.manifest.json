@@ -1,0 +1,77 @@
+{
+  "stage": "labeling.score-graph",
+  "output": "scores.csv",
+  "created_at": "2026-09-29T20:51:01.560172+00:00",
+  "inputs": [
+    {
+      "path": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\graph-2026-09-29\\history.csv",
+      "sha256": "6c82b2ab5be19048d2e759ef406edb4c26c6b46c01f92581faad5c990b65e447"
+    },
+    {
+      "path": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\graph-2026-09-29\\subgraphs.jsonl",
+      "sha256": "f27fdedd88bf65d9f93a5e572419bec44541c0cc41476a0ae6342fe569ab9786"
+    },
+    {
+      "path": "artifacts\\modeling\\2026-09-29-dedup\\models\\report.json",
+      "sha256": "753df8dad357dfba876fcbc5fbe4c3e2de58e19893c9c4242043485a21a68421"
+    }
+  ],
+  "parameters": {
+    "run": "2026-09-29-dedup",
+    "model_dir": "artifacts\\modeling\\2026-09-29-dedup\\models",
+    "snapshot": "2026-09-29",
+    "dedup": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\graph-2026-09-29\\dedup.json",
+    "as_known": false,
+    "novelty": true
+  },
+  "summary": {
+    "technologies": 4479,
+    "signal": 156,
+    "above_0_75": 44,
+    "by_model": {
+      "stacked": 4479
+    },
+    "top": [
+      [
+        "VTLA: Vision-Tactile-Language-Action model with preference learning for insertion manipulation",
+        0.936033
+      ],
+      [
+        "ACE (Abstract-Concrete-Execute) Security Architecture",
+        0.92537
+      ],
+      [
+        "Game-theoretic LLM: Agent Workflow for Negotiation Games",
+        0.908344
+      ],
+      [
+        "MIST: A Co-Design Framework for Heterogeneous, Multi-Stage LLM Inference",
+        0.895872
+      ],
+      [
+        "Federated Graph Neural Networks (FedGNNs)",
+        0.889341
+      ],
+      [
+        "PropertyGPT",
+        0.879245
+      ],
+      [
+        "Taper",
+        0.879157
+      ],
+      [
+        "HalluLens",
+        0.870298
+      ],
+      [
+        "Lattice-based Attribute-Based Encryption (ABE)",
+        0.868059
+      ],
+      [
+        "Modular Benchmarking Framework for Evaluating LLM-based Agent Applications",
+        0.864438
+      ]
+    ]
+  }
+}

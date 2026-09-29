@@ -341,26 +341,34 @@ def _deduplicate(args, log: Path) -> Dict[str, Any]:
 
 
 @contextmanager
-def only_key(name: str):
+def only_key(name: Optional[str]):
     """Point GIGACHAT_KEYS_FILE at a pool of the one key ``name``.
 
     The labelling key is ``enabled: false`` in the shared pool so that
     ingestion workers never take it; every LLM call of this pass (missing
-    vectors, the duplicate judge) goes through it alone. The temporary
-    pool file holds a secret and is removed on exit.
+    vectors, the duplicate judge) goes through it alone. ``name=None``
+    enables every key of the pool, the labelling one included. The
+    temporary pool file holds a secret and is removed on exit.
     """
     from ..dataset.llm_outcomes import labelling_key
 
     source = os.getenv("GIGACHAT_KEYS_FILE", "")
     if not source:
         raise ValueError("GIGACHAT_KEYS_FILE is not set: no key to use")
-    entry = labelling_key(source, name)
+    if name is None:
+        pool = json.loads(Path(source).read_text(encoding="utf-8-sig"))
+        entries = pool.get("keys", [])
+    else:
+        entries = [labelling_key(source, name)]
     handle, path = tempfile.mkstemp(prefix="lctrend-key-", suffix=".json")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump({"keys": [{**entry, "enabled": True}]}, stream)
+            json.dump(
+                {"keys": [{**entry, "enabled": True} for entry in entries]},
+                stream,
+            )
         os.environ["GIGACHAT_KEYS_FILE"] = path
-        yield entry.get("name")
+        yield ", ".join(str(entry.get("name")) for entry in entries)
     finally:
         os.environ["GIGACHAT_KEYS_FILE"] = source
         Path(path).unlink(missing_ok=True)
@@ -427,6 +435,13 @@ def main(argv=None) -> Dict[str, Any]:
         ),
     )
     parser.add_argument(
+        "--all-keys",
+        dest="key",
+        action="store_const",
+        const=None,
+        help="Use every key of the pool at once, the labelling key included",
+    )
+    parser.add_argument(
         "--no-write",
         action="store_true",
         help="Merge duplicates but only write scores.csv",
@@ -458,8 +473,8 @@ def main(argv=None) -> Dict[str, Any]:
     result["winner"] = models["report"]["winner"]["model"]
 
     if not args.skip_dedup:
-        logger.info("1/5 Merging duplicates (LLM key %s only)", args.key)
-        with only_key(args.key):
+        with only_key(args.key) as keys:
+            logger.info("1/5 Merging duplicates (LLM keys: %s)", keys)
             result["dedup"] = _deduplicate(args, work / "dedup.json")
 
     logger.info("2/5 Reading the graph and computing features")
