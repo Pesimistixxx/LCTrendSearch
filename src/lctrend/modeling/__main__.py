@@ -1,4 +1,13 @@
-"""Run the expert-review and model-training stages independently of ingest."""
+"""Run the three modeling levels independently of ingest.
+
+Level 1 (dataset): pilot, export-pilot, export-full, compact-subgraphs,
+enrich-neighbors, label-llm, prepare. Level 2 (training): train-catboost,
+train-hgt, explain-catboost, explain-hgt. Level 3 (labeling):
+score-catboost. Merging duplicates, the first step of level 1, runs
+as ``python -m lctrend.modeling.dataset.deduplication``. Commands with
+``--run`` write into ``artifacts/modeling/<run>/`` when no output path is
+given.
+"""
 
 from __future__ import annotations
 
@@ -7,18 +16,34 @@ import asyncio
 import json
 from pathlib import Path
 
-from .annotations import (
+from .dataset.annotations import (
     build_pilot_queue,
     compact_subgraph_file,
     export_full_history,
     export_pilot_features,
     write_pilot_queue,
 )
-from .catboost_model import train_from_file as train_catboost
-from .dataset import TARGETS, prepare_from_files
-from .explanations import explain_catboost_file, explain_hgt_file
-from .hgt_model import train_from_files as train_hgt
-from .llm_labels import label_file
+from .dataset.labels import TARGETS, prepare_from_files
+from .dataset.llm_labels import label_file
+from .dataset.neighbors import enrich_file
+from .storage import RunLayout, write_manifest
+from .training.catboost_model import train_from_file as train_catboost
+from .training.explanations import explain_catboost_file, explain_hgt_file
+from .training.hgt_model import train_from_files as train_hgt
+
+
+def _output(args, level, name):
+    """An explicit --output, else <run>/<level>/<name>."""
+    if args.output:
+        return args.output
+    return getattr(RunLayout.at(args.run), level) / name
+
+
+def _run_arguments(command):
+    command.add_argument("--output", type=Path)
+    command.add_argument(
+        "--run", help="Run name under artifacts/modeling (default: today)"
+    )
 
 
 def main(argv=None):
@@ -91,6 +116,38 @@ def main(argv=None):
             command.add_argument("--dataset", type=Path, required=True)
         else:
             command.add_argument("--subgraphs", type=Path, required=True)
+            command.add_argument(
+                "--dataset",
+                type=Path,
+                help="History rows that fill neighbour technologies",
+            )
+    neighbors = commands.add_parser(
+        "enrich-neighbors",
+        help="Level 1: add neighbour aggregates from subgraphs to the rows",
+    )
+    neighbors.add_argument("--dataset", type=Path, required=True)
+    neighbors.add_argument(
+        "--subgraphs",
+        type=Path,
+        required=True,
+        help="Subgraph JSONL, or a zip holding one",
+    )
+    _run_arguments(neighbors)
+    score = commands.add_parser(
+        "score-catboost",
+        help="Level 3: calibrated probability for every technology",
+    )
+    score.add_argument("--model-dir", type=Path, required=True)
+    score.add_argument("--dataset", type=Path, required=True)
+    score.add_argument(
+        "--snapshot", help="Score this date (default: each latest)"
+    )
+    score.add_argument("--target", choices=TARGETS, default="signal_36m")
+    score.add_argument(
+        "--split", choices=("temporal", "family", "cohort"), default="temporal"
+    )
+    score.add_argument("--fold", type=int, default=0)
+    _run_arguments(score)
     args = parser.parse_args(argv)
     if args.command == "pilot":
         from ..cli import _graph, _temporal_data
@@ -199,8 +256,46 @@ def main(argv=None):
             args.target,
             args.split,
             args.fold,
+            args.dataset,
         )
         print(json.dumps({"probability": result["probability"]}))
+    elif args.command == "enrich-neighbors":
+        output = _output(args, "dataset", "history-neighbors.csv")
+        summary = enrich_file(args.dataset, args.subgraphs, output)
+        write_manifest(
+            output,
+            "dataset.enrich-neighbors",
+            [args.dataset, args.subgraphs],
+            summary=summary,
+        )
+        print(json.dumps(summary, ensure_ascii=False))
+    elif args.command == "score-catboost":
+        from .labeling.scoring import score_catboost_file
+
+        output = _output(args, "labeling", "scores.csv")
+        summary = score_catboost_file(
+            args.model_dir,
+            args.dataset,
+            output,
+            target=args.target,
+            strategy=args.split,
+            fold=args.fold,
+            snapshot=args.snapshot,
+        )
+        write_manifest(
+            output,
+            "labeling.score-catboost",
+            [args.dataset],
+            parameters={
+                "model_dir": str(args.model_dir),
+                "target": args.target,
+                "split": args.split,
+                "fold": args.fold,
+                "snapshot": args.snapshot,
+            },
+            summary=summary,
+        )
+        print(json.dumps(summary, ensure_ascii=False))
 
 
 if __name__ == "__main__":

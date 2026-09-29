@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
@@ -229,26 +230,8 @@ def _snapshot_graph(snapshot):
     return result
 
 
-def sample_subgraph(
-    snapshot: SnapshotView,
-    technology_id: str,
-    label: Optional[int] = None,
-    split: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None,
-    features: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Deterministic BFS, capped per relation/vertex, with a global node cap.
-
-    Only numeric caller-provided root features are permitted. Future outcome
-    fields are rejected to keep the label separate from the input graph.
-    Traversal treats edges as undirected, while exported edges preserve their
-    direction and type. Sampling does not depend on input order.
-    """
-    config = config or {}
-    hops = max(0, int(config.get("hops", 2)))
-    max_neighbors = max(0, int(config.get("max_neighbors", 30)))
-    max_nodes = max(1, int(config.get("max_nodes", 400)))
-    seed = int(config.get("seed", 13))
+def _prepare(snapshot, technology_id, features):
+    """Root id, nodes (root features added) and cached adjacency."""
     root = _id("Technology", technology_id)
     nodes, edges = _snapshot_graph(snapshot)
     if root not in nodes:
@@ -288,25 +271,12 @@ def sample_subgraph(
             outgoing[edge["source"]].append(edge)
         snapshot._typed_subgraph_adjacency_cache = adjacency
         snapshot._typed_subgraph_outgoing_cache = outgoing
+    return root, nodes, adjacency
 
-    def rank(value):
-        payload = str(seed) + "|" + root + "|" + value
-        return hashlib.sha256(payload.encode()).hexdigest(), value
 
-    selected, frontier = {root}, [root]
-    for _ in range(hops):
-        following = set()
-        for vertex in sorted(frontier):
-            for relation in sorted(adjacency[vertex]):
-                for neighbor in sorted(adjacency[vertex][relation], key=rank)[
-                    :max_neighbors
-                ]:
-                    if neighbor not in selected and len(selected) < max_nodes:
-                        selected.add(neighbor)
-                        following.add(neighbor)
-        frontier = sorted(following)
-        if not frontier or len(selected) >= max_nodes:
-            break
+def _sample(
+    snapshot, technology_id, root, nodes, selected, label, split, sampling
+):
     retained_edges = [
         edge
         for source in selected
@@ -329,15 +299,221 @@ def sample_subgraph(
         "label": label,
         "split": split,
         "mask_semantics": "1=missing, 0=observed",
-        "sampling": {
+        "sampling": sampling,
+        "nodes": [nodes[key] for key in sorted(selected)],
+        "edges": retained_edges,
+    }
+
+
+def sample_subgraph(
+    snapshot: SnapshotView,
+    technology_id: str,
+    label: Optional[int] = None,
+    split: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    features: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Deterministic BFS, capped per relation/vertex, with a global node cap.
+
+    Only numeric caller-provided root features are permitted. Future outcome
+    fields are rejected to keep the label separate from the input graph.
+    Traversal treats edges as undirected, while exported edges preserve their
+    direction and type. Sampling does not depend on input order.
+    """
+    config = config or {}
+    hops = max(0, int(config.get("hops", 2)))
+    max_neighbors = max(0, int(config.get("max_neighbors", 30)))
+    max_nodes = max(1, int(config.get("max_nodes", 400)))
+    seed = int(config.get("seed", 13))
+    root, nodes, adjacency = _prepare(snapshot, technology_id, features)
+
+    def rank(value):
+        payload = str(seed) + "|" + root + "|" + value
+        return hashlib.sha256(payload.encode()).hexdigest(), value
+
+    selected, frontier = {root}, [root]
+    for _ in range(hops):
+        following = set()
+        for vertex in sorted(frontier):
+            for relation in sorted(adjacency[vertex]):
+                for neighbor in sorted(adjacency[vertex][relation], key=rank)[
+                    :max_neighbors
+                ]:
+                    if neighbor not in selected and len(selected) < max_nodes:
+                        selected.add(neighbor)
+                        following.add(neighbor)
+        frontier = sorted(following)
+        if not frontier or len(selected) >= max_nodes:
+            break
+    return _sample(
+        snapshot,
+        technology_id,
+        root,
+        nodes,
+        selected,
+        label,
+        split,
+        {
             "hops": hops,
             "max_neighbors": max_neighbors,
             "max_nodes": max_nodes,
             "seed": seed,
         },
-        "nodes": [nodes[key] for key in sorted(selected)],
-        "edges": retained_edges,
-    }
+    )
+
+
+# Traversal passes only through technologies and documents. Hubs such as
+# countries, companies, domains and tasks are dead ends: in the subgraph,
+# never a path to further technologies. Anything else (authors, sources,
+# assertions, evidence) is already a feature and stays out.
+TECHNOLOGY_TYPES = ("Technology", "Method", "Material")
+DOCUMENT_TYPE = "DocumentVersion"
+DEFAULT_NEIGHBORHOOD = {
+    "leaf_types": [
+        "Company",
+        "University",
+        "Organization",
+        "Country",
+        "Domain",
+        "Task",
+    ],
+    "max_nodes": 400,
+    "max_document_technologies": 30,
+    "first_hop": {
+        "documents_by_age": {"recent": 12, "middle": 10, "old": 10},
+        "technologies": 10,
+        "leaves_per_type": 10,
+    },
+    "second_hop": {
+        "technologies_per_document": 5,
+        "documents_per_technology": 3,
+        "leaves_per_type": 3,
+    },
+    "seed": 13,
+}
+
+
+def sample_neighborhood(
+    snapshot: SnapshotView,
+    technology_id: str,
+    label: Optional[int] = None,
+    split: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    features: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Two hops through technologies and documents; hubs are dead ends.
+
+    Hop 1: documents of the root by age (a quota each for the last year,
+    one to three years, older; the most recent first within a quota, so an
+    empty recent quota itself says the technology fades), related
+    technologies, and dead-end hubs. Hop 2: from each document the other
+    technologies it mentions and its hubs; from each related technology its
+    latest documents and hubs. A document mentioning
+    ``max_document_technologies`` or more technologies (a survey) is kept
+    but not crossed. Nothing is expanded from a hub or at hop 2. Edges are
+    all those among the selected nodes. Order never depends on input order.
+    """
+    settings = {**DEFAULT_NEIGHBORHOOD, **(config or {})}
+    first, second = settings["first_hop"], settings["second_hop"]
+    leaf_types = set(settings["leaf_types"])
+    max_nodes = int(settings["max_nodes"])
+    seed = int(settings["seed"])
+    root, nodes, adjacency = _prepare(snapshot, technology_id, features)
+    cutoff = snapshot.cutoff
+
+    def kind(identifier):
+        return nodes[identifier]["type"]
+
+    def rank(value):
+        payload = str(seed) + "|" + root + "|" + value
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def newest_first(values):
+        return sorted(
+            values,
+            key=lambda value: (nodes[value]["timestamp"], rank(value)),
+            reverse=True,
+        )
+
+    def neighbors(vertex, types):
+        return {
+            other
+            for others in adjacency[vertex].values()
+            for other in others
+            if other in nodes and kind(other) in types
+        }
+
+    def age_bucket(identifier):
+        days = (
+            cutoff - date.fromisoformat(nodes[identifier]["timestamp"][:10])
+        ).days
+        return "recent" if days <= 365 else "middle" if days <= 1095 else "old"
+
+    def is_survey(document):
+        mentioned = neighbors(document, set(TECHNOLOGY_TYPES))
+        return len(mentioned) >= settings["max_document_technologies"]
+
+    selected = [root]
+    chosen = {root}
+
+    def take(values, limit):
+        added = []
+        for value in values:
+            if len(added) >= limit or len(chosen) >= max_nodes:
+                break
+            if value not in chosen:
+                chosen.add(value)
+                selected.append(value)
+                added.append(value)
+        return added
+
+    def take_leaves(vertex, limit):
+        by_type = defaultdict(list)
+        for value in neighbors(vertex, leaf_types):
+            by_type[kind(value)].append(value)
+        for name in sorted(by_type):
+            take(sorted(by_type[name], key=rank), limit)
+
+    # Hop 1.
+    documents = []
+    by_age = defaultdict(list)
+    for document in neighbors(root, {DOCUMENT_TYPE}):
+        by_age[age_bucket(document)].append(document)
+    for bucket in ("recent", "middle", "old"):
+        documents += take(
+            newest_first(by_age[bucket]),
+            first["documents_by_age"][bucket],
+        )
+    related = take(
+        sorted(neighbors(root, set(TECHNOLOGY_TYPES)) - {root}, key=rank),
+        first["technologies"],
+    )
+    take_leaves(root, first["leaves_per_type"])
+    # Hop 2: only from documents that are not surveys and from technologies.
+    for document in documents:
+        if is_survey(document):
+            continue
+        take(
+            sorted(neighbors(document, set(TECHNOLOGY_TYPES)), key=rank),
+            second["technologies_per_document"],
+        )
+        take_leaves(document, second["leaves_per_type"])
+    for technology in related:
+        take(
+            newest_first(neighbors(technology, {DOCUMENT_TYPE})),
+            second["documents_per_technology"],
+        )
+        take_leaves(technology, second["leaves_per_type"])
+    return _sample(
+        snapshot,
+        technology_id,
+        root,
+        nodes,
+        set(selected),
+        label,
+        split,
+        {"strategy": "neighborhood", **settings},
+    )
 
 
 def _edge_schema_key(source_type, relation, target_type):
@@ -495,4 +671,9 @@ def to_pyg(sample, feature_schema=None):
     return result
 
 
-__all__ = ["sample_subgraph", "write_subgraph_rows", "to_pyg"]
+__all__ = [
+    "sample_subgraph",
+    "sample_neighborhood",
+    "write_subgraph_rows",
+    "to_pyg",
+]

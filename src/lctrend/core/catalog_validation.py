@@ -681,6 +681,24 @@ def _analytics(catalogs: Mapping) -> None:
             _fail("dataset.coverage_families." + key, "unknown document type")
     for key, value in dataset["subgraph"].items():
         _number(value, "dataset.subgraph." + key, 1, integer=True)
+    neighborhood = dataset["neighborhood"]
+    _strings(neighborhood["leaf_types"], "dataset.neighborhood.leaf_types")
+    for key in ("max_nodes", "max_document_technologies", "seed"):
+        _number(
+            neighborhood[key], "dataset.neighborhood." + key, 1, integer=True
+        )
+    for hop in ("first_hop", "second_hop"):
+        for key, value in neighborhood[hop].items():
+            values = (
+                value.items() if isinstance(value, dict) else [(key, value)]
+            )
+            for name, number in values:
+                _number(
+                    number,
+                    f"dataset.neighborhood.{hop}.{name}",
+                    0,
+                    integer=True,
+                )
     _strings(taxonomy["kinds"], "taxonomy.kinds", KINDS, nonempty=True)
     for key in (
         "branching",

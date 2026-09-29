@@ -800,7 +800,7 @@ def build_dataset_rows(
     if step <= 0:
         raise ValueError("snapshot step_months must be positive")
     if model_grid:
-        from ..modeling.annotations import snapshot_grid
+        from ..modeling.dataset.annotations import snapshot_grid
 
         snapshots = snapshot_grid(end, start_year)
     else:

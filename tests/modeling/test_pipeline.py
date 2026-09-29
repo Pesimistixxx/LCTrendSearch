@@ -6,20 +6,23 @@ import pytest
 from lctrend.graph.subgraphs import sample_subgraph
 from lctrend.graph.temporal import TemporalCorpus
 from lctrend.graph.training import build_dataset_rows
-from lctrend.modeling.annotations import (
+from lctrend.modeling.dataset.annotations import (
     build_pilot_queue,
     export_full_history,
     export_pilot_features,
     snapshot_grid,
     write_pilot_queue,
 )
-from lctrend.modeling.catboost_model import explain_catboost, train_catboost
-from lctrend.modeling.dataset import (
+from lctrend.modeling.dataset.labels import (
     prepare_labeled_rows,
     require_trainable,
     split_for,
 )
-from lctrend.modeling.hgt_model import (
+from lctrend.modeling.training.catboost_model import (
+    explain_catboost,
+    train_catboost,
+)
+from lctrend.modeling.training.hgt_model import (
     build_model,
     explain_hgt,
     fit_scaler,

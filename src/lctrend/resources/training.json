@@ -1,0 +1,55 @@
+{
+  "note": "Defaults of the modeling pipeline (scripts/build_dataset.py, scripts/train_model.py, the trainer image). A --config JSON overrides any subset of keys. Paths are relative to the working directory.",
+  "run": "2026-09-29-dedup",
+  "target": "signal_llm",
+  "inputs": {
+    "history": "artifacts/modeling/2026-09-29-dedup/dataset/history.csv",
+    "subgraphs": "artifacts/modeling/2026-09-29-dedup/dataset/subgraphs.jsonl",
+    "duplicates_plan": "artifacts/modeling/dedup-090.json"
+  },
+  "labels": {
+    "note": "source 'llm': signal_llm from llm_labels (dataset.llm_outcomes), 1 if score <= weak_max, 0 if >= not_weak_min; names the LLM judged not technologies are noise and stay unlabelled. source 'auto': signal_12m/36m from each technology's own future (dataset.outcomes).",
+    "source": "llm",
+    "llm_labels": "artifacts/modeling/2026-09-29-dedup/dataset/llm_labels_by_year.csv",
+    "weak_max": 0.3,
+    "not_weak_min": 0.7,
+    "drop_non_technologies": true,
+    "data_end": null,
+    "active_min_documents_last_year": 1,
+    "positive_min_new_documents": 2,
+    "positive_min_new_groups": 1,
+    "negative_max_new_documents": 0,
+    "mainstream_min_pct": 0.95,
+    "mainstream_min_documents_last_year": 10,
+    "mainstream_weight": 0.5
+  },
+  "split": {
+    "note": "Families are cut by the date they first appeared, so valid and test hold technologies new to the model. embargo 'strict' also drops labels whose horizon reaches the next part (point-in-time), 'none' keeps them (transfer to new technologies).",
+    "fractions": [0.7, 0.15, 0.15],
+    "embargo": "none"
+  },
+  "features": {
+    "max_missing_share": 0.99,
+    "max_abs_correlation": 0.98
+  },
+  "minimum_families_per_class": {"train": 5, "valid": 3},
+  "catboost": {
+    "iterations": 800,
+    "depth": 6,
+    "learning_rate": 0.05,
+    "seed": 13
+  },
+  "hgt": {
+    "enabled": true,
+    "epochs": 60,
+    "patience": 10,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "seed": 13
+  },
+  "stacking": {
+    "note": "Out-of-fold HGT probability becomes a CatBoost feature; valid, test and scored rows get the mean of the fold models, none of which saw their labels.",
+    "enabled": true,
+    "folds": 5
+  }
+}

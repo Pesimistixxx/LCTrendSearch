@@ -40,6 +40,18 @@ services:
       start_period: 30s
       retries: 12
 
+  # Model training runs on demand, not with the stack:
+  # docker compose --profile training run --rm trainer --run 2026-09-29
+  # Arguments are those of scripts/train_model.py (--config, --rebuild...).
+  trainer:
+    build:
+      context: .
+      dockerfile: docker/training/Dockerfile
+    image: lctrend-trainer
+    profiles: ["training"]
+    volumes:
+      - ./artifacts:/app/artifacts
+
   # No code reads Postgres yet (audit H-2): it starts only on request,
   # `docker compose --profile postgres up`, and no longer blocks the stack.
   postgres:

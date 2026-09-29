@@ -20,6 +20,15 @@
   "semantic": {"outlier_neighbors": 5},
   "graph": {"betweenness_samples": 256, "seed": 13},
   "subgraph": {"hops": 2, "max_neighbors": 30, "max_nodes": 400},
+  "neighborhood_note": "Subgraphs of the exports (graph.subgraphs.sample_neighborhood): two hops through technologies and documents only; leaf_types are dead ends, a document with max_document_technologies or more technologies (a survey) is not crossed.",
+  "neighborhood": {
+    "leaf_types": ["Company", "University", "Organization", "Country", "Domain", "Task"],
+    "max_nodes": 400,
+    "max_document_technologies": 30,
+    "first_hop": {"documents_by_age": {"recent": 12, "middle": 10, "old": 10}, "technologies": 10, "leaves_per_type": 10},
+    "second_hop": {"technologies_per_document": 5, "documents_per_technology": 3, "leaves_per_type": 3},
+    "seed": 13
+  },
   "coverage_families": {"scholarly": "article", "code": "repository", "package_registry": "package", "patent": "patent", "funding": "grant", "labor_market": "job_posting"},
   "snapshot_percentiles_note": "Rank among technologies at the same snapshot (0..1), so scale and money are compared with contemporaries.",
   "snapshot_percentiles": ["document_count", "documents_last_year", "company_count", "unique_author_count", "funding_amount_usd_real", "grant_amount_usd_real", "grant_amount_last_year_usd_real", "grant_count", "salary_median_usd_real", "job_posting_count"],

@@ -1,7 +1,7 @@
 import csv
 import json
 
-from lctrend.modeling.llm_labels import (
+from lctrend.modeling.dataset.llm_labels import (
     ProvisionalAssessment,
     packets,
     validate_assessment,
