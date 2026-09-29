@@ -1,0 +1,15 @@
+{
+  "purpose": "independent pilot, not machine-generated labels",
+  "rows_per_reviewer": 168,
+  "technologies": 56,
+  "allowed_states": [
+    "weak",
+    "trend",
+    "mature",
+    "faded",
+    "insufficient",
+    "rejected"
+  ],
+  "labels": "signal_36m and trend_36m need future evidence; leave uncertain cases empty",
+  "family_warning": "Parent/child links grouped; semantic near-duplicates require manual family review."
+}

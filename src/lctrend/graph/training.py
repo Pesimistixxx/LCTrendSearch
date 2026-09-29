@@ -782,6 +782,7 @@ def build_dataset_rows(
     min_documents: int = 2,
     end_date=None,
     include_novelty: bool = True,
+    model_grid: bool = False,
 ) -> List[Dict[str, object]]:
     """technology x snapshot -> predictors at T + outcomes in (T, T+H]."""
     if horizon_years < 1 or min_documents < 1:
@@ -798,9 +799,32 @@ def build_dataset_rows(
     step = int(settings["step_months"])
     if step <= 0:
         raise ValueError("snapshot step_months must be positive")
-    current = date(start_year, settings["month"], settings["day"])
+    if model_grid:
+        from ..modeling.annotations import snapshot_grid
+
+        snapshots = snapshot_grid(end, start_year)
+    else:
+        from calendar import monthrange
+
+        def regular_snapshots():
+            current = date(start_year, settings["month"], settings["day"])
+            while current <= end:
+                yield current
+                index = current.year * 12 + current.month - 1 + step
+                year, month = divmod(index, 12)
+                if year > 9999:
+                    break
+                current = date(
+                    year,
+                    month + 1,
+                    min(settings["day"], monthrange(year, month + 1)[1]),
+                )
+
+        snapshots = regular_snapshots()
     rows = []
-    while current <= end and current.year + horizon_years <= 9999:
+    for current in snapshots:
+        if current.year + horizon_years > 9999:
+            break
         from calendar import monthrange
 
         horizon_end = date(
@@ -841,19 +865,6 @@ def build_dataset_rows(
             )
             row["signal_36m"] = row["trend_36m"] = None
             rows.append(row)
-        # Move forward while retaining the catalog's day when possible.
-        index = current.year * 12 + current.month - 1 + step
-        year, month = divmod(index, 12)
-        if year > 9999:
-            break
-        current = date(
-            year,
-            month + 1,
-            min(
-                settings["day"],
-                monthrange(year, month + 1)[1],
-            ),
-        )
     return temporal_split(
         rows,
         config["split"]["valid_snapshots"],

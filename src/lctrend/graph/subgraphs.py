@@ -113,6 +113,12 @@ def _snapshot_graph(snapshot):
             # Family remains a type-level observable; no current metrics enter.
             nodes[version_node]["source_family"] = version.family
             nodes[version_node]["document_type"] = version.document_type
+            # Human-readable provenance is audit metadata, never tensor input.
+            reference = snapshot.corpus.document_info.get(
+                version.document_id, {}
+            )
+            nodes[version_node]["title"] = reference.get("title")
+            nodes[version_node]["url"] = reference.get("url")
             edge(document_node, version_node, "HAS_VERSION", published)
             edge(
                 technology_node,
@@ -272,10 +278,16 @@ def sample_subgraph(
         nodes[root] = dict(nodes[root])
         nodes[root]["features"] = {**nodes[root]["features"], **numeric}
         nodes[root]["missing_mask"] = _masks(nodes[root]["features"])
-    adjacency = defaultdict(lambda: defaultdict(set))
-    for edge in edges:
-        adjacency[edge["source"]][edge["type"]].add(edge["target"])
-        adjacency[edge["target"]][edge["type"]].add(edge["source"])
+    adjacency = getattr(snapshot, "_typed_subgraph_adjacency_cache", None)
+    if adjacency is None:
+        adjacency = defaultdict(lambda: defaultdict(set))
+        outgoing = defaultdict(list)
+        for edge in edges:
+            adjacency[edge["source"]][edge["type"]].add(edge["target"])
+            adjacency[edge["target"]][edge["type"]].add(edge["source"])
+            outgoing[edge["source"]].append(edge)
+        snapshot._typed_subgraph_adjacency_cache = adjacency
+        snapshot._typed_subgraph_outgoing_cache = outgoing
 
     def rank(value):
         payload = str(seed) + "|" + root + "|" + value
@@ -297,8 +309,9 @@ def sample_subgraph(
             break
     retained_edges = [
         edge
-        for edge in edges
-        if edge["source"] in selected and edge["target"] in selected
+        for source in selected
+        for edge in snapshot._typed_subgraph_outgoing_cache.get(source, ())
+        if edge["target"] in selected
     ]
     retained_edges.sort(
         key=lambda edge: (

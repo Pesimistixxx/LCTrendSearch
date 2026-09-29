@@ -24,6 +24,7 @@ artifacts/pytest-*/
 # Local graph dumps and the offline graph view (large, regenerable).
 artifacts/backups/
 artifacts/graph-view/
+artifacts/full-subgraphs-2026-09-29.jsonl
 # Leftovers of test runs with a locked ACL (git cannot read them).
 artifacts/economic-review-tests-*/
 artifacts/test-*/

@@ -25,6 +25,12 @@ pdf = ["docling>=2,<3"]
 gui = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1"]
 # signals-report --output *.xlsx
 report = ["openpyxl>=3.1,<4"]
+models = [
+    "catboost>=1.2,<2",
+    "torch>=2.4,<3",
+    "torch-geometric>=2.7,<3",
+    "scikit-learn>=1.5,<2",
+]
 dev = [
     "pytest>=8,<9",
     "ruff>=0.16,<0.17",

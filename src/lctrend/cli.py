@@ -1025,6 +1025,11 @@ def main() -> None:
         help="Also export bounded point-in-time subgraphs as JSONL",
     )
     training_command.add_argument(
+        "--model-grid",
+        action="store_true",
+        help="Use annual/half-yearly/quarterly historical model snapshots",
+    )
+    training_command.add_argument(
         "--no-taxonomy",
         action="store_true",
         help="Skip semantic, taxonomy and graph novelty features",
@@ -1502,6 +1507,7 @@ def _run(args: argparse.Namespace) -> None:
             min_documents=args.min_documents,
             end_date=args.end_date,
             include_novelty=not args.no_taxonomy,
+            model_grid=args.model_grid,
         )
         logger.info(
             "rows=%d output=%s",
