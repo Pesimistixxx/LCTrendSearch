@@ -722,6 +722,18 @@ def _analytics(catalogs: Mapping) -> None:
 def _ranking(catalogs: Mapping) -> None:
     ranking = catalogs["ranking"]
     _number(ranking["top_k"], "ranking.top_k", 1, integer=True)
+    search = ranking["search"]
+    for key in (
+        "min_cosine", "cosine_weight", "bm25_weight",
+        "relevance_weight", "signal_weight",
+    ):
+        _number(search[key], "ranking.search." + key, 0, 1)
+    for left, right in (
+        ("cosine_weight", "bm25_weight"),
+        ("relevance_weight", "signal_weight"),
+    ):
+        if not math.isclose(search[left] + search[right], 1.0):
+            _fail("ranking.search", f"{left} + {right} must equal 1")
     _bool(ranking["include_novelty"], "ranking.include_novelty")
     rules = ranking["candidates"]
     _strings(rules["kinds"], "ranking.candidates.kinds", KINDS, nonempty=True)

@@ -842,6 +842,9 @@ def create_app(
                 values["LLM_MODEL"] or "<default>",
                 body.api_key is not None and bool(body.api_key.strip()),
             )
+            if search_service is None:
+                # A running search must not keep embedding with the old key.
+                app.state.search = None
         return readiness()
 
     @app.post("/api/ingest/sources/settings")

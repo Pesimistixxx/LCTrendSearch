@@ -88,12 +88,19 @@ def add_search_route(app: FastAPI) -> None:
             )
         try:
             return await app.state.search.search(query, cutoff)
-        except Exception:
+        except Exception as exc:
             # Connection errors name hosts; keep them in the server log.
             logger.exception("Search %r failed", query)
-            raise HTTPException(
-                503, "Граф недоступен: проверьте подключение к Neo4j"
-            ) from None
+            from lctrend.llm.client import LLMError
+            from lctrend.ranking.search import EmbeddingIndexError
+
+            if isinstance(exc, LLMError):
+                detail = "GigaChat недоступен: проверьте ключ и подключение"
+            elif isinstance(exc, EmbeddingIndexError):
+                detail = "Эмбеддинги технологий несовместимы с поиском"
+            else:
+                detail = "Граф недоступен: проверьте подключение к Neo4j"
+            raise HTTPException(503, detail) from None
 
 
 def create_app(search_service=None, hosts=None) -> FastAPI:

@@ -5,6 +5,8 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from frontend.server.app import create_app
+from lctrend.llm.client import LLMError
+from lctrend.ranking.search import EmbeddingIndexError
 
 
 class Manager:
@@ -58,3 +60,15 @@ def test_unavailable_graph_is_a_503_without_internal_details():
         response = http.get("/api/search", params={"q": "ai"})
     assert response.status_code == 503
     assert "secret-host" not in response.text
+
+
+def test_embedding_failures_are_not_reported_as_graph_failures():
+    for error, expected in (
+        (LLMError("transport_error", "secret-host"), "GigaChat"),
+        (EmbeddingIndexError("wrong model"), "Эмбеддинги"),
+    ):
+        with client(Search(error)) as http:
+            response = http.get("/api/search", params={"q": "ai"})
+        assert response.status_code == 503
+        assert expected in response.json()["detail"]
+        assert "secret-host" not in response.text
