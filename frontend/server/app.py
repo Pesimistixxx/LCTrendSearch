@@ -597,6 +597,13 @@ def create_app(
                 get_crawls().create, topic=body.topic, limit=body.limit
             )
 
+    @app.get("/api/ingest/topics/presets")
+    def topic_presets():
+        """Ready topics to choose from (resources/topic_presets.json)."""
+        from lctrend.core.config import load_catalog
+
+        return load_catalog("topic_presets")
+
     @app.post("/api/ingest/topics/suggest")
     async def suggest_crawl_topics(body: TopicRequest):
         """The model proposes search topics; optionally queue them.
@@ -634,6 +641,14 @@ def create_app(
     def crawl(crawl_id: str):
         return known(get_crawls().get_crawl, crawl_id)
 
+    @app.delete("/api/ingest/crawls/{crawl_id}")
+    def delete_crawl(crawl_id: str):
+        with settings_lock:
+            try:
+                return known(get_crawls().delete, crawl_id)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+
     @app.post("/api/ingest/crawls/{crawl_id}/pause")
     def pause_crawl(crawl_id: str):
         return known(get_crawls().pause, crawl_id)
@@ -644,8 +659,14 @@ def create_app(
             return known(get_crawls().resume, crawl_id)
 
     @app.post("/api/ingest/crawls/{crawl_id}/retry-failed")
-    def retry_crawl_materials(crawl_id: str):
+    def retry_crawl_materials(crawl_id: str, partial: bool = False):
+        """Failed materials again; partial=true also re-extracts the
+        partial ones."""
         with settings_lock:
+            if partial:
+                return known(
+                    get_crawls().retry_failed, crawl_id, partial=True
+                )
             return known(get_crawls().retry_failed, crawl_id)
 
     @app.get("/api/ingest/crawls/{crawl_id}/materials")

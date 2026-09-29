@@ -59,7 +59,7 @@ from .context import (
     review_batches,
     split_packet,
 )
-from .contracts import Extraction, Review
+from .contracts import Extraction, Review, Triage
 from .validation import validate_local_extraction, validate_review
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,103 @@ def technology_profile(entity: Any, version_id: str) -> dict | None:
     }
 
 
+def _triage_enabled() -> bool:
+    settings = load_catalog("llm_schema")["technology_contract"].get(
+        "triage", {}
+    )
+    return bool(settings.get("enabled")) and os.getenv(
+        "LCTREND_TECHNOLOGY_TRIAGE", "1"
+    ) not in ("0", "false", "no")
+
+
+async def _triage(document, batches, budget, metadata) -> None:
+    """Sort the document's technology candidates; non-technologies
+    (products, library operations, features, titles, datasets, fields)
+    become ConceptCandidates with classification_status rejected.
+
+    One review call per group of candidates; a failed call keeps them.
+    """
+    contract = load_catalog("llm_schema")["technology_contract"]
+    kinds = set(contract["kinds"])
+    size = int(contract.get("triage", {}).get("max_entities", 40))
+    candidates = {}
+    for packet_id, extraction, _, _ in batches:
+        for entity in extraction.entities:
+            if entity.kind.value in kinds:
+                candidates[f"{packet_id}:{entity.local_id}"] = entity
+    if not candidates:
+        return
+    verdicts: dict[str, Any] = {}
+    failed = []
+    keys = list(candidates)
+    for start in range(0, len(keys), size):
+        group = keys[start : start + size]
+        payload = {
+            "document": {
+                "title": document.title,
+                "document_type": document.document_type.value,
+            },
+            "candidates": [
+                {
+                    "id": f"t{index}",
+                    "label": candidates[key].label,
+                    "kind": candidates[key].kind.value,
+                    **{
+                        field: getattr(candidates[key], name)
+                        for field, name in (
+                            ("definition", "definition"),
+                            ("mechanism", "technical_mechanism"),
+                            ("function", "technical_function"),
+                        )
+                        if getattr(candidates[key], name)
+                    },
+                    "quote": next(
+                        (
+                            span.quote
+                            for span in (
+                                *candidates[key].support,
+                                *candidates[key].evidence,
+                            )
+                        ),
+                        "",
+                    )[:300],
+                }
+                for index, key in enumerate(group, start + 1)
+            ],
+        }
+        try:
+            answer = await budget.call(
+                Triage, _prompt("triage"), payload, "review"
+            )
+        except LLMError as exc:
+            failed.append(exc.code)
+            continue
+        ids = {f"t{index}": key for index, key in enumerate(group, start + 1)}
+        for item in answer.items:
+            if item.id in ids:
+                verdicts[ids[item.id]] = item
+    rejected: dict[str, int] = {}
+    for key, entity in candidates.items():
+        item = verdicts.get(key)
+        if item is None or item.verdict == "technology":
+            continue
+        rejected[item.verdict] = rejected.get(item.verdict, 0) + 1
+        entity.kind = ConceptKind.CANDIDATE
+        entity.classification_status = "rejected"
+        entity.contract_issues = [
+            *entity.contract_issues,
+            "triage:" + item.verdict,
+        ]
+        if item.reason:
+            entity.uncertainty = entity.uncertainty or item.reason
+    metadata["technology_triage"] = {
+        "candidates": len(candidates),
+        "judged": len(verdicts),
+        "rejected": rejected,
+        **({"failed_calls": failed} if failed else {}),
+    }
+
+
 def _refs(value: Any, mapping: dict[str, str]) -> Any:
     if isinstance(value, list):
         return [_refs(item, mapping) for item in value]
@@ -140,7 +237,10 @@ def _refs(value: Any, mapping: dict[str, str]) -> Any:
     return value
 
 
-ITEM_ISSUE_CODES = {"review_unclear", "conflicting_reviews"}
+# invalid_items: single malformed entities or claims dropped from an answer
+# whose packet was processed; 65 of 119 partial documents on 2026-09-29
+# were partial for this alone.
+ITEM_ISSUE_CODES = {"review_unclear", "conflicting_reviews", "invalid_items"}
 
 
 def _item_issue(issue: dict) -> bool:
@@ -1193,6 +1293,10 @@ async def _process_document(
             await asyncio.gather(*running, return_exceptions=True)
     batches = [batch for _, batch in sorted(batches, key=lambda i: i[0])]
     failed = [packet_id for _, packet_id in sorted(failed)]
+
+    if batches and _triage_enabled():
+        _emit(event, stage="triage", status="running")
+        await _triage(document, batches, budget, metadata)
 
     # Assemble only source-anchored entities; matching names alone does not
     # dedup evidence.

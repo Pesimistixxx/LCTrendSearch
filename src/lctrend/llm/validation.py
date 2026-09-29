@@ -534,6 +534,13 @@ def generic_technology(label: str) -> bool:
 _ORGANIZATION_KINDS = {"company": "Company", "university": "University"}
 
 
+def _product_name(label: str, schema: Dict[str, Any]) -> bool:
+    names = schema.get("technology_contract", {}).get("product_names", [])
+    bare = re.sub(r"\([^()]*\)", " ", label)
+    key = " ".join(bare.casefold().split())
+    return key in {" ".join(name.casefold().split()) for name in names}
+
+
 def _normalize_kinds(
     extraction: Extraction,
     schema: Dict[str, Any],
@@ -558,6 +565,9 @@ def _normalize_kinds(
         target = None
         if kind in technology_kinds and generic_technology(entity.label):
             target = "Domain"
+        elif kind in technology_kinds and _product_name(entity.label, schema):
+            # A language, library or tool implements technologies.
+            target = ConceptKind.CANDIDATE.value
         elif kind in organization_kinds:
             label = entity.label.strip()
             cased = [

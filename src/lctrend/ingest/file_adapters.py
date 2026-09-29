@@ -478,10 +478,31 @@ def _docling_items(converter: Any, path: str, max_pages: int) -> tuple:
     return items, status
 
 
-def _docling_worker(connection: Any) -> None:
-    """Child process: one converter (models load once), one PDF at a time."""
+def pdf_converter() -> Any:
+    """A Docling converter with the pipeline options of pipeline.json
+    (pdf_pipeline); Docling's defaults if they cannot apply."""
     from docling.document_converter import DocumentConverter
 
+    options = load_catalog("pipeline").get("pdf_pipeline")
+    if not options:
+        return DocumentConverter()
+    try:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import PdfFormatOption
+    except ImportError:
+        return DocumentConverter()
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=PdfPipelineOptions(**options)
+            )
+        }
+    )
+
+
+def _docling_worker(connection: Any) -> None:
+    """Child process: one converter (models load once), one PDF at a time."""
     converter = None
     while True:
         try:
@@ -493,7 +514,7 @@ def _docling_worker(connection: Any) -> None:
         path, max_pages = request
         try:
             if converter is None:
-                converter = DocumentConverter()
+                converter = pdf_converter()
             reply = ("ok", _docling_items(converter, path, max_pages))
         except Exception as exc:
             reply = ("error", type(exc).__name__, str(exc)[:500])
@@ -566,11 +587,46 @@ class _DoclingProcess:
         return reply[1]
 
 
+class _DoclingPool:
+    """Converter processes; a PDF takes a free one (file_limits.pdf_workers).
+
+    One process made every worker of a job wait for a single PDF at a time
+    (2026-09-29: five of six documents queued at the full-text stage while
+    the model keys idled). Each process loads the models once and needs
+    its own memory, so the pool stays small.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._free: list = []
+        self._slots: Optional[threading.BoundedSemaphore] = None
+
+    def _ensure(self) -> threading.BoundedSemaphore:
+        with self._lock:
+            if self._slots is None:
+                limits = load_catalog("pipeline")["file_limits"]
+                size = max(1, int(limits.get("pdf_workers", 1)))
+                self._free = [_DoclingProcess() for _ in range(size)]
+                self._slots = threading.BoundedSemaphore(size)
+            return self._slots
+
+    def convert(
+        self, path: Path, max_pages: int, timeout: Optional[float]
+    ) -> tuple:
+        with self._ensure():
+            with self._lock:
+                process = self._free.pop()
+            try:
+                return process.convert(path, max_pages, timeout)
+            finally:
+                with self._lock:
+                    self._free.append(process)
+
+
 _CONVERTER = None
-# Docling loads its layout/OCR models once per converter and is CPU-bound;
-# one converter, one conversion at a time.
+# In-process Docling (tests): one converter, one conversion at a time.
 _CONVERTER_LOCK = threading.Lock()
-_DOCLING = _DoclingProcess()
+_DOCLING = _DoclingPool()
 # Tests replace Docling with in-memory fakes that a child process cannot
 # import; production always isolates the conversion.
 IN_PROCESS_DOCLING = False
@@ -603,13 +659,13 @@ def _convert(path: Path) -> tuple:
     limits = load_catalog("pipeline")["file_limits"]
     max_pages = int(limits.get("pdf_max_pages", 10**9))
     timeout = limits.get("pdf_timeout_seconds")
+    if not IN_PROCESS_DOCLING:
+        return _DOCLING.convert(path, max_pages, timeout)
     with _CONVERTER_LOCK:
-        if not IN_PROCESS_DOCLING:
-            return _DOCLING.convert(path, max_pages, timeout)
         from docling.document_converter import DocumentConverter
 
         if not isinstance(_CONVERTER, DocumentConverter):
-            _CONVERTER = DocumentConverter()
+            _CONVERTER = pdf_converter()
         return _docling_items(_CONVERTER, str(path), max_pages)
 
 

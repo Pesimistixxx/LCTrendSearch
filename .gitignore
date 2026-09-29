@@ -20,3 +20,10 @@ artifacts/raw/
 artifacts/llm-cache/
 artifacts/pytest-*/
 .test-tmp-*/
+
+# Local graph dumps and the offline graph view (large, regenerable).
+artifacts/backups/
+artifacts/graph-view/
+# Leftovers of test runs with a locked ACL (git cannot read them).
+artifacts/economic-review-tests-*/
+artifacts/test-*/

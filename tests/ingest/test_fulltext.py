@@ -516,3 +516,73 @@ def test_pubmed_rate_limit_works_across_event_loops(monkeypatch):
     asyncio.run(connectors._pubmed_slot())
     assert len(waits) == 2
     assert waits[1] > 0.3, "the second request waits for its slot"
+
+
+def _pdf_chunks(roles):
+    from lctrend.core.models import Chunk
+
+    return [
+        Chunk(
+            chunk_id=f"p{index}",
+            kind="fulltext",
+            text=f"text {index}",
+            order=index,
+            locator={"section_role": role} if role else {},
+        )
+        for index, role in enumerate(roles)
+    ]
+
+
+def test_pdf_is_read_by_method_and_conclusion_sections():
+    roles = (
+        ["introduction"] * 30
+        + ["related_work"] * 40
+        + ["method"] * 25
+        + ["results"] * 60
+        + ["conclusion"] * 10
+    )
+    kept, summary = fulltext.select_sections(_pdf_chunks(roles))
+    kept_roles = [chunk.locator["section_role"] for chunk in kept]
+    assert len(kept) == 40
+    # Priority: all of the method, all of the conclusion, then introduction.
+    assert kept_roles.count("method") == 25
+    assert kept_roles.count("conclusion") == 10
+    assert kept_roles.count("introduction") == 5
+    assert "related_work" not in kept_roles and "results" not in kept_roles
+    assert [chunk.order for chunk in kept] == sorted(
+        chunk.order for chunk in kept
+    )
+    assert summary["total"] == 165 and summary["basis"] == "sections"
+
+
+def test_pdf_without_headings_reads_head_and_tail():
+    kept, summary = fulltext.select_sections(_pdf_chunks([None] * 200))
+    assert [chunk.chunk_id for chunk in kept] == [
+        *(f"p{index}" for index in range(20)),
+        *(f"p{index}" for index in range(188, 200)),
+    ]
+    assert summary["basis"] == "head_and_tail"
+    short, _ = fulltext.select_sections(_pdf_chunks(["results"] * 10))
+    assert len(short) == 10
+
+
+def test_pdf_links_try_open_repositories_before_walled_publishers():
+    payload = {
+        "best_oa_location": {
+            "is_oa": True,
+            "pdf_url": "https://www.mdpi.com/a.pdf",
+        },
+        "primary_location": {
+            "is_oa": True,
+            "pdf_url": "https://example.edu/b.pdf",
+        },
+        "locations": [
+            {"is_oa": True, "pdf_url": "https://arxiv.org/pdf/2004.10934"},
+            {"is_oa": False, "pdf_url": "https://closed.example/c.pdf"},
+        ],
+    }
+    assert fulltext.openalex_pdf_urls(payload) == [
+        "https://arxiv.org/pdf/2004.10934",
+        "https://example.edu/b.pdf",
+        "https://www.mdpi.com/a.pdf",
+    ]

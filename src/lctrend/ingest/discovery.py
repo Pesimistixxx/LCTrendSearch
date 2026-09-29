@@ -238,9 +238,15 @@ async def discover_github(topic: str, cursor: str | None = None) -> dict:
     if not isinstance(records, list):
         raise ValueError("Invalid GitHub discovery response")
     items = []
+    catalog = re.compile(settings["catalog_pattern"])
     for record in records:
         if not isinstance(record, Mapping) or not record.get("full_name"):
             raise ValueError("Invalid GitHub discovery record")
+        if catalog.search(str(record.get("name") or "")) or catalog.search(
+            str(record.get("description") or "")
+        ):
+            # A link catalog lists libraries; it is not a technology source.
+            continue
         source_id = _repository(record["full_name"])
         items.append(
             {

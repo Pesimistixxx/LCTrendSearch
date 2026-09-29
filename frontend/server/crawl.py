@@ -707,7 +707,32 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             self._futures[crawl_id] = self._pool.submit(self._run, crawl_id)
         return self.get_crawl(crawl_id)
 
-    def retry_failed(self, crawl_id):
+    def delete(self, crawl_id):
+        """Forget a stopped crawl: its row, streams and links. Materials
+        stay, so a later crawl does not pay for them again."""
+        with self._lock, self._db:
+            row = self._known(crawl_id)
+            if row["status"] in {"queued", "running", "pausing"}:
+                raise ValueError("Pause the crawl before deleting it")
+            self._db.execute(
+                "UPDATE materials SET claimed_by=NULL WHERE claimed_by=?",
+                (crawl_id,),
+            )
+            for table in ("links", "streams", "crawls"):
+                self._db.execute(
+                    f"DELETE FROM {table} WHERE crawl_id=?", (crawl_id,)
+                )
+            self._paused.pop(crawl_id, None)
+            self._futures.pop(crawl_id, None)
+        return {"crawl_id": crawl_id, "deleted": True}
+
+    def retry_failed(self, crawl_id, partial=False):
+        """Failed materials (and, with ``partial``, partial ones) go back
+        to the queue. A partial material is extracted again: its link to
+        the old job is dropped, or the crawl would republish the cached
+        partial result instead of calling the model.
+        """
+        statuses = ("failed", "partial") if partial else ("failed",)
         with self._lock, self._db:
             row = self._known(crawl_id)
             if row["status"] in {"queued", "running", "pausing"}:
@@ -717,11 +742,16 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             self._db.execute(
                 (
                     "UPDATE materials SET "
+                    "job_id=CASE WHEN status='partial' THEN NULL "
+                    "ELSE job_id END,"
+                    "doc_id=CASE WHEN status='partial' THEN NULL "
+                    "ELSE doc_id END,"
                     "status='pending',error_json=NULL,updated_at=? WHERE "
-                    "status='failed' AND material_id IN (SELECT material_id "
+                    f"status IN ({','.join('?' * len(statuses))}) "
+                    "AND material_id IN (SELECT material_id "
                     "FROM links WHERE crawl_id=?)"
                 ),
-                (_now(), crawl_id),
+                (_now(), *statuses, crawl_id),
             )
         return self.resume(crawl_id)
 
@@ -1170,6 +1200,12 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     payloads,
                     direction=self._known(crawl_id)["topic"],
                     workers=default_workers(),
+                    # Abstracts only unless sources.json turns PDFs on.
+                    fulltext=bool(
+                        load_catalog("sources")["platforms"]["openalex"].get(
+                            "crawl_fulltext", False
+                        )
+                    ),
                     on_created=register,
                     cached_results=cached_results,
                 )

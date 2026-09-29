@@ -666,6 +666,19 @@ def _github_history(payload: Mapping[str, Any]) -> Dict[str, Any]:
     return history
 
 
+_LINK_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+.*\[[^\]]+\]\([^)]+\)")
+
+
+def link_catalog(markdown: str) -> bool:
+    """Whether a README is mostly list rows with a link (an awesome list)."""
+    settings = load_catalog("sources")["platforms"]["github"]
+    lines = [line for line in markdown.splitlines() if line.strip()]
+    links = sum(bool(_LINK_LINE.match(line)) for line in lines)
+    return links >= int(settings["catalog_min_link_lines"]) and links >= float(
+        settings["catalog_min_link_share"]
+    ) * len(lines)
+
+
 def parse_github(
     payload: Mapping[str, Any], raw: Optional[bytes] = None
 ) -> DocumentEnvelope:
@@ -700,9 +713,14 @@ def parse_github(
     )
     chunks: List[Chunk] = []
     organizations: List[Organization] = []
+    warnings: List[str] = []
 
     if isinstance(readme, Mapping):
-        if content:
+        if content and link_catalog(content):
+            # An awesome-style list: one "library - one line" per row; the
+            # model made each row a technology (sources.json catalog_note).
+            warnings.append("readme_link_catalog_skipped")
+        elif content:
             readme_chunks = _markdown_chunks(
                 version_id, "readme", content, len(chunks)
             )
@@ -806,6 +824,7 @@ def parse_github(
         chunks=chunks,
         metadata={
             "full_name": repo.get("full_name"),
+            **({"parse_warnings": warnings} if warnings else {}),
             "commit_sha": commit_sha,
             "content_date_status": "commit_metadata"
             if content_date

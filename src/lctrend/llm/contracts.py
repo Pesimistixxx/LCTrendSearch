@@ -214,6 +214,30 @@ class Extraction(LocalModel):
     context_requests: List[ContextRequest] = Field(default_factory=list)
 
 
+TRIAGE_VERDICTS = (
+    "technology",
+    "product",
+    "software_component",
+    "feature_or_metric",
+    "title",
+    "dataset_or_resource",
+    "domain",
+    "other",
+)
+
+
+class TriageItem(LocalModel):
+    """Whether one extracted technology is a technology of the radar."""
+
+    id: str = Field(min_length=1)
+    verdict: Literal[TRIAGE_VERDICTS]
+    reason: str = ""
+
+
+class Triage(LocalModel):
+    items: List[TriageItem] = Field(default_factory=list)
+
+
 class ReviewItem(LocalModel):
     claim_id: str = Field(min_length=1)
     decision: Literal["supported", "unsupported", "unclear"]

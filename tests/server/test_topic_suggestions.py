@@ -124,3 +124,29 @@ def test_model_failure_is_reported_without_details():
     assert response.status_code == 502
     assert "secret" not in response.text
     assert blank.status_code == 422
+
+
+def test_presets_list_the_hundred_test_signals():
+    from lctrend.core.config import load_catalog
+
+    shipped = load_catalog("topic_presets")
+    queries = [
+        item["query"]
+        for group in shipped["groups"]
+        for item in group["topics"]
+    ]
+    assert len(queries) == len(set(queries))
+    broad = [
+        item
+        for group in shipped["groups"]
+        for item in group["topics"]
+        if item.get("broad")
+    ]
+    # The 100 niches of the test sample plus broad topics of each area.
+    assert len(queries) - len(broad) == 100
+    assert len(broad) == 6 * len(shipped["groups"])
+    assert shipped["default_limit"] == 250
+    with app_with(Provider([]), Crawls()) as client:
+        answer = client.get("/api/ingest/topics/presets")
+    assert answer.status_code == 200
+    assert answer.json() == shipped

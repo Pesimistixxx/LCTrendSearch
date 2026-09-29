@@ -388,6 +388,7 @@ def _technology_contract(contract: Mapping) -> None:
     )
     _number(contract["max_field_words"], path + ".max_field_words", 1)
     _regex(contract["abbreviation_pattern"], path + ".abbreviation_pattern")
+    _strings(contract.get("product_names", []), path + ".product_names")
 
 
 def _contracts(catalogs: Mapping) -> None:

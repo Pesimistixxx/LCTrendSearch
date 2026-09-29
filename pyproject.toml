@@ -57,6 +57,7 @@ select = ["E", "W", "F", "I"]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 markers = [
+    "technology_triage: runs the technology triage call (tests/conftest.py)",
     "legacy_technology_entities: module predates the technology contract; the contract is reported, not enforced (tests/conftest.py)",
     "shipped_technology_contract: runs the technology contract as llm_schema.json ships it, enforced or not (tests/conftest.py)",
 ]

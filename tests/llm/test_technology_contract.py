@@ -381,3 +381,96 @@ def test_missing_name_quote_and_verb_form_are_repaired():
 
     _normalize_predicate(claim, "claim:k", {"reported_measurement": {}}, notes)
     assert claim.predicate == "reported_measurement"
+
+
+def test_languages_and_libraries_are_candidates_not_technologies():
+    entity, _, notes = validate(
+        technology(label="PyTorch", source_names=[{"name": NAME}])
+    )
+    assert entity.kind == ConceptKind.CANDIDATE
+    assert any(
+        note["code"] == "kind_normalized" and note["to"] == "ConceptCandidate"
+        for note in notes
+    )
+
+
+def test_a_dropped_item_does_not_make_the_document_partial():
+    from lctrend.llm.pipeline import _item_issue
+
+    assert _item_issue({"code": "invalid_items", "stage": "extract"})
+    assert not _item_issue({"code": "call_budget"})
+
+
+@pytest.mark.technology_triage
+def test_triage_turns_products_and_operations_into_candidates():
+    save = technology(
+        local_id="save",
+        label="Save",
+        source_names=[{"name": "Acme Inference"}],
+        evidence=[{"chunk_id": "c1", "quote": "Acme Inference"}],
+    )
+    answer = extraction()
+    answer["entities"].append(save)
+    triage = {
+        "items": [
+            {"id": "t1", "verdict": "technology", "reason": "подход"},
+            {
+                "id": "t2",
+                "verdict": "software_component",
+                "reason": "операция",
+            },
+        ]
+    }
+    review = {
+        "items": [
+            {"claim_id": "developer", "decision": "supported", "reason": "Ok."}
+        ]
+    }
+    provider = ReplayProvider([answer, review, triage])
+    result = asyncio.run(
+        process_document(document(), provider, settings=settings())
+    )
+    technologies = [
+        concept.preferred_label
+        for concept in result.concepts
+        if concept.kind == ConceptKind.TECHNOLOGY
+    ]
+    assert technologies == ["тиринг KV-кэша с выгрузкой контекста в DRAM/NVMe"]
+    rejected = [
+        binding["technology_profile"]
+        for binding in result.run.metadata["entity_bindings"].values()
+        if binding.get("technology_profile", {}).get("classification_status")
+        == "rejected"
+    ]
+    assert len(rejected) == 1
+    assert "triage:software_component" in rejected[0]["contract_issues"]
+    assert result.run.metadata["technology_triage"] == {
+        "candidates": 2,
+        "judged": 2,
+        "rejected": {"software_component": 1},
+    }
+
+
+@pytest.mark.technology_triage
+def test_failed_triage_keeps_the_candidates():
+    provider = ReplayProvider(
+        [
+            extraction(),
+            {
+                "items": [
+                    {
+                        "claim_id": "developer",
+                        "decision": "supported",
+                        "reason": "Ok.",
+                    }
+                ]
+            },
+        ]
+    )
+    result = asyncio.run(
+        process_document(document(), provider, settings=settings())
+    )
+    assert any(
+        concept.kind == ConceptKind.TECHNOLOGY for concept in result.concepts
+    )
+    assert result.run.metadata["technology_triage"]["failed_calls"]

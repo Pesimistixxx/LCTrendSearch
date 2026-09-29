@@ -935,13 +935,85 @@ def test_next_batch_starts_while_a_slow_batch_drains(tmp_path, monkeypatch):
             sleep(0.02)
         # Both batches submitted; the first job is still running.
         assert len(jobs.calls) == 2
-        assert all(
-            job["status"] == "running" for job in jobs.jobs.values()
-        )
+        assert all(job["status"] == "running" for job in jobs.jobs.values())
         jobs.release.set()
         final = finish(instance, crawl)
         assert final["status"] == "completed"
         assert final["counts"]["parsed"] == 4
     finally:
         jobs.release.set()
+        instance.close(wait=True)
+
+
+def test_partial_materials_are_extracted_again_on_request(tmp_path):
+    jobs = Jobs(
+        tmp_path / "jobs", statuses={"partial": "partial", "failed": "failed"}
+    )
+
+    def discovery(*args):
+        return page([item("openalex", "partial"), item("openalex", "failed")])
+
+    instance = manager(tmp_path, jobs, discoverers={"openalex": discovery})
+    try:
+        first = finish(instance, instance.create("Sensors"))
+        jobs.statuses.update(partial="succeeded", failed="succeeded")
+        retried = finish(
+            instance, instance.retry_failed(first["crawl_id"], partial=True)
+        )
+        assert retried["counts"]["parsed"] == 2
+        assert retried["counts"]["partial"] == retried["counts"]["failed"] == 0
+        # Both went to a new job: the partial one was not taken from cache.
+        assert sorted(payload["name"] for payload in jobs.calls[-1][1]) == [
+            "failed",
+            "partial",
+        ]
+    finally:
+        instance.close(wait=True)
+
+
+def test_a_stopped_crawl_can_be_deleted_and_its_materials_stay(tmp_path):
+    instance = manager(
+        tmp_path,
+        discoverers={"openalex": lambda *args: page([item("openalex", "a")])},
+    )
+    try:
+        crawl = finish(instance, instance.create("Sensors"))
+        assert crawl["counts"]["parsed"] == 1
+        assert instance.delete(crawl["crawl_id"]) == {
+            "crawl_id": crawl["crawl_id"],
+            "deleted": True,
+        }
+        assert crawl["crawl_id"] not in {
+            item["crawl_id"] for item in instance.list_crawls()
+        }
+        # The processed material is still known: a new crawl skips it.
+        again = finish(instance, instance.create("Sensors"))
+        assert again["counts"]["duplicates"] + again["counts"]["parsed"] >= 1
+        with pytest.raises(ValueError):
+            instance.delete(instance.create("Other")["crawl_id"])
+    finally:
+        instance.close(wait=True)
+
+
+def test_crawls_follow_the_configured_fulltext_switch(tmp_path):
+    from lctrend.core.config import load_catalog
+
+    seen = []
+
+    class RecordingJobs(Jobs):
+        def create_payloads(self, source, payloads, **kwargs):
+            seen.append(kwargs.get("fulltext"))
+            return super().create_payloads(source, payloads, **kwargs)
+
+    jobs = RecordingJobs(tmp_path / "jobs")
+    instance = manager(
+        tmp_path,
+        jobs,
+        discoverers={"openalex": lambda *args: page([item("openalex", "a")])},
+    )
+    try:
+        finish(instance, instance.create("Sensors"))
+        switch = load_catalog("sources")["platforms"]["openalex"]
+        assert seen == [switch["crawl_fulltext"]]
+    finally:
         instance.close(wait=True)

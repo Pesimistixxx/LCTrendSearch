@@ -50,9 +50,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def ensure_directory(directory: Path) -> None:
+    """mkdir that survives Docker Desktop bind mounts on Windows: a
+    directory another worker has just created can look missing for a
+    moment, so mkdir(exist_ok=True) raises FileExistsError (2026-09-29: ten
+    documents of a new job failed writing their first results at once).
+    """
+    for delay in (0, 0.05, 0.1, 0.2, 0.5):
+        if delay:
+            sleep(delay)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            return
+        except FileExistsError:
+            if directory.is_dir():
+                return
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def _write_json(path: Path, value: Any) -> None:
     """Publish a complete JSON file atomically on the same filesystem."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(path.parent)
     descriptor, filename = tempfile.mkstemp(
         prefix=".job-", suffix=".tmp", dir=path.parent
     )

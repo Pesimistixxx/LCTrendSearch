@@ -1167,9 +1167,7 @@ def test_stop_past_the_grace_records_the_job_as_interrupted(tmp_path):
         assert started.wait(5)
         instance.close(timeout=0.2)
         final = json.loads(
-            (tmp_path / "jobs" / job["job_id"] / "job.json").read_text(
-                "utf-8"
-            )
+            (tmp_path / "jobs" / job["job_id"] / "job.json").read_text("utf-8")
         )
         assert final["status"] == "interrupted"
         document = final["documents"][0]
@@ -1266,3 +1264,28 @@ def test_max_documents_is_validated(tmp_path):
         assert instance.max_documents == 3
     finally:
         instance.close(wait=True)
+
+
+def test_directory_creation_survives_a_lagging_bind_mount(
+    monkeypatch, tmp_path
+):
+    """A directory another worker just created can look missing for a
+    moment on Docker Desktop mounts: mkdir raises FileExistsError."""
+    from frontend.server import jobs as module
+
+    target = tmp_path / "results"
+    calls = {"mkdir": 0}
+    original = Path.mkdir
+
+    def flaky(self, *args, **kwargs):
+        if self == target and calls["mkdir"] == 0:
+            calls["mkdir"] += 1
+            original(self, *args, **kwargs)
+            raise FileExistsError(str(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", flaky)
+    module._write_json(target / "d000001.json", {"ok": True})
+    assert json.loads((target / "d000001.json").read_text("utf-8")) == {
+        "ok": True
+    }

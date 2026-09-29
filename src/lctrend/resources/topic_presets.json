@@ -1,0 +1,718 @@
+{
+  "schema_version": 1,
+  "note": "Ready crawl topics of the analysts' test sample: 100 weak technology signals of September 2026. query is the English search phrase for OpenAlex and GitHub; signal is the analysts' name of the niche. The ingestion page lists them for selection. broad: subfield-level queries of each area for a larger sample; the crawl keeps every publication year (the temporal training set needs old signals too).",
+  "name": "Тестовая выборка: 100 слабых сигналов (сентябрь 2026)",
+  "default_limit": 250,
+  "groups": [
+    {
+      "area": "Edge",
+      "topics": [
+        {
+          "query": "edge AI inference",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "TinyML",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "on-device large language models",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "neuromorphic computing",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "federated learning",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "in-memory computing",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 1,
+          "query": "tensor network compression large language models",
+          "signal": "Квантово-инспирированное сжатие моделей для запуска LLM на edge-железе"
+        },
+        {
+          "number": 16,
+          "query": "neural processing unit microcontroller TinyML",
+          "signal": "NPU внутри батарейных MCU/SoC для массового IoT (не для AI PC)"
+        },
+        {
+          "number": 17,
+          "query": "event-based vision sensor automotive",
+          "signal": "Гибридные event-based сенсоры зрения в серийном автопроме"
+        },
+        {
+          "number": 18,
+          "query": "onboard satellite AI inference",
+          "signal": "Орбитальный edge-компьютинг: инференс на спутниках"
+        },
+        {
+          "number": 19,
+          "query": "federated learning private deployment",
+          "signal": "Федеративное обучение как инфраструктура «суверенного» приватного развёртывания"
+        },
+        {
+          "number": 44,
+          "query": "analog compute-in-memory edge inference",
+          "signal": "Аналоговые compute-in-memory чипы для edge-инференса"
+        },
+        {
+          "number": 45,
+          "query": "neuromorphic processor IP design flow",
+          "signal": "Нейроморфные edge-процессоры, встраиваемые в стандартные EDA/дизайн-потоки"
+        },
+        {
+          "number": 46,
+          "query": "edge AI fleet orchestration",
+          "signal": "Оркестрация Edge AI на парках из тысяч устройств (control plane для edge-флотов)"
+        },
+        {
+          "number": 47,
+          "query": "photonic processor neural network inference",
+          "signal": "Фотонные (оптические) процессоры инференса для компактных SWaP-ограниченных систем"
+        },
+        {
+          "number": 72,
+          "query": "on-device agentic AI NPU",
+          "signal": "Агентные (multi-step) AI-workflow, исполняемые локально на NPU ПК"
+        },
+        {
+          "number": 73,
+          "query": "on-device LoRA fine-tuning smartphone",
+          "signal": "Дообучение и мульти-LoRA персонализация прямо на смартфоне"
+        },
+        {
+          "number": 74,
+          "query": "local small language model runtime",
+          "signal": "Локальные SLM-рантаймы как «анти-Big-Tech» альтернатива на ноутбуках и смартфонах"
+        },
+        {
+          "number": 75,
+          "query": "hybrid device cloud LLM inference routing",
+          "signal": "Маршрутизирующий слой «устройство ↔ облако» как отдельный продукт (hybrid inference routing)"
+        },
+        {
+          "number": 94,
+          "query": "TEE remote attestation microcontroller",
+          "signal": "Confidential computing на слабых edge-устройствах (TEE + удалённая аттестация на Cortex-M)"
+        },
+        {
+          "number": 95,
+          "query": "in-sensor computing processing in pixel",
+          "signal": "In-sensor / processing-in-pixel вычисления (инференс внутри пиксельной матрицы)"
+        },
+        {
+          "number": 96,
+          "query": "speculative decoding flash memory smartphone LLM",
+          "signal": "Спекулятивный декодинг с выгрузкой веса во флеш-память смартфона"
+        }
+      ]
+    },
+    {
+      "area": "Защита ИИ",
+      "topics": [
+        {
+          "query": "LLM security",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI agent security",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "adversarial attacks on language models",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI safety evaluation",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "privacy-preserving machine learning",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI governance",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 2,
+          "query": "identity and access management AI agents",
+          "signal": "Identity & access management для ИИ-агентов (agent identity, scoped permissions)"
+        },
+        {
+          "number": 3,
+          "query": "automated red teaming large language models",
+          "signal": "Автоматизированный red-teaming ИИ-моделей как услуга (continuous AI red teaming)"
+        },
+        {
+          "number": 4,
+          "query": "MCP server security tool poisoning",
+          "signal": "Сканеры безопасности MCP-серверов и защита от tool poisoning"
+        },
+        {
+          "number": 20,
+          "query": "LLM firewall AI gateway",
+          "signal": "LLM-файрволы на сетевом/edge-уровне (AI runtime gateway)"
+        },
+        {
+          "number": 21,
+          "query": "prompt injection defense LLM agents",
+          "signal": "«Самозалечивающаяся» защита от prompt injection для агентных систем"
+        },
+        {
+          "number": 22,
+          "query": "AI governance compliance EU AI Act",
+          "signal": "Автоматизация AI-governance и compliance под EU AI Act (AI-GRC как код)"
+        },
+        {
+          "number": 23,
+          "query": "differentially private synthetic data",
+          "signal": "Дифференциально-приватные синтетические данные как контроль безопасности обучения ИИ"
+        },
+        {
+          "number": 24,
+          "query": "confidential inference trusted execution environment attestation",
+          "signal": "Конфиденциальный инференс в TEE с удалённой аттестацией и подписанными «receipts»"
+        },
+        {
+          "number": 25,
+          "query": "watermarking LLM generated text",
+          "signal": "Статистические водяные знаки для ТЕКСТА LLM под требования EU AI Act"
+        },
+        {
+          "number": 48,
+          "query": "machine unlearning large language models",
+          "signal": "Machine unlearning как средство ремедиации рисков модели (удаление данных/поведения без переобучения)"
+        },
+        {
+          "number": 49,
+          "query": "interpretability-based AI safety monitoring",
+          "signal": "Интерпретируемость как операционный защитный контроль (interpretability-based safeguards)"
+        },
+        {
+          "number": 50,
+          "query": "cryptographic authentication of AI agents web bots",
+          "signal": "Криптографическая верификация трафика агентов (Web Bot Auth, signed agents)"
+        },
+        {
+          "number": 51,
+          "query": "model signing AI bill of materials provenance",
+          "signal": "Криптографическая подпись моделей и AI-SBOM (провенанс цепочки поставок моделей)"
+        },
+        {
+          "number": 52,
+          "query": "chain-of-thought monitoring deception detection",
+          "signal": "Мониторинг chain-of-thought для детекции обмана и «scheming» моделей"
+        },
+        {
+          "number": 76,
+          "query": "memory poisoning defense RAG agents",
+          "signal": "Сертифицированная защита от отравления памяти агентов и RAG-хранилищ (memory poisoning defense)"
+        },
+        {
+          "number": 77,
+          "query": "backdoor detection open-weight language models",
+          "signal": "Сканирование бэкдоров в open-weight LLM «в масштабе» (backdoored model detection)"
+        }
+      ]
+    },
+    {
+      "area": "Индустриальный ИИ",
+      "topics": [
+        {
+          "query": "industrial artificial intelligence",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "predictive maintenance deep learning",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "digital twin manufacturing",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "machine learning process control",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI for energy systems",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "generative design engineering",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 5,
+          "query": "physics surrogate model generative design manufacturability",
+          "signal": "CAD-native «engineering intelligence»: ИИ-суррогаты физики + генеративное проектирование деталей под производимость"
+        },
+        {
+          "number": 6,
+          "query": "autonomous procurement agents supply chain",
+          "signal": "Автономные агенты закупок и цепей поставок, работающие в ERP/e-mail/мессенджерах как «цифровые снабженцы»"
+        },
+        {
+          "number": 7,
+          "query": "predictive cooling data center AI workload",
+          "signal": "Проактивные ИИ-агенты теплового управления: упреждающее охлаждение ЦОД/AI-фабрик по прогнозу нагрузки, а не по факту нагрева"
+        },
+        {
+          "number": 26,
+          "query": "robot foundation model factory data",
+          "signal": "Robotics foundation models, обучаемые на данных внутри действующих заводов (а не в лабораториях/на публичных датасетах)"
+        },
+        {
+          "number": 27,
+          "query": "vision language model industrial defect inspection",
+          "signal": "Vision foundation models для контроля качества, где задача задаётся естественным языком (без разметки под каждый дефект)"
+        },
+        {
+          "number": 28,
+          "query": "hyperspectral XRF LIBS mineral exploration machine learning",
+          "signal": "«Робот-геолог»: сенсорная фьюжн-платформа (гиперспектр + XRF + LIBS + 3D) с ML для поиска и оценки руды"
+        },
+        {
+          "number": 29,
+          "query": "LLM agents industrial control PLC SCADA",
+          "signal": "Агентный ИИ, действующий внутри стека OT (PLC/SCADA/MES/ERP) с журналируемыми действиями и «approval gate» оператора"
+        },
+        {
+          "number": 30,
+          "query": "adaptive robotic welding computer vision",
+          "signal": "Адаптивная автономная сварка: нейросетевое зрение вместо предварительного сканирования и репрограммирования робота"
+        },
+        {
+          "number": 31,
+          "query": "battery storage bidding virtual power plant reinforcement learning",
+          "signal": "ИИ-операторы виртуальных электростанций: автоматическое трейдинг-планирование BESS на нескольких рынках"
+        },
+        {
+          "number": 53,
+          "query": "industrial time series foundation model",
+          "signal": "Foundation-модели промышленных временных рядов (S-E-F-C: setpoint/effort/feedback/context) и предобучающие корпуса заводских данных"
+        },
+        {
+          "number": 54,
+          "query": "acoustic anomaly detection machinery edge",
+          "signal": "Акустическая диагностика оборудования на edge: слияние звука, вибрации и режима работы без облака"
+        },
+        {
+          "number": 55,
+          "query": "semiconductor fab process control machine learning",
+          "signal": "ИИ-управление процессами в полупроводниковом фабе и новые ИИ-сенсоры процесса (плазменная спектроскопия, in-line метрология)"
+        },
+        {
+          "number": 78,
+          "query": "LLM PLC code generation IEC 61131-3 structured text",
+          "signal": "LLM-генерация кода ПЛК на IEC 61131-3 Structured Text с замыканием на компилятор и формальную верификацию"
+        },
+        {
+          "number": 79,
+          "query": "P&ID generation DEXPI",
+          "signal": "Агентная генерация технологической документации: P&ID и схемы процессов из текстового описания в машиночитаемом DEXPI"
+        },
+        {
+          "number": 80,
+          "query": "neuromorphic condition monitoring industrial equipment",
+          "signal": "Нейроморфные/событийные edge-чипы для непрерывного мониторинга промышленного оборудования (мВт-класс, без облака)"
+        },
+        {
+          "number": 81,
+          "query": "reinforcement learning industrial controller real plant",
+          "signal": "Самообучающиеся контуры управления: RL прямо на промышленном контроллере/в живом цеху (а не в симуляторе)"
+        },
+        {
+          "number": 82,
+          "query": "federated learning manufacturing sites",
+          "signal": "Федеративное обучение между площадками/предприятиями: модели учатся на данных нескольких заводов без их передачи"
+        }
+      ]
+    },
+    {
+      "area": "Инфраструктура ИИ",
+      "topics": [
+        {
+          "query": "AI accelerator hardware",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "LLM inference optimization",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI data center",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "optical interconnect",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "memory-centric computing",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "distributed LLM serving",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 8,
+          "query": "neuromorphic chips artificial intelligence",
+          "signal": "Нейроморфные (brain-inspired) чипы для ИИ-нагрузок"
+        },
+        {
+          "number": 9,
+          "query": "optical circuit switching AI data center",
+          "signal": "Оптическая коммутация каналов (OCS) в ИИ-фабриках вместо пакетных свитчей"
+        },
+        {
+          "number": 10,
+          "query": "KV cache offloading LLM inference",
+          "signal": "Тиринг KV-кэша: выгрузка контекста в DRAM/NVMe/параллельные ФС"
+        },
+        {
+          "number": 32,
+          "query": "wafer-scale processor 3D stacked memory",
+          "signal": "Wafer-scale нового поколения: 3D-стек SRAM/DRAM поверх пластины"
+        },
+        {
+          "number": 33,
+          "query": "machine learning compiler inference optimization",
+          "signal": "ИИ-компиляторы и автоматическая оптимизация инференса как отдельная категория"
+        },
+        {
+          "number": 34,
+          "query": "small modular reactor data center power",
+          "signal": "Малые модульные реакторы (SMR) как выделенный источник питания ИИ-ЦОД"
+        },
+        {
+          "number": 35,
+          "query": "air-gapped sovereign cloud AI",
+          "signal": "Суверенные ИИ-облака, работающие в полностью отключённом (disconnected/air-gapped) режиме"
+        },
+        {
+          "number": 56,
+          "query": "edge cloud collaborative inference offloading",
+          "signal": "Edge-to-cloud оркестрация инференса (телеком-грид, on-device offload)"
+        },
+        {
+          "number": 57,
+          "query": "CXL memory pooling LLM inference",
+          "signal": "Ёмкостно-ориентированный инференс: CXL-пулы памяти и LPDDR вместо HBM"
+        },
+        {
+          "number": 58,
+          "query": "decentralized inference network",
+          "signal": "Децентрализованные / распределённые сети инференса"
+        },
+        {
+          "number": 59,
+          "query": "orbital data center space computing",
+          "signal": "Орбитальные дата-центры / инференс в космосе"
+        },
+        {
+          "number": 60,
+          "query": "optical computing neural networks",
+          "signal": "Фотонные/оптические процессоры для инференса (вычисления светом)"
+        },
+        {
+          "number": 83,
+          "query": "3D stacked DRAM compute in memory",
+          "signal": "3D-стековая память-вычислитель как альтернатива HBM (3DIMC, стековый DRAM)"
+        },
+        {
+          "number": 84,
+          "query": "analog in-memory computing",
+          "signal": "Аналоговые вычисления в памяти (analog in-memory computing)"
+        },
+        {
+          "number": 85,
+          "query": "on-chip microfluidic cooling",
+          "signal": "Внутрикристальное микрофлюидное охлаждение (каналы, вытравленные в кремнии)"
+        },
+        {
+          "number": 86,
+          "query": "AI accelerator long context decode KV cache",
+          "signal": "Кремний, спроектированный под агентный ИИ (длинный контекст, KV-cache, low-latency decode)"
+        },
+        {
+          "number": 87,
+          "query": "superconducting computing AI",
+          "signal": "Сверхпроводящие / криогенные вычисления для ИИ-ЦОД"
+        }
+      ]
+    },
+    {
+      "area": "Роботы",
+      "topics": [
+        {
+          "query": "robot learning",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "humanoid robots",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "robot manipulation",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "soft robotics",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "autonomous underwater vehicles",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "sim-to-real transfer",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 11,
+          "query": "robot skill marketplace",
+          "signal": "App Store для роботов: маркетплейсы навыков/движений"
+        },
+        {
+          "number": 12,
+          "query": "quadruped robot industrial inspection",
+          "signal": "Массовые квадропеды-инспекторы вне «премиум»-сегмента (метро, геотермия, НПЗ)"
+        },
+        {
+          "number": 13,
+          "query": "safety certification AI robots",
+          "signal": "Сертификация безопасности физического ИИ как «узкое горлышко» внедрения"
+        },
+        {
+          "number": 14,
+          "query": "teleoperation data collection robot learning",
+          "signal": "Телеоперационные данные как отдельная индустрия (data-as-a-service для роботов)"
+        },
+        {
+          "number": 36,
+          "query": "dexterous robotic hand",
+          "signal": "Дексterity-кисти как самостоятельный компонентный рынок (не часть гуманоида)"
+        },
+        {
+          "number": 37,
+          "query": "swarm robotics field deployment",
+          "signal": "Роевая робототехника выходит из лаборатории (сортировка, полевые работы)"
+        },
+        {
+          "number": 38,
+          "query": "vision-language-action model edge accelerator robot",
+          "signal": "Специализированный edge-кремний под инференс VLA-моделей на борту робота"
+        },
+        {
+          "number": 61,
+          "query": "low-cost autonomous underwater vehicles",
+          "signal": "Дешёвые массовые автономные подводные аппараты как «постоянная сеть» океана"
+        },
+        {
+          "number": 62,
+          "query": "robot insurance telemetry robotics as a service",
+          "signal": "Страхование роботов и андеррайтинг по телеметрии; RaaS-контракты с SLA по аптайму"
+        },
+        {
+          "number": 63,
+          "query": "tactile vision-language-action manipulation",
+          "signal": "Тактильно-обусловленные VLA-модели (touch-in-the-loop манипуляция)"
+        },
+        {
+          "number": 64,
+          "query": "egocentric human video robot learning",
+          "signal": "Эгоцентрическое человеческое видео как «дешёвый» источник обучающих данных (human-to-robot transfer)"
+        },
+        {
+          "number": 88,
+          "query": "sim-to-real zero-shot transfer robot",
+          "signal": "Simulation-first стеки с zero-shot переносом (обучение полностью в симуляции)"
+        },
+        {
+          "number": 89,
+          "query": "soft robotic material physical intelligence",
+          "signal": "«Мягкие робо-клетки»: физический интеллект, вшитый в сам материал"
+        },
+        {
+          "number": 90,
+          "query": "medical microrobots clinical translation",
+          "signal": "Медицинские микророботы, доходящие до клиники"
+        },
+        {
+          "number": 97,
+          "query": "biohybrid actuators muscle tissue",
+          "signal": "Биогибридные приводы на живой мышечной ткани"
+        },
+        {
+          "number": 98,
+          "query": "self-healing electronic skin",
+          "signal": "Самовосстанавливающиеся материалы и «sense-healing» электронная кожа"
+        },
+        {
+          "number": 99,
+          "query": "HASEL electrohydraulic artificial muscles",
+          "signal": "Электрогидравлические искусственные мышцы (HASEL) вместо редукторных приводов"
+        }
+      ]
+    },
+    {
+      "area": "Финтех",
+      "topics": [
+        {
+          "query": "stablecoins",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "tokenization of real-world assets",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "AI in banking",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "decentralized finance",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "central bank digital currency",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "query": "fraud detection machine learning",
+          "signal": "широкая тема области",
+          "broad": true
+        },
+        {
+          "number": 15,
+          "query": "deepfake injection attack identity verification liveness",
+          "signal": "Защита онбординга от инъекционных атак и дипфейков (NFC-anchor + двухшаговая liveness)"
+        },
+        {
+          "number": 39,
+          "query": "voice AI agent debt collection",
+          "signal": "Голосовые ИИ-агенты для взыскания и обслуживания долга на развивающихся рынках"
+        },
+        {
+          "number": 40,
+          "query": "AI-native core banking",
+          "signal": "ИИ-native банковские ядра (core banking OS с агентами внутри)"
+        },
+        {
+          "number": 41,
+          "query": "on-chain credit scoring lending",
+          "signal": "Ончейн-скоринг и рейтинги для необеспеченного/недообеспеченного кредитования"
+        },
+        {
+          "number": 42,
+          "query": "local currency stablecoin cross-border FX",
+          "signal": "Стейблкоины локальных валют (не-USD) и ончейн-FX между корридорами"
+        },
+        {
+          "number": 43,
+          "query": "federated learning anti-money laundering",
+          "signal": "Федеративное обучение для межбанковского AML/антифрода (без обмена сырыми данными)"
+        },
+        {
+          "number": 65,
+          "query": "purpose bound money programmable payments",
+          "signal": "Purpose-Bound Money (PBM) — программируемые целевые/условные деньги"
+        },
+        {
+          "number": 66,
+          "query": "AI agents KYC AML compliance automation",
+          "signal": "Браузерно-нативные автономные ИИ-агенты комплаенса (KYC/AML «агентная рабочая сила»)"
+        },
+        {
+          "number": 67,
+          "query": "HTTP 402 machine micropayments",
+          "signal": "Машинные микроплатежи по HTTP 402 (оплата за API-вызов, стриминговые платежи)"
+        },
+        {
+          "number": 68,
+          "query": "zero-knowledge KYC verifiable credentials",
+          "signal": "Переиспользуемые ZK-верифицируемые credentials для KYC (zk-KYC)"
+        },
+        {
+          "number": 69,
+          "query": "AI agent payment protocol",
+          "signal": "Протоколы авторизации платежей ИИ-агентов (x402 / AP2 / ACP / MPP)"
+        },
+        {
+          "number": 70,
+          "query": "AI agent liability insurance",
+          "signal": "Страхование ответственности за действия ИИ-агентов (новый класс полиса)"
+        },
+        {
+          "number": 71,
+          "query": "tokenized money market fund collateral",
+          "signal": "Токенизированные паи денежных фондов (MMF) как мобильное обеспечение"
+        },
+        {
+          "number": 91,
+          "query": "know your agent AI agent identity delegation",
+          "signal": "Know Your Agent (KYA) — верифицируемая идентичность и делегированные полномочия ИИ-агентов"
+        },
+        {
+          "number": 92,
+          "query": "LLM trading agents benchmark",
+          "signal": "Бенчмарки и стресс-тесты LLM-агентов для трейдинга (в т.ч. состязательные рынки)"
+        },
+        {
+          "number": 93,
+          "query": "bank deposit tokens public blockchain",
+          "signal": "Депозитные токены банков на публичных блокчейнах"
+        },
+        {
+          "number": 100,
+          "query": "post-quantum cryptography financial services migration",
+          "signal": "Постквантовая криптография в финансовой инфраструктуре (приоритизация миграции)"
+        }
+      ]
+    }
+  ]
+}

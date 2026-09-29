@@ -34,6 +34,8 @@ export default function Ingestion() {
   const [refresh, setRefresh] = useState(0), [limit, setLimit] = useState('50')
   const [direction, setDirection] = useState(''), [count, setCount] = useState('10')
   const [suggested, setSuggested] = useState([]), [notice, setNotice] = useState('')
+  const [presets, setPresets] = useState(null), [picked, setPicked] = useState(() => new Set())
+  useEffect(() => { api.topicPresets().then(setPresets).catch(() => setPresets(null)) }, [])
   useEffect(() => {
     let stopped = false, timer
     async function poll() {
@@ -88,9 +90,30 @@ export default function Ingestion() {
     } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
+  function togglePreset(queries, on) {
+    setPicked(current => {
+      const next = new Set(current)
+      for (const query of queries) on ? next.add(query) : next.delete(query)
+      return next
+    })
+  }
+  function addPresets() {
+    const lines = [...topics, ...[...picked]]
+    setTopic([...new Map(lines.map(line => [line.toLowerCase(), line])).values()].join('\n'))
+    if (presets?.default_limit) setLimit(String(presets.default_limit))
+    setNotice(`Добавлено тем: ${picked.size}. Проверьте лимит и нажмите «Собирать».`)
+    setPicked(new Set())
+  }
+  async function removeCrawl() {
+    if (!window.confirm('Удалить обход из списка? Уже обработанные материалы останутся в графе и не будут обрабатываться повторно.')) return
+    setBusy(true)
+    try { await api.deleteCrawl(crawlId); setCrawlId(''); setCrawl(null); setRefresh(value => value + 1) }
+    catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
   async function control(action) {
     setBusy(true)
-    try { await (action === 'pause' ? api.pauseCrawl(crawlId) : action === 'retry' ? api.retryFailedCrawl(crawlId) : api.resumeCrawl(crawlId)); setRefresh(value => value + 1) }
+    try { await (action === 'pause' ? api.pauseCrawl(crawlId) : action === 'retry' ? api.retryFailedCrawl(crawlId) : action === 'retry-partial' ? api.retryFailedCrawl(crawlId, true) : api.resumeCrawl(crawlId)); setRefresh(value => value + 1) }
     catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
@@ -113,6 +136,24 @@ export default function Ingestion() {
       {queued > 0 && <p className="hint">В очереди обходов: {queued}.</p>}
       {!ready && service && <p className="hint">Перед загрузкой нужно подключить базу и настроить модели.{!service.pdf?.installed && ' Для получения PDF требуется модуль Docling.'}</p>}
     </form>
+    {presets?.groups?.length > 0 && <section className="ai-topics presets">
+      <h2>{presets.name}</h2>
+      <p className="hint">Готовые поисковые темы по нишам тестовой выборки. Отметьте нужные и добавьте их в список тем; лимит станет {presets.default_limit} — это до {presets.default_limit} статей OpenAlex и до {presets.default_limit} репозиториев GitHub на тему. Обходы идут по одному.</p>
+      <div className="actions">
+        <button type="button" className="secondary" onClick={() => togglePreset(presets.groups.flatMap(group => group.topics.filter(item => item.broad).map(item => item.query)), true)}>Выбрать широкие</button>
+        <button type="button" className="secondary" onClick={() => togglePreset(presets.groups.flatMap(group => group.topics.map(item => item.query)), true)}>Выбрать все</button>
+        <button type="button" className="secondary" onClick={() => setPicked(new Set())}>Снять выбор</button>
+        <button type="button" disabled={!picked.size} onClick={addPresets}>Добавить выбранные ({picked.size})</button>
+      </div>
+      {presets.groups.map(group => {
+        const queries = group.topics.map(item => item.query)
+        const all = queries.every(query => picked.has(query))
+        return <details key={group.area}>
+          <summary><label><input type="checkbox" checked={all} onChange={event => togglePreset(queries, event.target.checked)} /> {group.area} ({group.topics.length}, выбрано {queries.filter(query => picked.has(query)).length})</label></summary>
+          <ul className="suggested">{group.topics.map(item => <li key={item.query} className={item.broad ? 'broad' : ''}><label><input type="checkbox" checked={picked.has(item.query)} onChange={event => togglePreset([item.query], event.target.checked)} /> <strong>{item.query}</strong> <span>— {item.signal}</span></label></li>)}</ul>
+        </details>
+      })}
+    </section>}
     <section className="ai-topics">
       <h2>Темы от ИИ</h2>
       <p className="hint">Модель предлагает крупные базовые области и подобласти направления (например, для «ML» — computer vision, NLP, reinforcement learning), чтобы собрать как можно больше материалов, и не повторяет уже собранные темы. Запрос к модели ждёт в общей очереди LLM, поэтому во время обработки может занять минуту.</p>
@@ -130,7 +171,7 @@ export default function Ingestion() {
     {error && <p className="error" role="alert">{error}</p>}
     {crawls.length > 1 && <label className="history">Запуск<select value={crawlId} onChange={event => setCrawlId(event.target.value)}>{crawls.map(item => <option key={item.crawl_id} value={item.crawl_id}>{item.topic || 'Все настроенные направления'} · {new Date(item.created_at).toLocaleString('ru-RU')} · {label(item.status)}</option>)}</select></label>}
     {crawl ? <section className="run">
-      <div className="run-heading"><h2>{crawl.topic || 'Все настроенные направления'}</h2>{ACTIVE.has(crawl.status) ? <button className="secondary" disabled={busy || crawl.status === 'pausing'} onClick={() => control('pause')}>Остановить</button> : ['paused', 'interrupted', 'failed'].includes(crawl.status) && <button className="secondary" disabled={busy || !ready} onClick={() => control('resume')}>Продолжить</button>}</div>
+      <div className="run-heading"><h2>{crawl.topic || 'Все настроенные направления'}</h2>{ACTIVE.has(crawl.status) ? <button className="secondary" disabled={busy || crawl.status === 'pausing'} onClick={() => control('pause')}>Остановить</button> : ['paused', 'interrupted', 'failed'].includes(crawl.status) && <button className="secondary" disabled={busy || !ready} onClick={() => control('resume')}>Продолжить</button>}{!ACTIVE.has(crawl.status) && <button className="secondary" disabled={busy} onClick={() => removeCrawl()}>Удалить обход</button>}</div>
       <p>Обработано {counts.parsed || 0} из {counts.discovered || 0} найденных материалов · частично {counts.partial || 0} · ожидают {counts.pending || 0} · в работе {counts.processing || 0} · ошибки {counts.failed || 0}</p>
       <p className="hint">{crawl.status === 'pausing' ? 'Останавливаем после текущего материала.' : `Сейчас: ${label(crawl.stage)} · ${label(crawl.status)}`} Повторов пропущено: {counts.duplicates || 0}.</p>
       {counts.discovered > 0 && <progress value={(counts.parsed || 0) + (counts.partial || 0) + (counts.failed || 0)} max={counts.discovered} />}
@@ -142,6 +183,7 @@ export default function Ingestion() {
       <Materials crawlId={crawlId} status="parsed" title="Обработанные материалы" refresh={crawl.updated_at || JSON.stringify(counts)} />
       <Materials crawlId={crawlId} status="pending" title="Ожидают обработки" refresh={crawl.updated_at || JSON.stringify(counts)} />
       <Materials crawlId={crawlId} status="failed" title="Ошибки обработки" refresh={crawl.updated_at || JSON.stringify(counts)} action={!active && counts.failed > 0 && ready ? <button className="secondary" disabled={busy} onClick={() => control('retry')}>Повторить ошибки</button> : null} />
+      {!active && counts.partial > 0 && ready && <p className="hint">Частично обработано: {counts.partial}. <button className="secondary" disabled={busy} onClick={() => control('retry-partial')}>Доработать частичные и ошибки</button> — извлечение пройдёт заново, прежний неполный результат будет заменён.</p>}
     </section> : <p className="hint">Загрузок пока нет.</p>}
   </section>
 }

@@ -520,3 +520,38 @@ def test_stuck_pdf_is_killed_and_the_next_pdf_converts(tmp_path, monkeypatch):
         assert after.chunks[0].text == "Next paper converts."
     finally:
         worker.stop()
+
+
+def test_docling_pool_converts_pdfs_in_parallel():
+    import threading
+    import time
+    from pathlib import Path
+
+    from lctrend.ingest import file_adapters
+
+    running, peak, lock = [0], [0], threading.Lock()
+
+    class FakeProcess:
+        def convert(self, path, max_pages, timeout):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.2)
+            with lock:
+                running[0] -= 1
+            return ([], "success")
+
+    pool = file_adapters._DoclingPool()
+    # Two converter processes, four PDFs: two convert at once.
+    pool._free = [FakeProcess(), FakeProcess()]
+    pool._slots = threading.BoundedSemaphore(2)
+    threads = [
+        threading.Thread(target=pool.convert, args=(Path("a.pdf"), 5, 10))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert peak[0] == 2
+    assert len(pool._free) == 2

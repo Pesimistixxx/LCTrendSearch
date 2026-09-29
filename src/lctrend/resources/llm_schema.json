@@ -37,7 +37,11 @@
     "supported_fields": ["mechanism", "function"],
     "technology_types": ["architecture", "algorithm", "method", "device", "material", "protocol", "software_system", "process", "system"],
     "max_field_words": 45,
-    "abbreviation_pattern": "^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9&+./-]{1,9}s?$"
+    "abbreviation_pattern": "^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9&+./-]{1,9}s?$",
+    "triage_note": "After extraction one short review call per document (prompts/triage.txt) sorts its Technology/Method candidates into technology or product, software_component, feature_or_metric, title, dataset_or_resource, domain, other; a non-technology becomes a ConceptCandidate with classification_status rejected. 2026-09-29: of 45 sampled graph technologies 42% were products, library operations, features or titles. Fails open: a failed call keeps the candidates. LCTREND_TECHNOLOGY_TRIAGE=0 turns it off.",
+    "triage": {"enabled": true, "max_entities": 40},
+    "product_names_note": "Programming languages, libraries and tools are products that implement technologies, not technologies (contract, section 4); the model still returns them (2026-09-29: scikit-learn, Python, TensorFlow, Docker, Pandas topped the graph). A Technology/Method whose name, without a parenthesized part, is one of these becomes a ConceptCandidate. Algorithm names that are also libraries (XGBoost) are not listed.",
+    "product_names": ["python", "r", "java", "c", "c++", "c#", "javascript", "typescript", "matlab", "julia", "scala", "go", "rust", "sql", "pytorch", "torch", "tensorflow", "keras", "scikit-learn", "sklearn", "numpy", "pandas", "scipy", "matplotlib", "seaborn", "jupyter", "jupyter notebook", "docker", "kubernetes", "git", "github", "caffe", "mxnet", "theano", "libsvm", "opencv", "spark", "apache spark", "hadoop", "excel", "linux", "conda", "anaconda", "pip"]
   },
   "organization_kinds":["Organization", "Company", "University"],
   "organization_kind_note": "The kind of a named organization is decided by the organization catalog (sources.json known names, legal forms, university markers) before the model's guess: Samsung is a Company whatever the model says. An organization label must be a proper name: without a capital letter it is a group of people ('third parties', 'developers'); with a personal title it is a person.",

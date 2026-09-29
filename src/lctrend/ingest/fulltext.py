@@ -38,9 +38,12 @@ def require_pdf_support() -> None:
 
 
 def openalex_pdf_urls(payload: Mapping[str, Any]) -> List[str]:
-    """PDF links in OpenAlex order of preference.
+    """PDF links to try, open repositories first.
 
-    Best OA location first, then the primary location, then the rest.
+    OpenAlex order (best OA location, primary, the rest) within three
+    tiers: preferred hosts (arXiv, PMC, repositories), others, and
+    publishers that refuse automated downloads (pipeline.json
+    openalex_fulltext hosts).
     """
     locations = [
         payload.get("best_oa_location"),
@@ -58,9 +61,18 @@ def openalex_pdf_urls(payload: Mapping[str, Any]) -> List[str]:
             and url not in urls
         ):
             urls.append(url)
-    return urls[
-        : load_catalog("pipeline")["openalex_fulltext"]["max_candidates"]
-    ]
+    settings = load_catalog("pipeline")["openalex_fulltext"]
+    preferred = settings.get("preferred_hosts", [])
+    blocked = settings.get("blocked_hosts", [])
+
+    def tier(url: str) -> int:
+        host = url.split("/")[2].casefold()
+        if any(name in host or name in url for name in preferred):
+            return 0
+        return 2 if any(name in host for name in blocked) else 1
+
+    # sorted is stable: OpenAlex order holds within a tier.
+    return sorted(urls, key=tier)[: settings["max_candidates"]]
 
 
 def _body_chunks(raw: bytes, document: DocumentEnvelope, url: str) -> tuple:
@@ -196,6 +208,47 @@ async def _attach_pubmed_abstract_if_empty(
     return document
 
 
+def select_sections(chunks: List[Chunk]) -> tuple:
+    """The PDF chunks worth the model's calls: method, conclusion,
+    introduction and similar sections by role priority, up to max_chunks,
+    in document order; the head and the tail when no heading is known.
+    Returns the kept chunks and a summary for the audit.
+    """
+    settings = load_catalog("pipeline")["openalex_fulltext"].get("sections")
+    limit = int((settings or {}).get("max_chunks", 0))
+    if not settings or not limit or len(chunks) <= limit:
+        return chunks, {"total": len(chunks), "kept": len(chunks)}
+    roles = list(settings["roles"])
+    rank = {role: index for index, role in enumerate(roles)}
+    by_role = [
+        (rank[role], index)
+        for index, chunk in enumerate(chunks)
+        if (role := chunk.locator.get("section_role")) in rank
+    ]
+    if by_role:
+        chosen = sorted(index for _, index in sorted(by_role)[:limit])
+        basis = "sections"
+    else:
+        head = int(settings["head_chunks"])
+        tail = int(settings["tail_chunks"])
+        chosen = sorted(
+            {
+                *range(min(head, len(chunks))),
+                *range(max(0, len(chunks) - tail), len(chunks)),
+            }
+        )[:limit]
+        basis = "head_and_tail"
+    kept = [chunks[index] for index in chosen]
+    return kept, {
+        "total": len(chunks),
+        "kept": len(kept),
+        "basis": basis,
+        "roles": sorted(
+            {chunk.locator.get("section_role") for chunk in kept} - {None}
+        ),
+    }
+
+
 async def attach_openalex_fulltext(
     document: DocumentEnvelope,
     payload: Mapping[str, Any],
@@ -258,6 +311,7 @@ async def attach_openalex_fulltext(
             logger.warning("Full text %s has no text chunks", url)
             status["attempts"].append({"url": url, "error": "no_text_chunks"})
             continue
+        chunks, selection = select_sections(chunks)
         offset = len(document.chunks)
         for index, chunk in enumerate(chunks):
             chunk.order = offset + index
@@ -270,6 +324,7 @@ async def attach_openalex_fulltext(
             sha256=snapshot.name,
             byte_length=len(raw),
             chunks=len(chunks),
+            selection=selection,
             warnings=warnings,
         )
         logger.debug("Full text %s parsed into %d chunks", url, len(chunks))

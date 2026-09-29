@@ -81,3 +81,13 @@ def technology_contract_mode(request, monkeypatch):
         return value
 
     monkeypatch.setattr(validation, "load_catalog", relaxed)
+
+
+@pytest.fixture(autouse=True)
+def technology_triage_mode(request, monkeypatch):
+    """The triage call (llm.pipeline._triage) adds one model answer per
+    document; tests with recorded answers predate it. Only tests marked
+    ``technology_triage`` run it.
+    """
+    enabled = request.node.get_closest_marker("technology_triage")
+    monkeypatch.setenv("LCTREND_TECHNOLOGY_TRIAGE", "1" if enabled else "0")
