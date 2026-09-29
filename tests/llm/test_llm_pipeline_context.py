@@ -18,6 +18,8 @@ from lctrend.llm.client import ReplayProvider
 from lctrend.llm.context import build_payload, expand_packet, plan_packets
 from lctrend.llm.pipeline import process_document
 
+pytestmark = pytest.mark.legacy_technology_entities
+
 
 @pytest.mark.parametrize(
     "shared_source,expected_assertions,expected_mentions",

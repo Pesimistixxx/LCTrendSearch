@@ -19,6 +19,8 @@ from lctrend.llm.contracts import (
 )
 from lctrend.llm.validation import validate_local_extraction
 
+pytestmark = pytest.mark.legacy_technology_entities
+
 
 def document(text):
     return DocumentEnvelope(

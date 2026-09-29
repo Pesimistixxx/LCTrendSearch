@@ -49,6 +49,11 @@ def data():
         }
     )
     base["technologies"][0]["definition"] = "сканер конфигураций MCP"
+    # Document parties are ids; only named ones reach the table.
+    base["versions"][0]["companies"] = ["org:acme", "org:ghost"]
+    base["organizations"] = [
+        {"organization_id": "org:acme", "name": "Acme Security"}
+    ]
     for row, vector in zip(
         base["technologies"], ([1.0, 0.0], [0.95, 0.05], [0.0, 1.0])
     ):
@@ -240,7 +245,9 @@ def test_card_without_model_is_built_from_the_dossier():
     fallback = cards["mcp"]
     assert fallback["llm"] is False
     assert fallback["title"] in fallback["technologies"]
-    assert set(fallback["companies"]) == {"Invariant Labs", "Cyata"}
+    # Organizations with roles first, then authors of materials.
+    assert set(fallback["companies"][:2]) == {"Invariant Labs", "Cyata"}
+    assert fallback["companies"][2:] == ["Acme Security"]
     assert "Документов: 7" in fallback["why_weak"]
     flash = cards["flash"]
     # No maturity evidence: the model's stage counts; unknown area -> last.

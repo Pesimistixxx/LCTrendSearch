@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from lctrend.core.models import (
     SEMANTIC_CANDIDATE_METHOD,
     Artifact,
@@ -18,6 +20,8 @@ from lctrend.llm.client import ReplayProvider
 from lctrend.llm.context import PipelineSettings
 from lctrend.llm.pipeline import process_document
 from tests.llm.test_parties_and_maturity import Transaction
+
+pytestmark = pytest.mark.legacy_technology_entities
 
 TEXT = "Carbon conversion solves monitoring."
 VECTORS = {

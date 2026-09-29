@@ -333,7 +333,9 @@ def _role_labels(data: Mapping, role: str) -> List[str]:
 
 
 def _organizations(
-    views: List[TechnologyView], documents: List[DocumentTrace]
+    corpus: TemporalCorpus,
+    views: List[TechnologyView],
+    documents: List[DocumentTrace],
 ) -> List[Dict[str, Any]]:
     """Named organizations with the roles the sources give them; document
     affiliations come last and only as authors of a material.
@@ -383,8 +385,11 @@ def _organizations(
             ("University", version.universities),
             (None, version.organizations),
         ):
-            for name in names:
-                add(str(name), AUTHOR_ROLE, kind)
+            for key in names:
+                # Ids without a stored name are not shown.
+                name = corpus.organization_names.get(str(key))
+                if name:
+                    add(name, AUTHOR_ROLE, kind)
     ranked = sorted(
         found.values(),
         key=lambda item: (
@@ -519,7 +524,7 @@ def build_dossier(
     trend = trend_of(documents, cutoff, settings["trend"])
     stage = stage_of(views, settings["stages"])
     events = _events(corpus, views, int(limits["max_quote_chars"]))
-    organizations = _organizations(views, documents)
+    organizations = _organizations(corpus, views, documents)
     dated = [item for item in documents if not item.undated]
     return {
         "snapshot": cutoff.isoformat(),
@@ -697,9 +702,9 @@ def _fallback_trend(trend: Mapping) -> str:
         for year, count in trend["documents_by_year"].items()
     )
     return (
-        f"{trend['documents_last_window']} документов за последние "
-        f"{trend['window_months']} мес. против "
-        f"{trend['documents_previous_window']} за предыдущие"
+        f"документов за последние {trend['window_months']} мес.: "
+        f"{trend['documents_last_window']}, за предыдущие: "
+        f"{trend['documents_previous_window']}"
         + (f" (по годам: {years})" if years else "")
     )
 
@@ -756,6 +761,10 @@ def make_card(
         "technology_ids": [item["technology_id"] for item in members],
         "technologies": [item["technology"] for item in members],
         "ranking_score": members[0]["raw_score"],
+        # Retrospective labels (docs/hgt-pipeline-2026-09-29.md, 4.5): empty
+        # until computed after the horizon; the card never guesses them.
+        "signal_36m": None,
+        "trend_36m": None,
         "llm": answer is not None,
         **(
             {"llm_stage": answer.stage}

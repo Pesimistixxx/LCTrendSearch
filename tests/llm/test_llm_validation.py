@@ -18,6 +18,8 @@ from lctrend.llm.contracts import (
 )
 from lctrend.llm.validation import validate_local_extraction, validate_review
 
+pytestmark = pytest.mark.legacy_technology_entities
+
 
 def document(text="Sensor S consumes 8 mW for monitoring."):
     return DocumentEnvelope(
@@ -707,7 +709,8 @@ def test_a_definition_is_a_short_phrase_of_a_technology_kind():
     assert result.entities[0].definition == (
         "inhibitor of cholesterol synthesis"
     )
-    doc, payload = compound(definition="word " * 40)
+    # One or two sentences (docs/technology-contract.md), not a paragraph.
+    doc, payload = compound(definition="word " * 50)
     notes = []
     result, _ = validate_local_extraction(doc, payload, ["c1"], notes)
     assert result.entities[0].definition is None

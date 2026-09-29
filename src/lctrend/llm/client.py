@@ -615,6 +615,14 @@ class JsonLLM:
                 "schema_free_models",
             )
         )
+        # Of those, the models whose constrained decoding is sound: a broken
+        # unconstrained answer is resent once under the strict schema.
+        self.schema_fallback_models = frozenset(
+            _names(
+                self.config.get("schema_fallback_models", []),
+                "schema_fallback_models",
+            )
+        )
         if self.response_mode not in ("json_object", "json_schema"):
             raise LLMError(
                 "configuration",
@@ -1153,16 +1161,41 @@ class JsonLLM:
         while True:
             try:
                 model = await self._select(stage, client, route)
-                return await self._attempt(
-                    client,
-                    schema,
-                    system,
-                    payload,
-                    stage,
-                    model,
-                    route,
-                    queue_ms,
-                )
+                try:
+                    return await self._attempt(
+                        client,
+                        schema,
+                        system,
+                        payload,
+                        stage,
+                        model,
+                        route,
+                        queue_ms,
+                    )
+                except LLMError as exc:
+                    if (
+                        exc.code != "invalid_schema"
+                        or model not in self.schema_fallback_models
+                    ):
+                        raise
+                    logger.info(
+                        "LLM %s: unconstrained %s answer is not valid %s; "
+                        "resending under the schema",
+                        stage,
+                        model,
+                        schema.__name__,
+                    )
+                    return await self._attempt(
+                        client,
+                        schema,
+                        system,
+                        payload,
+                        stage,
+                        model,
+                        route,
+                        0,
+                        constrained=True,
+                    )
             except LLMError as exc:
                 if exc.code not in ("model_exhausted", "model_unavailable"):
                     raise
@@ -1181,6 +1214,7 @@ class JsonLLM:
         model: str,
         route: str = "",
         queue_ms: int = 0,
+        constrained: bool = False,
     ) -> T:
         route = route or stage
         schema_json = schema.model_json_schema()
@@ -1205,10 +1239,12 @@ class JsonLLM:
             "max_tokens": self.max_output_tokens[stage],
             "temperature": self.temperature,
         }
-        if model in self.schema_free_models:
+        if model in self.schema_free_models and not constrained:
             # Constrained decoding of these models fills JSON indentation
-            # with stray words on long answers; the schema in the system
-            # message and validation keep the shape.
+            # with stray words on long answers, or (3-Ultra) indents it:
+            # 2-5x the output tokens of the compact answer the prompt asks
+            # for. The schema in the system message and validation keep the
+            # shape.
             pass
         elif self.response_mode == "json_schema":
             body["response_format"] = {
@@ -1237,6 +1273,7 @@ class JsonLLM:
             **({"key": self.key_name} if self.key_name else {}),
             "ladder_position": self.ladders[route].index(model),
             "schema": schema.__name__,
+            **({"constrained": True} if constrained else {}),
             "prompt_sha256": _hash(body["messages"]),
             "request_sha256": request_hash,
             "cache_hit": False,

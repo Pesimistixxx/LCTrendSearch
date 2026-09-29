@@ -172,7 +172,7 @@ def _names_in(names: Iterable[str], texts: Iterable[str]) -> bool:
 _ALIAS_WINDOW = 160
 _ALIAS_MAX_TOKENS = 8
 # A definition says what the entity is, in a phrase, not a paragraph.
-_DEFINITION_MAX_WORDS = 30
+_DEFINITION_MAX_WORDS = 45
 _DEFINED_KINDS = {"Technology", "Method", "Material"}
 
 
@@ -241,6 +241,191 @@ def _check_entity_context(
                 notes.append({"item": key, "code": "definition_dropped"})
             definition = None
         entity.definition = definition
+
+
+def _relocate_names(
+    entity: Any,
+    key: str,
+    chunks: Dict[str, Chunk],
+    visible: Set[str],
+    notes: Optional[List[Dict[str, Any]]],
+) -> None:
+    """A name quote cited in the wrong chunk (the title's name cited in the
+    abstract, a guessed chunk) moves to the first visible chunk that holds
+    it, with an audit note. Names are short and repeat; claim quotes never
+    move.
+    """
+    for span in entity.evidence:
+        chunk = chunks.get(span.chunk_id)
+        if chunk is not None and span.chunk_id in visible:
+            if span.quote in chunk.text:
+                continue
+        found = next(
+            (
+                chunk_id
+                for chunk_id, item in chunks.items()
+                if chunk_id in visible and span.quote in item.text
+            ),
+            None,
+        )
+        if found is None:
+            continue
+        if notes is not None:
+            notes.append(
+                {
+                    "item": key,
+                    "code": "name_quote_relocated",
+                    "from": span.chunk_id,
+                    "to": found,
+                }
+            )
+        span.chunk_id, span.start, span.end = found, None, None
+
+
+def _normalize_predicate(
+    claim: Any,
+    key: str,
+    predicates: Dict[str, Any],
+    notes: Optional[List[Dict[str, Any]]],
+) -> None:
+    """reports_measurement -> reported_measurement: a known predicate under
+    the other verb form, seen live, is the same predicate."""
+    if claim.predicate in predicates:
+        return
+    for old, new in (("reports_", "reported_"), ("reported_", "reports_")):
+        if claim.predicate.startswith(old):
+            candidate = new + claim.predicate[len(old) :]
+            if candidate in predicates:
+                if notes is not None:
+                    notes.append(
+                        {
+                            "item": key,
+                            "code": "predicate_normalized",
+                            "from": claim.predicate,
+                            "to": candidate,
+                        }
+                    )
+                claim.predicate = candidate
+                return
+
+
+def _technology_names(
+    entity: Any,
+    key: str,
+    chunks: Dict[str, Chunk],
+    visible: Set[str],
+    notes: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Anchor the support quotes and keep the source names the source
+    writes. Neither fails the entity: an unanchored quote or a name not in
+    the text is dropped with an audit note, and the contract check then
+    sees what is left.
+    """
+    kept = []
+    for span in entity.support:
+        try:
+            value, note = _anchor(span, chunks, visible, True)
+        except ValueError as exc:
+            if notes is not None:
+                notes.append(
+                    {
+                        "item": key,
+                        "code": "support_dropped",
+                        "reason": str(exc),
+                    }
+                )
+            continue
+        kept.append(value)
+        if note is not None and notes is not None:
+            notes.append({"item": key, **note})
+    entity.support = kept
+    texts = [
+        chunks[span.chunk_id].text
+        for span in (*entity.evidence, *entity.support)
+        if span.chunk_id in chunks and span.chunk_id in visible
+    ]
+    names = []
+    for item in entity.source_names:
+        if _names_in([item.name], texts):
+            names.append(item)
+        elif notes is not None:
+            notes.append(
+                {"item": key, "code": "source_name_dropped", "name": item.name}
+            )
+    entity.source_names = names
+
+
+def _check_technology_contract(
+    entity: Any,
+    key: str,
+    contract: Dict[str, Any],
+    notes: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Conditions of docs/technology-contract.md, section 2.
+
+    A Technology/Method needs its definition fields, a mechanism and a
+    function backed by verbatim support quotes, an expanded abbreviation
+    and no uncertainty reported by the model. Otherwise the mention is kept
+    as a ConceptCandidate with the unmet conditions (classification_status
+    proposed): a vertex without them would state more than the source.
+    """
+    entity.classification_status = None
+    entity.contract_issues = []
+    kind = entity.kind.value
+    if kind not in contract["kinds"]:
+        return
+    limit = int(contract["max_field_words"])
+    issues = []
+    for field in contract["required_fields"]:
+        value = " ".join(str(getattr(entity, field) or "").split())
+        if not value:
+            issues.append("missing:" + field)
+        elif len(value.split()) > limit:
+            issues.append("too_long:" + field)
+        setattr(entity, field, value or None)
+    if (
+        entity.technology_type
+        and entity.technology_type not in contract["technology_types"]
+    ):
+        issues.append("invalid_technology_type")
+    supported = {field for span in entity.support for field in span.supports}
+    issues.extend(
+        "unsupported:" + field
+        for field in contract["supported_fields"]
+        if field not in supported
+    )
+    abbreviation = contract["abbreviation_pattern"]
+    names = [entity.label, *(item.name for item in entity.source_names)]
+    if re.fullmatch(abbreviation, entity.label.strip()) and all(
+        re.fullmatch(abbreviation, name.strip()) for name in names
+    ):
+        # Point 5: the same letters may mean different technologies.
+        issues.append("abbreviation_not_expanded")
+    if entity.uncertainty and entity.uncertainty.strip():
+        issues.append("model_uncertainty")
+    entity.contract_issues = issues
+    if not issues:
+        entity.classification_status = "validated"
+        return
+    entity.classification_status = "proposed"
+    if not contract.get("enforce", True):
+        return
+    entity.kind = ConceptKind.CANDIDATE
+    if notes is not None:
+        notes.append(
+            {
+                "item": key,
+                "code": "technology_contract_unmet",
+                "from": kind,
+                "to": ConceptKind.CANDIDATE.value,
+                "reasons": issues,
+                **(
+                    {"uncertainty": entity.uncertainty.strip()}
+                    if entity.uncertainty
+                    else {}
+                ),
+            }
+        )
 
 
 def _entity_refs(value: Any) -> Iterable[Any]:
@@ -427,6 +612,7 @@ def validate_local_extraction(
         raise ValueError("visible_ids references unknown chunks")
     schema = load_catalog("llm_schema")
     grounded_kinds = set(schema["grounded_label_kinds"])
+    contract = schema["technology_contract"]
     countries = load_catalog("countries")
     country_codes = set(countries["iso_alpha2"])
     entity_counts = Counter(entity.local_id for entity in result.entities)
@@ -480,11 +666,23 @@ def validate_local_extraction(
                 # The quoted country must be the coded one: a quote of
                 # "Германии" cannot become US.
                 add(key, "country_code_mismatch")
+        _relocate_names(entity, key, chunks, visible, notes)
         entity.evidence = anchor_spans(
             key, entity.evidence, first_occurrence=True
         )
+        technical = entity.kind.value in contract["kinds"]
+        if technical:
+            _technology_names(entity, key, chunks, visible, notes)
+            # Verbatim names are identity evidence too; the alias check
+            # below keeps those written next to the entity.
+            entity.aliases = [
+                *entity.aliases,
+                *(item.name for item in entity.source_names),
+            ]
         # The label names what the source names: its quote or chunk must
-        # contain it (or a curated synonym), or it is a phantom entity.
+        # contain it (or a curated synonym), or it is a phantom entity. A
+        # technology's canonical name may summarize the source; a verbatim
+        # source name grounds it then.
         grounding = [
             text
             for span in entity.evidence
@@ -504,12 +702,17 @@ def validate_local_extraction(
                         entity.label,
                         reported_kinds.get(entity.local_id, entity.kind.value),
                     ),
+                    *(
+                        item.name
+                        for item in (entity.source_names if technical else ())
+                    ),
                 ],
                 grounding,
             )
         ):
             add(key, "label_not_grounded")
         _check_entity_context(entity, key, chunks, notes)
+        _check_technology_contract(entity, key, contract, notes)
 
     for claim in result.claims:
         key = "claim:" + claim.claim_id
@@ -517,6 +720,7 @@ def validate_local_extraction(
             add(key, "duplicate_claim_id")
         if not claim.claim_id.strip():
             add(key, "empty_claim_id")
+        _normalize_predicate(claim, key, schema["predicates"], notes)
         rule = schema["predicates"].get(claim.predicate)
         if rule is None:
             add(key, "unsupported_predicate")

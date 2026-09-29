@@ -15,7 +15,7 @@ RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/c
 # the code: editing src/ no longer reinstalls ~100 packages (audit H-5).
 COPY pyproject.toml ./
 RUN mkdir -p src/lctrend && touch src/lctrend/__init__.py \
-    && pip install ".[gui,llm,pdf]" \
+    && pip install ".[gui,llm,pdf,report]" \
     && pip uninstall -y lctrend && rm -rf src
 COPY src ./src
 RUN pip install --no-deps .

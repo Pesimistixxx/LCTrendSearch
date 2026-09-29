@@ -102,13 +102,17 @@ def test_fulltext_is_appended_after_abstract_without_headers_or_bibliography(
     )
     texts = [chunk.text for chunk in document.chunks]
     assert texts[0] == "Short abstract."
-    assert texts[1:] == [
+    # The title chunk follows the abstract: a method named only there can
+    # be cited (llm.context.CONTEXT_KINDS).
+    assert document.chunks[1].kind == "title"
+    assert texts[1] == document.title
+    assert texts[2:] == [
         "1 Introduction",
         "Sparse attention reduces memory use by 40%.",
         "Appendix A",
         "Additional experiments.",
     ]
-    body = document.chunks[1:]
+    body = document.chunks[2:]
     assert {chunk.kind for chunk in body} == {"fulltext"}
     assert [chunk.order for chunk in document.chunks] == list(
         range(len(document.chunks))

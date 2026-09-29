@@ -142,12 +142,48 @@ def test_schema_free_models_get_no_response_format_and_a_session():
     asyncio.run(provider.generate(Answer, "s", {}))
     asyncio.run(provider.generate(Answer, "s", {}, stage="review"))
     ultra, lite = server.chat
-    assert ultra["model"] == "GigaChat-3-Ultra"
-    assert ultra["response_format"]["type"] == "json_schema"
+    # Constrained, 3-Ultra indents its JSON: 2-5x the output tokens (live,
+    # 2026-09-29); unconstrained it writes the compact answer.
+    assert ultra["model"] == "GigaChat-3-Ultra" and "response_format" not in ultra
     # Long strict answers of GigaChat-2 models broke the JSON (live, 2026).
     assert lite["model"] == "GigaChat-2-Max" and "response_format" not in lite
     # One cached prompt prefix per model and system message.
     assert all(headers) and headers[0] != headers[1]
+
+
+def test_broken_unconstrained_answer_is_resent_under_the_schema():
+    from tests.llm.test_llm_provider import GigaChatServer, gigachat
+
+    server = GigaChatServer(balance=None)
+    answers = iter(['{"text": "cut', '{"text":"source-backed"}'])
+    original = server.__call__
+
+    def respond(request):
+        if request.url.path.endswith("/chat/completions"):
+            server.content = next(answers)
+        return original(request)
+
+    provider = gigachat(respond, config=deepcopy(load_catalog("llm")))
+    result = asyncio.run(provider.generate(Answer, "s", {}))
+    assert result.text == "source-backed"
+    free, strict = server.chat
+    assert "response_format" not in free
+    assert strict["response_format"]["type"] == "json_schema"
+    assert [call.get("constrained") for call in provider.calls] == [
+        None,
+        True,
+    ]
+
+
+def test_broken_answer_of_a_model_without_fallback_is_not_resent():
+    from tests.llm.test_llm_provider import GigaChatServer, gigachat
+
+    server = GigaChatServer(balance=None, content='{"text": "cut')
+    provider = gigachat(server, config=deepcopy(load_catalog("llm")))
+    provider.ladders = {route: ["GigaChat-2-Max"] for route in provider.ladders}
+    with pytest.raises(LLMError, match="invalid_schema"):
+        asyncio.run(provider.generate(Answer, "s", {}))
+    assert len(server.chat) == 1
 
 
 def test_route_naming_an_unknown_model_is_rejected():

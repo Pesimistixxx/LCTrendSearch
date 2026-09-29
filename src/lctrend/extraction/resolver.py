@@ -638,6 +638,14 @@ def _observe(
     )
     if not concept.definition and mention.definition:
         concept.definition = mention.definition
+    if mention.profile and (
+        not concept.profile
+        or (
+            concept.profile.get("classification_status") != "validated"
+            and mention.profile.get("classification_status") == "validated"
+        )
+    ):
+        concept.profile = mention.profile
     if concept.status == "accepted":
         return
     kinds = _seed_kind_counts(concept)
@@ -674,6 +682,7 @@ def _new_concept(
         kind=kind,
         preferred_label=text,
         definition=mention.definition,
+        profile=mention.profile,
         status="provisional",
         identity_key=key,
         label_counts={text: 1},

@@ -24,7 +24,9 @@
     "response_mode": "json_schema",
     "json_schema_strict": true,
     "schema_free_models_note": "Sent without response_format: under a strict schema these models fill JSON indentation with stray words on long answers (seen 2026-09-28 on 10-20 item answers); the schema in the system message plus validation keep the shape.",
-    "schema_free_models": ["GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
+    "schema_free_models": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
+    "schema_fallback_models_note": "2026-09-29, live on the same documents: under the strict schema GigaChat-3-Ultra writes indented JSON, 2.4 characters per output token; unconstrained it follows the compact one-line instruction: 383 instead of 1884 output tokens on an abstract (6 s instead of 25 s), 10k instead of 26k on a 25-chunk README (162 s instead of 399 s of generation), 1 invalid answer in 28. Such an answer is resent once under the strict schema. Not 2-Max: its constrained answers are the broken ones.",
+    "schema_fallback_models": ["GigaChat-3-Ultra"],
     "temperature": 0.001,
     "model_ladder": ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2-Pro", "GigaChat-2"],
     "model_routes": {

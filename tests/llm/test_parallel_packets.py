@@ -3,6 +3,8 @@ to the model as short aliases."""
 
 import asyncio
 
+import pytest
+
 from lctrend.core.models import stable_id
 from lctrend.llm.client import LLMError, ReplayProvider
 from lctrend.llm.context import PipelineSettings, plan_packets
@@ -15,6 +17,8 @@ from tests.llm.test_llm_pipeline import (
     reviewed,
     settings,
 )
+
+pytestmark = pytest.mark.legacy_technology_entities
 
 
 class ConcurrentProvider(FullPacketProvider):

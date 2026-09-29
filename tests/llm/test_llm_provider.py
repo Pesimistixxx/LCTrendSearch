@@ -697,9 +697,18 @@ def gigachat(server, routes=False, **kwargs):
     )
 
 
+def constrained_ultra():
+    """The catalog with GigaChat-3-Ultra sent under the strict schema: the
+    shape of that request (its fallback, test_model_routes)."""
+    config = deepcopy(load_catalog("llm"))
+    config["gigachat"].pop("model_routes", None)
+    config["gigachat"]["schema_free_models"].remove("GigaChat-3-Ultra")
+    return config
+
+
 def test_gigachat_oauth_schema_request_and_default_ladder():
     server = GigaChatServer(balance=None)
-    provider = gigachat(server)
+    provider = gigachat(server, config=constrained_ultra())
     assert provider.base_url == "https://api.giga.chat/v1"
     assert provider.ladders["extract"] == [
         "GigaChat-3-Ultra",
@@ -737,7 +746,11 @@ def test_gigachat_oauth_schema_request_and_default_ladder():
 
 def test_gigachat_schema_has_no_unresolved_local_references():
     server = GigaChatServer(content=json.dumps({"entities": [], "claims": []}))
-    asyncio.run(gigachat(server).generate(Extraction, "s", {}))
+    asyncio.run(
+        gigachat(server, config=constrained_ultra()).generate(
+            Extraction, "s", {}
+        )
+    )
     schema = json.dumps(server.chat[0]["response_format"]["schema"])
     assert "$ref" not in schema and "$defs" not in schema
     assert server.chat[0]["response_format"]["schema"]["required"] == [

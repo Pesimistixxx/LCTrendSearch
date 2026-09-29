@@ -587,6 +587,12 @@ class TemporalCorpus:
             for events in kinds.values():
                 events.sort(key=lambda item: item.observed)
 
+        # Parties of versions are ids; reports show their names.
+        self.organization_names: Dict[str, str] = {
+            str(row["organization_id"]): str(row["name"])
+            for row in data.get("organizations", [])
+            if row.get("organization_id") and row.get("name")
+        }
         self.crawls = [
             {
                 **row,

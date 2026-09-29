@@ -541,6 +541,9 @@ def parse_openalex(
         if value:
             identifiers.append(ExternalId(scheme=scheme, value=str(value)))
 
+    title = _plain_title(payload.get("title")) or _plain_title(
+        payload.get("display_name")
+    )
     chunks = (
         [
             _chunk(
@@ -549,7 +552,17 @@ def parse_openalex(
                 abstract,
                 0,
                 json_pointer="/abstract_inverted_index",
-            )
+            ),
+            # A paper often names its method only in the title ("YOLOv4:
+            # ..." whose abstract never says YOLOv4): the title is text an
+            # entity can cite. After the abstract, so abstract chunk ids of
+            # processed works do not change; only with an abstract, so a
+            # card without text is not sent to the model for its title.
+            *(
+                [_chunk(version_id, "title", title, 1, json_pointer="/title")]
+                if title
+                else []
+            ),
         ]
         if abstract
         else []
@@ -558,9 +571,7 @@ def parse_openalex(
         document_id=document_id,
         document_version_id=version_id,
         document_type=DocumentType.ARTICLE,
-        title=_plain_title(payload.get("title"))
-        or _plain_title(payload.get("display_name"))
-        or identity,
+        title=title or identity,
         language=payload.get("language"),
         published_at=payload.get("publication_date"),
         version_published_at=payload.get("publication_date"),

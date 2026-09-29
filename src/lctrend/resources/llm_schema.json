@@ -29,7 +29,17 @@
   "country_code_pattern": "^[A-Z]{2}$",
   "grounded_label_kinds_note": "Kinds whose label is a name the source itself writes: it must occur, up to case and inflection, in an evidence quote or chunk (label_not_grounded otherwise). Descriptive kinds (Metric, Task, Problem, ApplicationContext, ConceptCandidate) are named in the model's own words and are not checked.",
   "grounded_label_kinds": ["Technology", "Method", "Material", "Organization", "Company", "University", "Country", "Domain", "MarketSegment"],
-  "organization_kinds": ["Organization", "Company", "University"],
+  "technology_contract_note": "docs/technology-contract.md. An entity of these kinds becomes a Technology/Method vertex only when the definition fields are filled, the fields in supported_fields are backed by verbatim support quotes, a bare abbreviation is expanded and the model reports no uncertainty: classification_status validated; otherwise proposed, with the reasons in contract_issues. enforce true demotes a proposed entity to a ConceptCandidate, and its claims are dropped (role_type_mismatch). Off since 2026-09-29: live, GigaChat-3-Ultra left the contract fields empty on abstracts and READMEs, so every technology (8 of 8 on a YOLO review abstract) and every claim was lost; the vertex stays a Technology marked proposed.",
+  "technology_contract": {
+    "enforce": false,
+    "kinds": ["Technology", "Method"],
+    "required_fields": ["definition", "technical_mechanism", "technical_function", "technology_type", "boundary"],
+    "supported_fields": ["mechanism", "function"],
+    "technology_types": ["architecture", "algorithm", "method", "device", "material", "protocol", "software_system", "process", "system"],
+    "max_field_words": 45,
+    "abbreviation_pattern": "^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9&+./-]{1,9}s?$"
+  },
+  "organization_kinds":["Organization", "Company", "University"],
   "organization_kind_note": "The kind of a named organization is decided by the organization catalog (sources.json known names, legal forms, university markers) before the model's guess: Samsung is a Company whatever the model says. An organization label must be a proper name: without a capital letter it is a group of people ('third parties', 'developers'); with a personal title it is a person.",
   "person_title_pattern": "^(?i:dr|prof|mr|mrs|ms|sir|др|проф|г-н|г-жа)\\.?\\s",
   "predicates": {

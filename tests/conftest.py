@@ -50,3 +50,34 @@ def forget_embedding_keys():
     yield
     reset_key_knowledge()
     connectors._HOST_BLOCKED.clear()
+
+
+@pytest.fixture(autouse=True)
+def technology_contract_mode(request, monkeypatch):
+    """Modules written before the technology contract
+    (docs/technology-contract.md) build minimal Technology entities to test
+    other stages; they mark themselves ``legacy_technology_entities`` and
+    run with the contract reported, not enforced. Contract tests and all
+    other modules run it enforced, whatever the shipped switch says, so the
+    demotion stays tested; ``shipped_technology_contract`` keeps the
+    catalog's own setting.
+    """
+    if request.node.get_closest_marker("shipped_technology_contract"):
+        return
+    enforce = (
+        request.node.get_closest_marker("legacy_technology_entities") is None
+    )
+    import copy
+
+    from lctrend.llm import validation
+
+    original = validation.load_catalog
+
+    def relaxed(name):
+        value = original(name)
+        if name == "llm_schema":
+            value = copy.deepcopy(value)
+            value["technology_contract"]["enforce"] = enforce
+        return value
+
+    monkeypatch.setattr(validation, "load_catalog", relaxed)

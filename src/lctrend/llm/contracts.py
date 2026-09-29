@@ -6,7 +6,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Type, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    model_validator,
+)
+from pydantic.json_schema import SkipJsonSchema
 
 from ..core.models import ConceptKind
 
@@ -99,12 +107,76 @@ class SourceSpan(LocalModel):
     end: Optional[int] = None
 
 
+class SourceName(LocalModel):
+    """A name of the technology written in the source, verbatim."""
+
+    name: str = Field(min_length=1)
+    # Where and how the source uses it ("abstract, abbreviation of ...").
+    context: Optional[str] = None
+
+
+class SupportSpan(SourceSpan):
+    """A quote that supports fields of a technology definition, not a
+    mention of its name (docs/technology-contract.md)."""
+
+    supports: List[
+        Literal[
+            "definition",
+            "mechanism",
+            "function",
+            "boundary",
+            "application",
+            "name",
+        ]
+    ] = Field(min_length=1)
+
+
 class LocalEntity(LocalModel):
     local_id: str = Field(min_length=1)
+    # For Technology and Method: the canonical name, which may summarize
+    # the source; source_names keep the verbatim names.
     label: str = Field(min_length=1)
     kind: ConceptKind
     # What the source says the entity is (Technology, Method, Material).
     definition: Optional[str] = None
+    # Technology contract (Technology, Method): distinguishing principle,
+    # performed operation, form of the technology, what it is not.
+    technical_mechanism: Optional[str] = None
+    technical_function: Optional[str] = None
+    technology_type: Optional[str] = None
+    boundary: Optional[str] = None
+    application_context: Optional[str] = None
+    source_names: List[SourceName] = Field(default_factory=list)
+    support: List[SupportSpan] = Field(default_factory=list)
+    # Why the contract's conditions are not met, in the model's words.
+    uncertainty: Optional[str] = None
+    # Set by validation only (hidden from the model's schema): validated,
+    # or proposed with the unmet conditions.
+    classification_status: SkipJsonSchema[Optional[str]] = None
+    contract_issues: SkipJsonSchema[List[str]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _name_evidence(cls, value: Any) -> Any:
+        # Live (2026-09-29): with source_names and support given, the model
+        # often omits the name quote, and the whole technology was lost.
+        # The first source name becomes it; validation finds its chunk.
+        if (
+            isinstance(value, dict)
+            and not value.get("evidence")
+            and value.get("source_names")
+        ):
+            names = value["source_names"]
+            first = names[0] if isinstance(names, list) and names else None
+            name = first.get("name") if isinstance(first, dict) else first
+            support = value.get("support") or [{}]
+            chunk = support[0].get("chunk_id") if support[0] else None
+            if isinstance(name, str) and name.strip():
+                value = {
+                    **value,
+                    "evidence": [{"chunk_id": chunk or "?", "quote": name}],
+                }
+        return value
     # Other names the source itself equates with the label: an abbreviation
     # or code in parentheses, "also known as".
     aliases: List[str] = Field(default_factory=list)

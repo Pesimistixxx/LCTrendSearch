@@ -56,3 +56,7 @@ select = ["E", "W", "F", "I"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+markers = [
+    "legacy_technology_entities: module predates the technology contract; the contract is reported, not enforced (tests/conftest.py)",
+    "shipped_technology_contract: runs the technology contract as llm_schema.json ships it, enforced or not (tests/conftest.py)",
+]

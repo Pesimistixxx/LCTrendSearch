@@ -23,6 +23,8 @@ from lctrend.llm.context import PipelineSettings, build_payload, plan_packets
 from lctrend.llm.contracts import Extraction
 from lctrend.llm.pipeline import process_document
 
+pytestmark = pytest.mark.legacy_technology_entities
+
 
 def document(texts=None, shared_stream=False):
     texts = texts or ["Sensor S solves monitoring."]

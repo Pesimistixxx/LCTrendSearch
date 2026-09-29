@@ -50,6 +50,7 @@ from ..linking import known as known_layer
 from ..linking.sections import SKIPPED_REASON
 from .client import CALL_LOG, LLMError, Provider, rate_limited
 from .context import (
+    DOCUMENT_CONTEXT,
     ContextBudgetError,
     PipelineSettings,
     build_payload,
@@ -85,6 +86,47 @@ def _prompt(stage: str) -> str:
         else RESOURCE_DIR / "prompts" / f"{stage}.txt"
     )
     return path.read_text(encoding="utf-8-sig")
+
+
+def technology_profile(entity: Any, version_id: str) -> dict | None:
+    """The technology contract fields of a validated entity, with the
+    quotes that support them (docs/technology-contract.md, section 3)."""
+    if entity.classification_status is None:
+        return None
+    return {
+        "classification_status": entity.classification_status,
+        "contract_issues": list(entity.contract_issues),
+        **({"uncertainty": entity.uncertainty} if entity.uncertainty else {}),
+        **{
+            field: getattr(entity, field)
+            for field in (
+                "technical_mechanism",
+                "technical_function",
+                "technology_type",
+                "boundary",
+                "application_context",
+            )
+            if getattr(entity, field)
+        },
+        "source_names": [
+            item.model_dump(exclude_none=True) for item in entity.source_names
+        ],
+        # Retrospective labels (docs/hgt-pipeline-2026-09-29.md, 4.5): set
+        # later from global series, never by the model or this pipeline.
+        "signal_36m": None,
+        "trend_36m": None,
+        "evidence": [
+            {
+                "document_version_id": version_id,
+                "chunk_id": span.chunk_id,
+                "quote": span.quote,
+                "start": span.start,
+                "end": span.end,
+                "supports": list(span.supports),
+            }
+            for span in entity.support
+        ],
+    }
 
 
 def _refs(value: Any, mapping: dict[str, str]) -> Any:
@@ -327,7 +369,8 @@ class _ChunkAliases:
             return extraction
         data = extraction.model_dump(mode="python")
         for item in [*data["entities"], *data["claims"]]:
-            for span in item["evidence"]:
+            # Technology support quotes cite chunks like evidence does.
+            for span in [*item["evidence"], *item.get("support", [])]:
                 span["chunk_id"] = self.back.get(
                     span["chunk_id"].strip(), span["chunk_id"]
                 )
@@ -1060,6 +1103,12 @@ async def _process_document(
                 (order, (packet.packet_id, valid, decisions, context_pending))
             )
             processed.extend(original.focus_chunk_ids)
+            # The title every packet reads is covered once a packet is.
+            processed.extend(
+                chunk_id
+                for chunk_id, reason in original.selection_reasons.items()
+                if reason == DOCUMENT_CONTEXT
+            )
             _emit(
                 event,
                 stage="packet",
@@ -1152,6 +1201,7 @@ async def _process_document(
     chunks = {chunk.chunk_id: chunk for chunk in document.chunks}
     entity_mentions: dict[str, list[str]] = {}
     definitions: dict[str, str] = {}
+    profiles: dict[str, dict] = {}
     claims = []
     for packet_id, extraction, decisions, pending in batches:
         for entity in extraction.entities:
@@ -1163,6 +1213,11 @@ async def _process_document(
                 if entity.kind == ConceptKind.COUNTRY and entity.country_code
                 else entity.label
             )
+            profile = technology_profile(
+                entity, document.document_version_id
+            )
+            if profile is not None:
+                profiles[key] = profile
             ids = []
             for span in entity.evidence:
                 mention_id = stable_id(
@@ -1183,6 +1238,7 @@ async def _process_document(
                     mention_role="entity",
                     definition=entity.definition,
                     declared_aliases=entity.aliases,
+                    profile=profile,
                 )
                 mentions.setdefault(mention_id, mention)
                 ids.append(mention_id)
@@ -1243,6 +1299,11 @@ async def _process_document(
             "mention_ids": ids,
             "concept_id": identities.get(key),
             "local_definition": definitions.get(key),
+            **(
+                {"technology_profile": profiles[key]}
+                if key in profiles
+                else {}
+            ),
         }
         for key, ids in entity_mentions.items()
     }

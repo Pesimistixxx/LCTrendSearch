@@ -356,6 +356,40 @@ def _pipeline(catalog: Mapping) -> None:
         _strings(value, "pipeline.html." + key)
 
 
+def _technology_contract(contract: Mapping) -> None:
+    path = "llm_schema.technology_contract"
+    _mapping(contract, path)
+    _bool(contract["enforce"], path + ".enforce")
+    _strings(
+        contract["kinds"],
+        path + ".kinds",
+        {"Technology", "Method", "Material"},
+        nonempty=True,
+    )
+    _strings(
+        contract["required_fields"],
+        path + ".required_fields",
+        {
+            "definition",
+            "technical_mechanism",
+            "technical_function",
+            "technology_type",
+            "boundary",
+            "application_context",
+        },
+    )
+    _strings(
+        contract["supported_fields"],
+        path + ".supported_fields",
+        {"definition", "mechanism", "function", "boundary", "application"},
+    )
+    _strings(
+        contract["technology_types"], path + ".technology_types", nonempty=True
+    )
+    _number(contract["max_field_words"], path + ".max_field_words", 1)
+    _regex(contract["abbreviation_pattern"], path + ".abbreviation_pattern")
+
+
 def _contracts(catalogs: Mapping) -> None:
     schema, graph = catalogs["llm_schema"], catalogs["graph"]
     predicates = _mapping(schema["predicates"], "llm_schema.predicates")
@@ -367,6 +401,7 @@ def _contracts(catalogs: Mapping) -> None:
         "llm_schema.grounded_label_kinds",
         KINDS,
     )
+    _technology_contract(schema["technology_contract"])
     _strings(
         schema["measurement_predicates"],
         "llm_schema.measurement_predicates",

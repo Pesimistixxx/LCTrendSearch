@@ -108,7 +108,8 @@ def manager(tmp_path, jobs=None, **overrides):
             {"name": "Domain A", "aliases": ["domain a", "Alias A"]},
             {"name": "Domain B", "aliases": []},
         ],
-        "processed_reader": lambda: [],
+        # No graph: the ledger alone decides (graph tests pass a reader).
+        "processed_reader": lambda: None,
     }
     settings.update(overrides)
     return CrawlManager(jobs, tmp_path / "ledger", **settings)
@@ -207,8 +208,9 @@ def test_graph_seed_generator_is_consumed_before_driver_is_closed(tmp_path):
         def close(self):
             self.closed = True
 
-    store = Store()
-    jobs._store_factory = lambda: store
+    # A driver per call, as GraphStore: the graph identity is read first.
+    stores = []
+    jobs._store_factory = lambda: stores.append(Store()) or stores[-1]
     instance = manager(
         tmp_path,
         jobs,
@@ -220,7 +222,7 @@ def test_graph_seed_generator_is_consumed_before_driver_is_closed(tmp_path):
     try:
         final = finish(instance, instance.create("Sensors"))
         assert final["counts"]["parsed"] == 1 and jobs.calls == []
-        assert store.closed
+        assert stores and all(store.closed for store in stores)
     finally:
         instance.close(wait=True)
 
@@ -261,6 +263,53 @@ def test_global_dedup_across_pages_aliases_domains_topics_and_restart(
         assert records["items"][0]["job_id"]
     finally:
         restored.close(wait=True)
+
+
+def test_graph_decides_duplicates_not_the_ledger(tmp_path):
+    graph = []
+
+    def held(name):
+        return {
+            "source": "openalex",
+            "source_id": name,
+            "canonical_id": f"doi:10.1/{name}",
+            "status": "parsed",
+        }
+
+    def discover(topic, cursor):
+        return page(
+            [
+                item("openalex", "lost", canonical="doi:10.1/lost"),
+                item("openalex", "kept", canonical="doi:10.1/kept"),
+            ]
+        )
+
+    instance = manager(
+        tmp_path,
+        discoverers={"openalex": discover},
+        processed_reader=lambda: list(graph),
+    )
+    try:
+        first = finish(instance, instance.create("Sensors"))
+        assert first["counts"]["parsed"] == 2
+        assert len(instance.job_manager.calls) == 1
+        graph.extend([held("lost"), held("kept")])  # published
+
+        # Nodes deleted in the same database: one of the two is gone.
+        graph.remove(held("lost"))
+        second = finish(instance, instance.create("Another topic"))
+        assert second["counts"]["parsed"] == 2
+        assert [
+            [payload["name"] for payload in payloads]
+            for _, payloads in instance.job_manager.calls[1:]
+        ] == [["lost"]]
+        graph.append(held("lost"))
+
+        # Everything is in the graph again: nothing is repeated.
+        finish(instance, instance.create("Third topic"))
+        assert len(instance.job_manager.calls) == 2
+    finally:
+        instance.close(wait=True)
 
 
 def test_all_pages_follow_cursors_without_a_document_limit(tmp_path):
@@ -591,7 +640,8 @@ def test_neo4j_seed_prevents_reprocessing_previous_cli_results(tmp_path):
     try:
         first = finish(instance, instance.create("Sensors"))
         second = finish(instance, instance.create("Another topic"))
-        assert seed_calls == [1]
+        # Read on every run: the graph can change while the server runs.
+        assert seed_calls == [1, 1]
         assert first["counts"]["parsed"] == second["counts"]["parsed"] == 1
         assert instance.job_manager.calls == []
         record = instance.list_materials(first["crawl_id"])["items"][0]
@@ -775,13 +825,22 @@ def test_failed_seed_metadata_does_not_break_a_later_duplicate_page(tmp_path):
             if payload.get("name") == "known"
             else []
         ),
+        # The graph holds the seed and whatever the jobs published.
         processed_reader=lambda: [
             {
-                "source": "github",
-                "source_id": "known",
-                "canonical_id": "github:known",
+                "source": source,
+                "source_id": name,
+                "canonical_id": f"{source}:{name}",
                 "status": "parsed",
             }
+            for source, name in [
+                ("github", "known"),
+                *(
+                    (source, payload["name"])
+                    for source, payloads in instance.job_manager.calls
+                    for payload in payloads
+                ),
+            ]
         ],
     )
     try:
@@ -846,4 +905,43 @@ def test_batch_is_hydrated_concurrently_and_one_failure_stays_local(
         assert source == "hh"
         assert [payload["name"] for payload in payloads] == ["a", "b", "c"]
     finally:
+        instance.close(wait=True)
+
+
+def test_next_batch_starts_while_a_slow_batch_drains(tmp_path, monkeypatch):
+    """One unfinished document must not idle the other workers: with two
+    jobs allowed, the next batch is submitted before the first finishes."""
+    monkeypatch.setenv("LCTREND_WORKERS", "4")
+
+    class OverlappingJobs(Jobs):
+        max_active_jobs = 2
+
+    jobs = OverlappingJobs(tmp_path / "jobs", blocked=True)
+    names = ["a", "b", "c", "d"]
+    instance = manager(
+        tmp_path,
+        jobs,
+        batch_size=2,
+        discoverers={
+            "openalex": lambda topic, cursor: page(
+                [item("openalex", name) for name in names]
+            )
+        },
+    )
+    try:
+        crawl = instance.create("Sensors")
+        deadline = monotonic() + 3
+        while len(jobs.calls) < 2 and monotonic() < deadline:
+            sleep(0.02)
+        # Both batches submitted; the first job is still running.
+        assert len(jobs.calls) == 2
+        assert all(
+            job["status"] == "running" for job in jobs.jobs.values()
+        )
+        jobs.release.set()
+        final = finish(instance, crawl)
+        assert final["status"] == "completed"
+        assert final["counts"]["parsed"] == 4
+    finally:
+        jobs.release.set()
         instance.close(wait=True)

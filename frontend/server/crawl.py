@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,8 @@ from lctrend.core import aio
 from lctrend.core.config import load_catalog
 
 from .jobs import _error, default_workers
+
+logger = logging.getLogger(__name__)
 
 
 def _now():
@@ -179,7 +182,6 @@ class CrawlManager:
         self._domains = domains
         self._batch_size = batch_size
         self._processed_reader = processed_reader or self._read_processed
-        self._seeded = False
         self._paused = {}
         self._children = {}
         self._futures = {}
@@ -199,9 +201,10 @@ class CrawlManager:
         return runner(coroutine) if runner else aio.run_sync(coroutine)
 
     def _read_processed(self):
+        """Materials the graph holds; None when there is no graph."""
         factory = getattr(self.job_manager, "_store_factory", None)
         if factory is None:
-            return []
+            return None
 
         async def collect():
             store = await aio.call(factory)
@@ -217,6 +220,35 @@ class CrawlManager:
                 await aio.call(store.close)
 
         return self._await(collect)
+
+    def _forget_missing_from_graph(self, materials):
+        """The graph decides what is a duplicate, not this ledger.
+
+        A parsed or partial material the graph no longer holds (the database
+        recreated, its nodes deleted) goes back to pending: otherwise it
+        stays skipped as a duplicate of nothing. Failed ones stay failed
+        until retry_failed.
+        """
+        held = {item["canonical_id"] for item in materials}
+        with self._lock, self._db:
+            missing = [
+                row["material_id"]
+                for row in self._db.execute(
+                    "SELECT material_id,canonical_id FROM materials WHERE "
+                    "status IN ('parsed','partial') AND claimed_by IS NULL"
+                )
+                if row["canonical_id"] not in held
+            ]
+            self._db.executemany(
+                "UPDATE materials SET status='pending',error_json=NULL,"
+                "stage=NULL,llm_status=NULL,updated_at=? WHERE material_id=?",
+                [(_now(), material_id) for material_id in missing],
+            )
+        if missing:
+            logger.warning(
+                "%d processed material(s) are not in the graph: requeued",
+                len(missing),
+            )
 
     def append_seed(self, materials):
         from lctrend.ingest.discovery import material_identity
@@ -252,9 +284,14 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 )
 
     def _ensure_seeded(self):
-        if not self._seeded:
-            self.append_seed(self._processed_reader())
-            self._seeded = True
+        # Read on every crawl run: the graph can be emptied or replaced
+        # while the server keeps running.
+        materials = self._processed_reader()
+        if materials is None:
+            return
+        materials = list(materials)
+        self._forget_missing_from_graph(materials)
+        self.append_seed(materials)
 
     def _recover(self):
         with self._lock, self._db:
@@ -638,8 +675,8 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     self._set_state(crawl_id, "paused")
                 else:
                     self._set_state(crawl_id, "pausing")
-                    if crawl_id in self._children:
-                        self.job_manager.cancel_job(self._children[crawl_id])
+                    for child in self._children.get(crawl_id, ()):
+                        self.job_manager.cancel_job(child["job_id"])
         return self.get_crawl(crawl_id)
 
     def resume(self, crawl_id):
@@ -888,6 +925,110 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
         )
 
     def _process_pending(self, crawl_id):
+        """Keep the workers busy with this crawl's pending materials.
+
+        A batch used to be one job awaited to its last document: one slow
+        material (a long PDF, model retries) left every other worker idle
+        until it finished, and the next job's start (graph checks, concept
+        registry) added another idle gap. Now the next batch is submitted
+        as soon as the running jobs leave a worker free (and the job manager
+        runs more than one job); its job starts while the previous drains,
+        and the manager's shared document limit keeps the total at the
+        configured workers.
+
+        False when there was nothing to submit and nothing running.
+        """
+        self._wait_for_capacity(crawl_id)
+        if not self._paused[crawl_id].is_set() and self._submit_pending(
+            crawl_id
+        ):
+            # Discovery resumes only when a worker is free: with one job at
+            # a time this waits for the whole batch, as before.
+            self._wait_for_capacity(crawl_id)
+            return True
+        if self._children.get(crawl_id):
+            self._drain_children(crawl_id)
+            return True
+        return False
+
+    def _child_jobs(self):
+        """Jobs of one crawl in flight at once: the manager's active jobs."""
+        value = getattr(self.job_manager, "max_active_jobs", 1)
+        return value if isinstance(value, int) and value > 0 else 1
+
+    def _wait_for_capacity(self, crawl_id):
+        workers, jobs = default_workers(), self._child_jobs()
+        while True:
+            unfinished = self._poll_children(crawl_id)
+            running = len(self._children.get(crawl_id, ()))
+            if (
+                self._paused[crawl_id].is_set()
+                or not running
+                or (running < jobs and unfinished < workers)
+            ):
+                return
+            sleep(0.1)
+
+    def _drain_children(self, crawl_id):
+        while True:
+            self._poll_children(crawl_id)
+            if not self._children.get(crawl_id):
+                return
+            sleep(0.1)
+
+    def _poll_children(self, crawl_id):
+        """Sync the crawl's jobs; settle finished ones. Returns documents
+        still queued or running."""
+        unfinished = 0
+        with self._lock:
+            children = list(self._children.get(crawl_id, ()))
+        for child in children:
+            try:
+                job = self.job_manager.get_job(child["job_id"])
+                self._sync_child(crawl_id, child["records"], job)
+                if job["status"] in {"queued", "running", "cancelling"}:
+                    if (
+                        self._paused[crawl_id].is_set()
+                        and job["status"] != "cancelling"
+                    ):
+                        self.job_manager.cancel_job(child["job_id"])
+                    unfinished += sum(
+                        doc["status"] in {"queued", "running"}
+                        for doc in job["documents"]
+                    )
+                    continue
+                self._finish_child(child["records"], job)
+            except Exception as exc:
+                for record in child["records"]:
+                    self._material_status(
+                        record["material_id"],
+                        "failed",
+                        _error(exc, "processing"),
+                    )
+            with self._lock:
+                self._children[crawl_id].remove(child)
+        return unfinished
+
+    def _finish_child(self, records, job):
+        for record, doc in zip(records, job["documents"]):
+            status = {
+                "succeeded": "parsed",
+                "partial": "partial",
+                "failed": "failed",
+                "cancelled": "pending",
+            }.get(doc["status"], "pending")
+            error = doc.get("error") or (
+                job.get("error")
+                if status == "pending" and job["status"] == "failed"
+                else None
+            )
+            if job["status"] == "failed" and doc["status"] == "cancelled":
+                # Preflight failure is a failed attempt, not an endless
+                # pending/model-reconfiguration loop.
+                status = "failed"
+            self._material_status(record["material_id"], status, error)
+
+    def _submit_pending(self, crawl_id):
         with self._lock, self._db:
             first = self._db.execute(
                 (
@@ -1001,6 +1142,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             for record in ready:
                 self._material_status(record["material_id"], "pending")
             return True
+        child = {"job_id": None, "records": ready}
         try:
             with self._lock:
                 if self._paused[crawl_id].is_set():
@@ -1009,7 +1151,8 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     return True
 
                 def register(job):
-                    self._children[crawl_id] = job["job_id"]
+                    child["job_id"] = job["job_id"]
+                    self._children.setdefault(crawl_id, []).append(child)
                     with self._db:
                         for record, doc in zip(ready, job["documents"]):
                             self._db.execute(
@@ -1022,7 +1165,7 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                                 ),
                             )
 
-                job = self.job_manager.create_payloads(
+                self.job_manager.create_payloads(
                     first["source"],
                     payloads,
                     direction=self._known(crawl_id)["topic"],
@@ -1030,42 +1173,15 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                     on_created=register,
                     cached_results=cached_results,
                 )
-            while True:
-                job = self.job_manager.get_job(job["job_id"])
-                self._sync_child(crawl_id, ready, job)
-                if job["status"] not in {"queued", "running", "cancelling"}:
-                    break
-                if (
-                    self._paused[crawl_id].is_set()
-                    and job["status"] != "cancelling"
-                ):
-                    self.job_manager.cancel_job(job["job_id"])
-                sleep(0.1)
-            for record, doc in zip(ready, job["documents"]):
-                status = {
-                    "succeeded": "parsed",
-                    "partial": "partial",
-                    "failed": "failed",
-                    "cancelled": "pending",
-                }.get(doc["status"], "pending")
-                error = doc.get("error") or (
-                    job.get("error")
-                    if status == "pending" and job["status"] == "failed"
-                    else None
-                )
-                if job["status"] == "failed" and doc["status"] == "cancelled":
-                    # Preflight failure is a failed attempt, not an endless
-                    # pending/model-reconfiguration loop.
-                    status = "failed"
-                self._material_status(record["material_id"], status, error)
         except Exception as exc:
+            with self._lock:
+                children = self._children.get(crawl_id, [])
+                if child in children:
+                    children.remove(child)
             for record in ready:
                 self._material_status(
                     record["material_id"], "failed", _error(exc, "processing")
                 )
-        finally:
-            with self._lock:
-                self._children.pop(crawl_id, None)
         return True
 
     def _expand_known_github(self, crawl_id):
@@ -1251,6 +1367,9 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
                 if not found_page and not processed and not metadata_expanded:
                     break
                 self._set_state(crawl_id, "running", "discovery")
+            # Batches still running settle (or, on pause, are cancelled)
+            # before the crawl reports its end state.
+            self._drain_children(crawl_id)
             if self._paused[crawl_id].is_set():
                 self._set_state(crawl_id, "paused")
             else:

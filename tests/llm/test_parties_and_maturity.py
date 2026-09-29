@@ -3,6 +3,8 @@
 import asyncio
 import re
 
+import pytest
+
 from lctrend.core.models import (
     Artifact,
     Chunk,
@@ -17,6 +19,8 @@ from lctrend.llm.context import PipelineSettings
 from lctrend.llm.contracts import Extraction
 from lctrend.llm.pipeline import process_document
 from lctrend.llm.validation import validate_local_extraction
+
+pytestmark = pytest.mark.legacy_technology_entities
 
 TEXT = (
     "Acme Energy GmbH developed the solid-state battery in Германии. "

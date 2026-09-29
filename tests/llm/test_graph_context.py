@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import pytest
 from test_llm_pipeline import (
     RecordingReplay,
     document,
@@ -19,6 +20,8 @@ from lctrend.llm.context import (
 from lctrend.llm.contracts import ContextRequest, Extraction
 from lctrend.llm.pipeline import process_document
 from lctrend.llm.validation import validate_local_extraction
+
+pytestmark = pytest.mark.legacy_technology_entities
 
 
 def related(text="Sensor S background from an earlier report."):

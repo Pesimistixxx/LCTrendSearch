@@ -289,6 +289,12 @@ def _stream(chunk: Chunk) -> tuple:
     )
 
 
+# Chunks every packet reads as context and never extracts from on their
+# own: the title of a work names its method, often only there.
+CONTEXT_KINDS = frozenset({"title"})
+DOCUMENT_CONTEXT = "document_title"
+
+
 def _packet(document: DocumentEnvelope, focus: List[str]) -> ContextPacket:
     return ContextPacket(
         packet_id=stable_id("packet", document.document_version_id, *focus),
@@ -321,6 +327,8 @@ def _with_neighbors(
     by_id = _index(document)
     skipped = skipped_chunks(document)
     for chunk_id in _neighbor_ids(document, packet.focus_chunk_ids):
+        if chunk_id in result.support_chunk_ids:
+            continue
         if by_id[chunk_id].parse_status == "rejected" or chunk_id in skipped:
             omitted.append(chunk_id)
             continue
@@ -342,10 +350,32 @@ def plan_packets(
     packets, focus, omitted, reasons, support_omissions = [], [], [], {}, {}
     by_id = _index(document)
 
+    context = [
+        chunk.chunk_id
+        for chunk in _ordered(document)
+        if chunk.kind in CONTEXT_KINDS
+        and chunk.text.strip()
+        and chunk.parse_status != "rejected"
+    ]
+
+    def with_context(packet: ContextPacket) -> ContextPacket:
+        for chunk_id in context:
+            candidate = packet.model_copy(deep=True)
+            candidate.support_chunk_ids.append(chunk_id)
+            candidate.selection_reasons[chunk_id] = DOCUMENT_CONTEXT
+            try:
+                build_payload(document, candidate, settings)
+            except ContextBudgetError:
+                continue
+            packet = candidate
+        return packet
+
     def finish() -> None:
         if focus:
             packet, omitted_support = _with_neighbors(
-                document, _packet(document, list(focus)), settings
+                document,
+                with_context(_packet(document, list(focus))),
+                settings,
             )
             packets.append(packet)
             if omitted_support:
@@ -359,6 +389,8 @@ def plan_packets(
             reasons[chunk.chunk_id] = (
                 "empty_text" if not chunk.text.strip() else "parse_rejected"
             )
+            continue
+        if chunk.chunk_id in context:
             continue
         if chunk.chunk_id in skipped:
             # A data or administrative section (linking.sections).

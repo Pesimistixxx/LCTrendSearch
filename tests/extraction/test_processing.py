@@ -14,6 +14,8 @@ from lctrend.core.models import (
 from lctrend.extraction.processing import process_material
 from lctrend.llm.client import LLMError, ReplayProvider
 
+pytestmark = pytest.mark.legacy_technology_entities
+
 
 def document():
     return DocumentEnvelope(

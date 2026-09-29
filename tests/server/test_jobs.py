@@ -1209,3 +1209,60 @@ def test_graph_connection_drop_is_retried(monkeypatch):
     except ValueError:
         pass
     assert pauses == [2.0, 5.0], "a non-connection error is not retried"
+
+
+def test_overlapping_jobs_share_the_document_limit(tmp_path):
+    """A slow document of one job does not idle the workers: the next job
+    runs beside it, and both together stay within max_documents."""
+    slow, release = Event(), Event()
+    lock, running, peak = Lock(), [0], [0]
+
+    def process(doc, **kwargs):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        try:
+            if doc.document_id == "slow-0":
+                slow.set()
+                assert release.wait(5)
+            else:
+                sleep(0.05)
+            return extraction(doc)
+        finally:
+            with lock:
+                running[0] -= 1
+
+    instance = manager(
+        tmp_path,
+        max_active_jobs=2,
+        max_documents=2,
+        document_processor=process,
+    )
+    try:
+        path = tmp_path / "slow-0.txt"
+        path.write_text("Sensor S solves monitoring.", encoding="utf-8")
+        first = instance.create_files([path], workers=2)
+        assert slow.wait(3)
+        quick = [tmp_path / f"quick-{index}.txt" for index in range(4)]
+        for item in quick:
+            item.write_text("Sensor S solves monitoring.", encoding="utf-8")
+        second = finish(instance, instance.create_files(quick, workers=2))
+        # The second job finished while the first still holds its document.
+        assert second["status"] == "completed"
+        assert instance.get_job(first["job_id"])["status"] == "running"
+        release.set()
+        assert finish(instance, first)["status"] == "completed"
+        assert peak[0] == 2
+    finally:
+        release.set()
+        instance.close(wait=True)
+
+
+def test_max_documents_is_validated(tmp_path):
+    with pytest.raises(ValueError):
+        manager(tmp_path, max_documents=0)
+    instance = manager(tmp_path, max_documents=3)
+    try:
+        assert instance.max_documents == 3
+    finally:
+        instance.close(wait=True)

@@ -368,9 +368,14 @@ def create_app(
 
         validate_catalogs()
         if app.state.manager is None:
-            from .jobs import JobManager
+            from .jobs import JobManager, default_workers
 
-            app.state.manager = JobManager()
+            # Two jobs overlap so a crawl's next batch runs beside a slow
+            # document of the previous one; together they stay within the
+            # configured workers.
+            app.state.manager = JobManager(
+                max_active_jobs=2, max_documents=default_workers()
+            )
             logger.info(
                 "Job manager started in %s", app.state.manager.directory
             )

@@ -235,6 +235,10 @@ class Concept(BaseModel):
     # Resolved mentions per reported kind; the kind of the concept is
     # settled from them (extraction.lexical.settled_kind).
     kind_counts: Dict[str, int] = Field(default_factory=dict)
+    # Technology contract profile (docs/technology-contract.md): mechanism,
+    # function, type, boundary, verbatim names, field evidence and
+    # classification_status. A validated profile replaces a proposed one.
+    profile: Optional[Dict[str, Any]] = None
 
 
 class Mention(BaseModel):
@@ -255,6 +259,8 @@ class Mention(BaseModel):
     # Other names the source itself equates with this one ("compactin
     # (ML-236B)"), checked against the chunk; they are identity evidence.
     declared_aliases: List[str] = Field(default_factory=list)
+    # Technology contract profile of the entity in this document.
+    profile: Optional[Dict[str, Any]] = None
 
 
 class EvidenceSpan(BaseModel):

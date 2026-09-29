@@ -14,6 +14,7 @@ worker threads. One LLM provider and one concept registry serve a job.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -226,6 +227,7 @@ class JobManager:
         directory: Path | str = "artifacts/ingestion/jobs",
         *,
         max_active_jobs: int = 1,
+        max_documents: int | None = None,
         source_fetcher: Callable | None = None,
         document_processor: Callable | None = None,
         store_factory: Callable | None = None,
@@ -240,6 +242,13 @@ class JobManager:
         if not 1 <= max_active_jobs <= 4:
             raise ValueError("max_active_jobs must be 1..4")
         self._max_active_jobs = max_active_jobs
+        # Documents in flight across all jobs. Jobs overlap (a thematic crawl
+        # submits its next batch while the previous one drains), so each
+        # job's own worker limit alone would let the sum exceed the workers.
+        if max_documents is not None and not 1 <= max_documents <= MAX_WORKERS:
+            raise ValueError(f"max_documents must be 1..{MAX_WORKERS}")
+        self._max_documents = max_documents
+        self._documents = None
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
@@ -417,6 +426,14 @@ class JobManager:
                         logger.warning(
                             "Cannot save progress of job %s: %s", job_id, exc
                         )
+
+    @property
+    def max_active_jobs(self) -> int:
+        return self._max_active_jobs
+
+    @property
+    def max_documents(self) -> int | None:
+        return self._max_documents
 
     def run(self, coroutine, timeout: float | None = None):
         """Run a coroutine on the job loop from synchronous code."""
@@ -886,6 +903,8 @@ class JobManager:
     async def _run(self, job_id: str) -> None:
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._max_active_jobs)
+        if self._documents is None and self._max_documents is not None:
+            self._documents = asyncio.Semaphore(self._max_documents)
         async with self._slots:
             with self._lock:
                 job = self._jobs.get(job_id)
@@ -1165,7 +1184,7 @@ class JobManager:
         self, job_id: str, batch: list, context: dict
     ) -> set[asyncio.Task]:
         async def one(doc_id, source):
-            async with context["workers"]:
+            async with context["workers"], self._document_slot():
                 # Serialize the start decision with cancel_job so no new
                 # document can slip in after cancellation has been recorded.
                 with self._lock:
@@ -1207,6 +1226,14 @@ class JobManager:
             asyncio.create_task(one(doc_id, source))
             for doc_id, source in batch
         }
+
+    def _document_slot(self):
+        """A slot of the manager-wide document limit, if one is set."""
+        return (
+            self._documents
+            if self._documents is not None
+            else contextlib.nullcontext()
+        )
 
     async def _process_batch(
         self, job_id: str, batch: list, context: dict

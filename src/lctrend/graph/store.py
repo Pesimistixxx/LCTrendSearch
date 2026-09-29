@@ -175,6 +175,9 @@ def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
         identity_key=properties.get("identity_key"),
         label_counts=json.loads(properties.get("label_counts_json") or "{}"),
         kind_counts=json.loads(properties.get("kind_counts_json") or "{}"),
+        profile=json.loads(
+            properties.get("technology_profile_json") or "null"
+        ),
     )
 
 
@@ -257,10 +260,12 @@ class GraphStore:
         logger.debug("Neo4j schema ensured")
 
     async def processed_materials(self):
-        """Stream prior extractions into the crawler's deduplication ledger.
+        """Stream prior extractions into the crawler's deduplication ledger:
+        the graph decides which materials are duplicates.
 
         A document-only import is not a completed extraction. Article,
-        repository and package identities remain separate.
+        repository and package identities remain separate; any other source
+        (grants, vacancies) is identified as ``source:record_id``.
         """
         from ..ingest.discovery import material_identity
 
@@ -270,8 +275,6 @@ class GraphStore:
             MATCH (v)-[origin:FROM_SOURCE]->(s:Source)
             WHERE run.status IN ['succeeded', 'partial']
               AND run.parser <> 'metadata'
-              AND s.source_id IN
-                  ['source:openalex', 'source:github', 'source:pypi']
             RETURN s.source_id AS source, origin.record_id AS source_id,
                    d.title AS title, d.canonical_url AS url,
                    d.external_ids AS external_ids,
@@ -1545,7 +1548,8 @@ class GraphStore:
             # every embedding (~0.5 GB at 20k concepts x 2560) (D-6).
             "RETURN c {.concept_id, .kind, .preferred_label, .definition, "
             ".language, .status, .names_json, .aliases, .identity_key, "
-            ".label_counts_json, .kind_counts_json} AS properties"
+            ".label_counts_json, .kind_counts_json, "
+            ".technology_profile_json} AS properties"
             for label in CONCEPT_LABELS
         )
         async with self._driver.session(database=self._database) as session:
@@ -2149,6 +2153,11 @@ class GraphStore:
                        AS role_labels,
                    quote
         """
+        organizations = """
+            MATCH (o:Organization)
+            WHERE o.organization_id IS NOT NULL AND o.name IS NOT NULL
+            RETURN o.organization_id AS organization_id, o.name AS name
+        """
         crawls = """
             MATCH (r:CrawlRun)
             RETURN r.crawl_id AS crawl_id, r.source_id AS source_id,
@@ -2181,6 +2190,7 @@ class GraphStore:
                 ("economics", economics, "Technology"),
                 ("assertions", assertions, "Assertion"),
                 ("crawls", crawls, "CrawlRun"),
+                ("organizations", organizations, "Organization"),
             ):
                 result[name] = (
                     [
@@ -2905,6 +2915,11 @@ class GraphStore:
                     ),
                     "label_counts_json": json_value(concept.label_counts),
                     "kind_counts_json": json_value(concept.kind_counts),
+                    "profile_json": (
+                        json_value(concept.profile)
+                        if concept.profile
+                        else None
+                    ),
                     **concept.model_dump(
                         exclude={"names", "label_counts", "kind_counts"},
                         mode="json",
@@ -2933,6 +2948,33 @@ class GraphStore:
                         c.key_version = row.key_version,
                         c.label_counts_json = row.label_counts_json,
                         c.kind_counts_json = row.kind_counts_json,
+                        // Technology contract: a validated profile is
+                        // never replaced by a proposed one.
+                        c.technology_profile_json = CASE
+                            WHEN row.profile_json IS NULL
+                                OR (c.classification_status = 'validated'
+                                    AND row.profile.classification_status
+                                        <> 'validated')
+                            THEN c.technology_profile_json
+                            ELSE row.profile_json END,
+                        c.classification_status = CASE
+                            WHEN c.classification_status = 'validated'
+                            THEN c.classification_status
+                            ELSE coalesce(row.profile.classification_status,
+                                          c.classification_status) END,
+                        c.technical_mechanism = coalesce(
+                            c.technical_mechanism,
+                            row.profile.technical_mechanism),
+                        c.technical_function = coalesce(
+                            c.technical_function,
+                            row.profile.technical_function),
+                        c.technology_type = coalesce(
+                            c.technology_type, row.profile.technology_type),
+                        c.boundary = coalesce(
+                            c.boundary, row.profile.boundary),
+                        c.application_context = coalesce(
+                            c.application_context,
+                            row.profile.application_context),
                         c.first_seen_at = CASE
                             WHEN $observed_at IS NULL THEN c.first_seen_at
                             WHEN c.first_seen_at IS NULL
@@ -3195,7 +3237,10 @@ class GraphStore:
             for concept_id, label in targets:
                 mention_rows.setdefault(label, []).append(
                     {
-                        **mention.model_dump(mode="json"),
+                        # The profile goes to the concept node.
+                        **mention.model_dump(
+                            mode="json", exclude={"profile"}
+                        ),
                         "concept_id": concept_id,
                         "method": decision.method,
                         "score": decision.score,

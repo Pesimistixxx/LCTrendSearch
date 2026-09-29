@@ -419,6 +419,11 @@ OUTCOME_FIELDS = [
     "outcome_observation_complete",
     "label_realized",
     "label_reason",
+    # Retrospective labels (docs/hgt-pipeline-2026-09-29.md, 4.5): a real
+    # early signal at T; a trend confirmed within 36 months after T. Empty
+    # until computed from global series, never from the feature rules.
+    "signal_36m",
+    "trend_36m",
     "split",
 ]
 
@@ -834,6 +839,7 @@ def build_dataset_rows(
             row["label_realized"], row["label_reason"] = _label(
                 row, end, config
             )
+            row["signal_36m"] = row["trend_36m"] = None
             rows.append(row)
         # Move forward while retaining the catalog's day when possible.
         index = current.year * 12 + current.month - 1 + step
