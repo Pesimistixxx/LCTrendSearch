@@ -329,6 +329,37 @@ jupyter lab notebooks/
 Выгрузка, разметка и обучение — [docs/model-training.md](docs/model-training.md),
 разметка траектории — [docs/llm-labeling.md](docs/llm-labeling.md).
 
+### Новые технологии после обучения
+
+Загрузка продолжает пополнять граф. Новые технологии оцениваются без
+повторной выгрузки и переобучения —
+[labeling/new_points.py](src/lctrend/modeling/labeling/new_points.py):
+
+```bash
+python -m lctrend.modeling.dataset.llm_outcomes --from-graph \
+  --output artifacts/modeling/2026-09-29-dedup/dataset/llm_labels.csv   # разметка LLM новых
+python -m lctrend.modeling.labeling.new_points            # план: дубли и оценки в CSV
+python -m lctrend.modeling.labeling.new_points --write    # слить дубли, записать signal_*
+```
+
+Порядок внутри: недостающие эмбеддинги → проверка на дубли (косинус ≥ 0,95,
+версии вроде GPT3-13B / GPT3-175B не сливаются; дубль вливается в известную
+технологию со всеми связями) → признаки на сегодняшнюю дату, подграф на 2 шага
+и агрегаты соседей → лучшая модель запуска (стекинг: среднее фолдов HGT →
+CatBoost) с той же калибровкой и порогом → свойства `signal_*` в узле. Поиск
+подхватывает их при следующем чтении графа.
+
+### Экспертная проверка
+
+Пакет для экспертов — 300 срезов «технология × дата» по квотам периодов и
+«Список 100» организаторов, с подсказками LLM, которые эксперт проверяет,
+а не заполняет с нуля:
+[dataset/annotation_batch.py](src/lctrend/modeling/dataset/annotation_batch.py)
+(`python -m lctrend.modeling.dataset.annotation_batch --review … --llm …
+--list … --output …`). Заполненный файл читается обратно
+(`read_annotations`) как экспертные метки. Сопоставление «Списка 100» с
+графом по эмбеддингам — [labeling/benchmark.py](src/lctrend/modeling/labeling/benchmark.py).
+
 ## В цифрах
 
 | | |

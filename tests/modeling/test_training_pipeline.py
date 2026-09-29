@@ -334,6 +334,18 @@ def test_pipeline_trains_compares_stacks_and_scores(tmp_path):
     assert {"p_catboost", "p_hgt", "p_stacked", "probability"} <= set(
         scored[0]
     )
+    # New technologies are scored by the same winner, calibration and
+    # threshold, without a new export.
+    from lctrend.modeling.labeling.new_points import score
+
+    fresh = [dict(row) for row in rows[:4]]
+    index = {(row["technology_id"], row["snapshot_date"]): row for row in rows}
+    marked = score(fresh, samples[:4], index, models)
+    assert [row["technology_id"] for row in marked] == [
+        row["technology_id"] for row in fresh
+    ]
+    assert all(0 <= row["probability"] <= 1 for row in marked)
+    assert {row["signal"] for row in marked} <= {0, 1}
 
 
 def test_research_rule_and_shuffled_labels(tmp_path):
