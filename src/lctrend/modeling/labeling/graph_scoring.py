@@ -383,7 +383,7 @@ def _summary(records):
 
 
 def main(argv=None) -> Dict[str, Any]:
-    from ...cli import _graph, _temporal_data
+    from ...session import temporal_corpus, with_graph
     from ...core.config import load_catalog, load_environment
     from ..dataset.llm_outcomes import LABELING_KEY
 
@@ -464,7 +464,7 @@ def main(argv=None) -> Dict[str, Any]:
 
     logger.info("2/5 Reading the graph and computing features")
     corpus = asyncio.run(
-        _graph(lambda store: _temporal_data(store, args.as_known))
+        with_graph(lambda store: temporal_corpus(store, args.as_known))
     )
     if corpus.latest_date is None:
         raise ValueError("The graph has no dated observations")
@@ -508,7 +508,7 @@ def main(argv=None) -> Dict[str, Any]:
         logger.info("5/5 Writing signal_* onto Technology nodes")
         answers = read_answers(args.llm) if args.llm else {}
         result["graph"] = asyncio.run(
-            _graph(
+            with_graph(
                 lambda store: write_scores(
                     store, records, answers, args.keep_stale
                 )

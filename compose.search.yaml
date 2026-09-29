@@ -5,6 +5,9 @@
 #
 # .env needs only NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD; for a public
 # domain also LCTREND_DOMAIN and FRONTEND_HOST=0.0.0.0.
+# Own project name: sharing the folder with compose.yaml would otherwise
+# recreate the full stack's backend container with this image.
+name: lctrend-search
 services:
   web:
     build:
