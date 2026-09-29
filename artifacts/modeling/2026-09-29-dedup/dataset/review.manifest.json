@@ -1,0 +1,15 @@
+{
+  "purpose": "complete historical review, not machine-generated labels",
+  "rows_per_reviewer": 62153,
+  "technologies": 2991,
+  "allowed_states": [
+    "weak",
+    "trend",
+    "mature",
+    "faded",
+    "insufficient",
+    "rejected"
+  ],
+  "labels": "Separate 12m and 36m outcomes need future evidence; leave uncertain cases empty",
+  "family_warning": "Parent/child links grouped; semantic near-duplicates require manual family review."
+}

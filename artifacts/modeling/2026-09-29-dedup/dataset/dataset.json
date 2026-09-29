@@ -1,0 +1,203 @@
+{
+  "created_at": "2026-09-29",
+  "target": "signal_llm",
+  "data_end": "2026-09-29",
+  "inputs": {
+    "history": {
+      "path": "artifacts/modeling/2026-09-29-dedup/dataset/history.csv",
+      "sha256": "e2574f748c1bed0e1405dbeef60f06794360c2f4a2794a25b9262db36206d394"
+    },
+    "subgraphs": {
+      "path": "artifacts/modeling/2026-09-29-dedup/dataset/subgraphs.jsonl",
+      "sha256": "ddef208b6d7382469e883a0dc76ac85a8a8a07d1d1bace846020abd808e8bc6c"
+    },
+    "duplicates_plan": {
+      "path": "artifacts/modeling/dedup-090.json",
+      "sha256": "38bad5eb167673a8b9a91798f0b3bdec268148eea64f9c69ddd41345e9ad6eb6"
+    }
+  },
+  "label_rule": {
+    "note": "source 'llm': signal_llm from llm_labels (dataset.llm_outcomes), 1 if score <= weak_max, 0 if >= not_weak_min; names the LLM judged not technologies are noise and stay unlabelled. source 'auto': signal_12m/36m from each technology's own future (dataset.outcomes).",
+    "source": "llm",
+    "llm_labels": "artifacts/modeling/2026-09-29-dedup/dataset/llm_labels_by_year.csv",
+    "weak_max": 0.3,
+    "not_weak_min": 0.7,
+    "drop_non_technologies": true,
+    "active_min_documents_last_year": 1,
+    "positive_min_new_documents": 2,
+    "positive_min_new_groups": 1,
+    "negative_max_new_documents": 0,
+    "mainstream_min_pct": 0.95,
+    "mainstream_min_documents_last_year": 10,
+    "mainstream_weight": 0.5
+  },
+  "history_rows": 62153,
+  "active_snapshots": 15567,
+  "outcomes": {
+    "not_technology": 5438,
+    "weak_signal": 1682,
+    "unsure": 2377,
+    "not_weak": 6070
+  },
+  "families": 2428,
+  "family_links": {
+    "parent_child": 86,
+    "duplicates_plan": 3079
+  },
+  "split": {
+    "valid_start": "2021-11-25",
+    "test_start": "2023-07-12",
+    "embargo": "none",
+    "horizon_months": 36
+  },
+  "classes": {
+    "train": {
+      "rows": {
+        "1": 1346,
+        "0": 3954
+      },
+      "families": {
+        "1": 248,
+        "0": 415
+      }
+    },
+    "valid": {
+      "rows": {
+        "0": 924,
+        "1": 192
+      },
+      "families": {
+        "0": 176,
+        "1": 59
+      }
+    },
+    "test": {
+      "rows": {
+        "1": 144,
+        "0": 1192
+      },
+      "families": {
+        "1": 44,
+        "0": 291
+      }
+    },
+    "purged": {
+      "rows": {},
+      "families": {}
+    }
+  },
+  "features": [
+    "technology_age_days",
+    "document_count_snapshot_pct",
+    "documents_last_year_snapshot_pct",
+    "mention_growth_3m",
+    "mention_growth_12m",
+    "mention_growth_24m",
+    "growth_acceleration",
+    "burst_score",
+    "growth_persistence",
+    "active_month_ratio",
+    "decline_rate",
+    "time_since_last_signal_days",
+    "source_type_diversity",
+    "independence_group_diversity",
+    "source_entropy",
+    "independence_group_entropy",
+    "recent_source_convergence",
+    "evidence_chain_length",
+    "country_count",
+    "company_count_snapshot_pct",
+    "university_count",
+    "domain_count",
+    "unique_author_count_snapshot_pct",
+    "new_author_rate",
+    "returning_author_rate",
+    "organization_entropy",
+    "organization_hhi",
+    "new_company_rate",
+    "developer_count",
+    "user_count",
+    "task_count",
+    "commercial_user_count",
+    "reliability_weighted_mentions",
+    "accepted_mention_ratio",
+    "supported_claim_ratio",
+    "independent_evidence_family_count",
+    "speculative_claim_ratio",
+    "duplicate_content_ratio",
+    "claim_to_evidence_gap",
+    "attention_evidence_gap",
+    "economic_evidence_count",
+    "grant_count_snapshot_pct",
+    "grant_amount_usd_real_snapshot_pct",
+    "max_maturity_rank",
+    "max_maturity_rank_missing",
+    "maturity_growth",
+    "implementation_count",
+    "market_concentration",
+    "fulltext_coverage",
+    "repository_source_covered",
+    "new_relation_count",
+    "semantic_novelty",
+    "nearest_known_distance",
+    "branch_new_share",
+    "degree_delta_12m",
+    "pagerank_delta_12m",
+    "community_crossing_count",
+    "neighbor_domain_entropy",
+    "structural_hole_score",
+    "bridge_score",
+    "recombination_surprise",
+    "data_completeness_score",
+    "nb_related_count",
+    "nb_comentioned_count",
+    "nb_related_documents_last_year_snapshot_pct_mean",
+    "nb_related_documents_last_year_snapshot_pct_max",
+    "nb_related_mention_growth_12m_mean",
+    "nb_related_mention_growth_12m_max",
+    "nb_related_burst_score_mean",
+    "nb_related_burst_score_max",
+    "nb_related_new_author_rate_mean",
+    "nb_related_new_author_rate_max",
+    "nb_related_semantic_novelty_mean",
+    "nb_related_technology_age_days_mean",
+    "nb_related_technology_age_days_max",
+    "nb_related_decline_rate_mean",
+    "nb_related_decline_rate_max",
+    "nb_comentioned_documents_last_year_snapshot_pct_mean",
+    "nb_comentioned_documents_last_year_snapshot_pct_max",
+    "nb_comentioned_mention_growth_12m_mean",
+    "nb_comentioned_mention_growth_12m_max",
+    "nb_comentioned_burst_score_mean",
+    "nb_comentioned_burst_score_max",
+    "nb_comentioned_new_author_rate_mean",
+    "nb_comentioned_new_author_rate_max",
+    "nb_comentioned_semantic_novelty_mean",
+    "nb_comentioned_semantic_novelty_max",
+    "nb_comentioned_technology_age_days_mean",
+    "nb_comentioned_technology_age_days_max",
+    "nb_comentioned_decline_rate_mean",
+    "nb_comentioned_decline_rate_max",
+    "nb_growing_share",
+    "nb_organization_count",
+    "nb_company_share"
+  ],
+  "dropped_features": {
+    "top_organization_share": "correlated with organization_hhi",
+    "independent_refutation_share": "constant",
+    "investment_evidence_count": "constant",
+    "job_posting_count_snapshot_pct": "missing",
+    "salary_median_usd_real_snapshot_pct": "missing",
+    "patent_family_size": "missing",
+    "standardization_presence": "constant",
+    "metadata_only_ratio": "constant",
+    "provisional_resolution_ratio": "correlated with accepted_mention_ratio",
+    "patent_source_covered": "constant",
+    "source_coverage_count": "correlated with source_type_diversity",
+    "nb_related_semantic_novelty_max": "correlated with nb_related_semantic_novelty_mean"
+  },
+  "files": {
+    "training": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\training.csv",
+    "scoring": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\scoring.csv"
+  }
+}

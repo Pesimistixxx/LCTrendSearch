@@ -1,0 +1,47 @@
+{
+  "rows": 62153,
+  "subgraphs": 62153,
+  "technologies_with_snapshots": 2991,
+  "technology_nodes": 2991,
+  "technologies_without_snapshot": [],
+  "snapshots": 184,
+  "first_snapshot": "1890-01-01",
+  "last_snapshot": "2026-09-29",
+  "source_data_end": "2026-09-29",
+  "as_known": false,
+  "minimum_documents": 1,
+  "labels": "empty until independent expert review",
+  "calendar_completion_is_not_source_coverage": true,
+  "horizons": {
+    "signal_12m": {
+      "calendar_complete_rows": 47638,
+      "cohort_cutoff_years": [
+        2021,
+        2022
+      ],
+      "potential_rows_by_cohort": {
+        "train": 37608,
+        "valid": 4071,
+        "test": 5959
+      }
+    },
+    "signal_36m": {
+      "calendar_complete_rows": 28103,
+      "cohort_cutoff_years": [
+        2020,
+        2021
+      ],
+      "potential_rows_by_cohort": {
+        "train": 22920,
+        "valid": 3068,
+        "test": 2115
+      }
+    }
+  },
+  "review_files": [
+    "review.reviewer_1.csv",
+    "review.reviewer_2.csv"
+  ],
+  "subgraphs_file": "subgraphs.jsonl",
+  "inventory_file": "history.inventory.csv"
+}
