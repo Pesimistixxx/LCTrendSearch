@@ -21,6 +21,8 @@ services:
     env_file: .env
     environment:
       LCTREND_SETTINGS_FILE: /app/artifacts/ingestion/settings.env
+      # Shipped in the image (certs/); overrides a host path left in .env.
+      GIGACHAT_CA_BUNDLE_FILE: /app/certs/gigachat-ca-bundle.pem
       HF_HOME: /app/model-cache/huggingface
       TORCH_HOME: /app/model-cache/torch
       XDG_CACHE_HOME: /app/model-cache

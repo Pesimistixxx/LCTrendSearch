@@ -20,6 +20,9 @@ RUN mkdir -p src/lctrend && touch src/lctrend/__init__.py \
 COPY src ./src
 RUN pip install --no-deps .
 COPY frontend/server ./frontend/server
+# GigaChat endpoints are signed by the Russian Trusted Root CA (Минцифры),
+# which is not in the default trust store.
+COPY certs ./certs
 
 # Runs as root: the named volumes (ingestion ledger, model cache) of existing
 # installs are root-owned, and a non-root user could no longer write them.
