@@ -229,9 +229,6 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
             f"документов: {row.get('document_count')}, упоминаний: "
             f"{row.get('mention_count')}."
         ),
-        "technologyDefinition": corpus.technology_profiles.get(
-            technology.technology_id
-        ),
         "advantages": [],
         "cases": [],
         "reports": [],

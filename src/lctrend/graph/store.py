@@ -139,26 +139,6 @@ def evidence_chunk_ids(result: Optional[ExtractionResult]) -> Optional[set]:
             for assertion in result.assertions
             for span in assertion.evidence
         }
-        | {
-            span.chunk_id
-            for assessment in result.entity_assessments
-            for span in assessment.evidence
-        }
-        | {
-            span.chunk_id
-            for concept in result.concepts
-            if concept.technology is not None
-            and concept.technology.document_version_id
-            == result.document_version_id
-            for span in concept.technology.evidence
-        }
-        | {
-            span["chunk_id"]
-            for concept in result.concepts
-            for span in (concept.profile or {}).get("evidence", [])
-            if span.get("document_version_id") == result.document_version_id
-            and span.get("chunk_id")
-        }
         | {item.chunk_id for item in result.economic_evidence}
         | set(result.chunk_embeddings)
     )
@@ -189,8 +169,6 @@ def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
         kind=ConceptKind(properties["kind"]),
         preferred_label=properties["preferred_label"],
         definition=properties.get("definition"),
-        technology=json.loads(properties.get("technology_json") or "null"),
-        identity_scope=properties.get("identity_scope"),
         language=properties.get("language"),
         status=properties.get("status", "provisional"),
         names=names,
@@ -198,9 +176,7 @@ def _concept_from_properties(properties: Dict[str, Any]) -> Concept:
         label_counts=json.loads(properties.get("label_counts_json") or "{}"),
         kind_counts=json.loads(properties.get("kind_counts_json") or "{}"),
         profile=json.loads(
-            properties.get("technology_profile_json")
-            or properties.get("profile_json")
-            or "null"
+            properties.get("technology_profile_json") or "null"
         ),
     )
 
@@ -986,11 +962,7 @@ class GraphStore:
                                 strong: coalesce(key.strong, true)}) AS keys
                 """,
                 rows=[
-                    {
-                        "key": key.key,
-                        "scheme": key.scheme,
-                        "strong": key.strong,
-                    }
+                    {"key": key.key, "scheme": key.scheme, "strong": key.strong}
                     for key in keys
                 ],
                 document_id=document_id,
@@ -1448,7 +1420,8 @@ class GraphStore:
         async with self._driver.session(database=self._database) as session:
             found = await _records(
                 session,
-                self._TEXT_ONLY_CHUNKS + "RETURN count(c) AS chunks, "
+                self._TEXT_ONLY_CHUNKS
+                + "RETURN count(c) AS chunks, "
                 "sum(size(coalesce(c.text, ''))) AS chars",
             )
             summary = {
@@ -1575,8 +1548,8 @@ class GraphStore:
             # every embedding (~0.5 GB at 20k concepts x 2560) (D-6).
             "RETURN c {.concept_id, .kind, .preferred_label, .definition, "
             ".language, .status, .names_json, .aliases, .identity_key, "
-            ".label_counts_json, .kind_counts_json, .identity_scope, "
-            ".technology_json, .technology_profile_json} AS properties"
+            ".label_counts_json, .kind_counts_json, "
+            ".technology_profile_json} AS properties"
             for label in CONCEPT_LABELS
         )
         async with self._driver.session(database=self._database) as session:
@@ -1709,8 +1682,6 @@ class GraphStore:
                 f"{concept.kind.value} and {target.value} are not one "
                 "identity family"
             )
-        if target == ConceptKind.TECHNOLOGY and not concept.technology:
-            raise ValueError("Technology requires a reviewed definition")
         source, label = (
             cypher_identifier(concept.kind.value),
             cypher_identifier(target.value),
@@ -2099,9 +2070,7 @@ class GraphStore:
               AND coalesce(t.status, '') <> 'merged'
             RETURN t.concept_id AS technology_id,
                    t.preferred_label AS technology,
-                   t.kind AS kind,
-                   t.definition AS definition,
-                   t.technology_json AS technology_json,
+                   t.kind AS kind, t.definition AS definition,
                    t.first_seen_at AS first_seen_at,
                    t.status AS status, t.embedding AS embedding,
                    t.embedding_model AS embedding_model,
@@ -2231,9 +2200,7 @@ class GraphStore:
                             query,
                             semantic=SEMANTIC_CANDIDATE_METHOD,
                             role_types=list(
-                                load_catalog("graph")[
-                                    "assertion_roles"
-                                ].values()
+                                load_catalog("graph")["assertion_roles"].values()
                             ),
                         )
                     ]
@@ -2735,9 +2702,15 @@ class GraphStore:
     async def _settle_family_kinds(
         tx: Any, result: ExtractionResult
     ) -> Tuple[ExtractionResult, Dict[str, str]]:
-        """Reject type conflicts; an incoming label cannot promote a node.
+        """Write each concept of a kind family under one settled kind.
 
-        Existing ambiguous candidates retain their stored labels.
+        An organization takes its highest kind: a stored node of a lower
+        kind is relabeled, one of a higher kind keeps its label, so a stale
+        registry copy cannot downgrade it. A technology, method or material
+        takes the kind its mentions voted (Concept.kind_counts), up or
+        down. Either way the stored node is relabeled, never duplicated.
+        Also returns the stored label of every ambiguous candidate of the
+        family.
         """
         candidates = {
             item["concept_id"]: item["kind"]
@@ -2779,14 +2752,6 @@ class GraphStore:
         for concept in result.concepts:
             labels = stored.get(concept.concept_id) or []
             if concept.kind.value not in FAMILY_RANK or not labels:
-                concepts.append(concept)
-                continue
-            if kind_family(concept.kind) == "technology":
-                if labels != [concept.kind.value]:
-                    raise ValueError(
-                        "Stored concept kind conflict; "
-                        "use the technology dry run"
-                    )
                 concepts.append(concept)
                 continue
             update: Dict[str, Any] = {}
@@ -2914,42 +2879,9 @@ class GraphStore:
             run_id=run.run_id,
         )
 
-        validate_extraction(document, result)
         result, candidate_labels = await GraphStore._settle_family_kinds(
             tx, result
         )
-        assessment_rows = [
-            {
-                "run_id": a.run_id,
-                "assessment_id": a.assessment_id,
-                "decision": a.decision,
-                "reason": a.reason,
-                "proposed_kind": a.proposed_kind.value,
-                "resolved_kind": a.resolved_kind.value,
-                "payload": a.model_dump_json(),
-                "chunk_ids": sorted({s.chunk_id for s in a.evidence}),
-            }
-            for a in result.entity_assessments
-        ]
-        for batch in _batches(assessment_rows):
-            await _run(
-                tx,
-                """
-                UNWIND $rows AS row
-                MATCH (run:ProcessingRun {run_id: row.run_id})
-                MERGE (a:EntityAssessment {assessment_id: row.assessment_id})
-                SET a.decision = row.decision, a.reason = row.reason,
-                    a.proposed_kind = row.proposed_kind,
-                    a.resolved_kind = row.resolved_kind,
-                    a.payload_json = row.payload
-                MERGE (run)-[:ASSESSED_ENTITY]->(a)
-                WITH a, row
-                UNWIND row.chunk_ids AS chunk_id
-                MATCH (chunk:Chunk {chunk_id: chunk_id})
-                MERGE (a)-[:EVIDENCE_IN]->(chunk)
-                """,
-                rows=batch,
-            )
         concept_rows: Dict[str, List[Dict[str, Any]]] = {}
         for concept in result.concepts:
             concept_rows.setdefault(
@@ -2981,11 +2913,6 @@ class GraphStore:
                     "key_version": (
                         KEY_VERSION if concept.identity_key else None
                     ),
-                    "technology_json": json_value(
-                        concept.technology.model_dump(mode="json")
-                        if concept.technology
-                        else None
-                    ),
                     "label_counts_json": json_value(concept.label_counts),
                     "kind_counts_json": json_value(concept.kind_counts),
                     "profile_json": (
@@ -2994,12 +2921,7 @@ class GraphStore:
                         else None
                     ),
                     **concept.model_dump(
-                        exclude={
-                            "names",
-                            "label_counts",
-                            "kind_counts",
-                            "technology",
-                        },
+                        exclude={"names", "label_counts", "kind_counts"},
                         mode="json",
                     ),
                 }
@@ -3016,8 +2938,6 @@ class GraphStore:
                         c.name = row.preferred_label,
                         c.definition = coalesce(row.definition,
                                                 c.definition),
-                        c.technology_json = row.technology_json,
-                        c.identity_scope = row.identity_scope,
                         c.language = row.language,
                         c.status = CASE WHEN c.status = 'merged'
                             THEN c.status ELSE row.status END,
@@ -3317,16 +3237,11 @@ class GraphStore:
             for concept_id, label in targets:
                 mention_rows.setdefault(label, []).append(
                     {
+                        # The profile goes to the concept node.
                         **mention.model_dump(
-                            mode="json",
-                            exclude={"profile", "entity_assessment"}
+                            mode="json", exclude={"profile"}
                         ),
                         "concept_id": concept_id,
-                        "assessment_id": (
-                            mention.entity_assessment.assessment_id
-                            if mention.entity_assessment
-                            else None
-                        ),
                         "method": decision.method,
                         "score": decision.score,
                         "resolution_status": decision.status,
@@ -3350,7 +3265,6 @@ class GraphStore:
                         r.type_candidates = row.type_candidates,
                         r.confidence = row.confidence,
                         r.mention_role = row.mention_role,
-                        r.assessment_id = row.assessment_id,
                         r.status = row.status,
                         r.resolution_status = row.resolution_status,
                         r.method = row.method, r.score = row.score,

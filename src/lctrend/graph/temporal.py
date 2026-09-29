@@ -492,7 +492,6 @@ class TemporalCorpus:
         self.kinds: Dict[str, str] = {}
         # What the sources say a technology is (signal cards).
         self.definitions: Dict[str, str] = {}
-        self.technology_profiles: Dict[str, Any] = {}
         self.embeddings: Dict[str, List[float]] = {}
         self.embedding_dates: Dict[str, date] = {}
         for row in data.get("technologies", []):
@@ -500,12 +499,6 @@ class TemporalCorpus:
             self.labels[technology_id] = str(
                 row.get("technology") or technology_id
             )
-            if row.get("technology_json"):
-                import json
-
-                self.technology_profiles[technology_id] = json.loads(
-                    row["technology_json"]
-                )
             if row.get("kind"):
                 self.kinds[technology_id] = str(row["kind"])
             if row.get("definition"):

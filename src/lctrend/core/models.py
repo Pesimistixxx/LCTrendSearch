@@ -218,65 +218,6 @@ class ConceptName(BaseModel):
     status: str = "accepted"
 
 
-class EvidenceSpan(BaseModel):
-    chunk_id: str
-    quote: str
-    start: int
-    end: int
-    supports_fields: List[str] = Field(default_factory=list)
-
-
-TECHNOLOGY_FIELDS = frozenset(
-    {
-        "canonical_name",
-        "definition",
-        "function",
-        "mechanism",
-        "boundary",
-        "identity_scope",
-    }
-)
-
-
-class TechnologyProfile(BaseModel):
-    contract_version: str = "technology/1"
-    canonical_name: str = Field(min_length=1)
-    definition: str = Field(min_length=1)
-    function: str = Field(min_length=1)
-    mechanism: str = Field(min_length=1)
-    boundary: str = Field(min_length=1)
-    identity_scope: str = Field(min_length=1)
-    document_version_id: str
-    evidence: List[EvidenceSpan] = Field(min_length=1)
-    review_reason: str = Field(min_length=1)
-    run_id: str
-
-    @model_validator(mode="after")
-    def complete_support(self) -> "TechnologyProfile":
-        covered = {f for span in self.evidence for f in span.supports_fields}
-        if not TECHNOLOGY_FIELDS <= covered:
-            raise ValueError("technology description lacks field evidence")
-        for name in TECHNOLOGY_FIELDS:
-            if not getattr(self, name).strip():
-                raise ValueError("empty technology description field")
-        return self
-
-
-class EntityAssessment(BaseModel):
-    assessment_id: str
-    local_id: str
-    document_version_id: str
-    run_id: str
-    proposed_kind: ConceptKind
-    decision: str
-    resolved_kind: ConceptKind
-    reason: str
-    evidence: List[EvidenceSpan] = Field(default_factory=list)
-    technology: Optional[TechnologyProfile] = None
-    canonical_name: Optional[str] = None
-    identity_scope: Optional[str] = None
-
-
 class Concept(BaseModel):
     concept_id: str
     kind: ConceptKind
@@ -287,8 +228,6 @@ class Concept(BaseModel):
     names: List[ConceptName] = Field(default_factory=list)
     # Lexical identity key (extraction.lexical) the concept was created
     # under; None for concepts created before key v2.
-    technology: Optional[TechnologyProfile] = None
-    identity_scope: Optional[str] = None
     identity_key: Optional[str] = None
     # Resolved mentions per canonical form; the most frequent form is the
     # preferred label of a concept that has not been reviewed.
@@ -303,7 +242,6 @@ class Concept(BaseModel):
 
 
 class Mention(BaseModel):
-    entity_assessment: Optional[EntityAssessment] = None
     mention_id: str
     chunk_id: str
     surface_text: str
@@ -323,6 +261,14 @@ class Mention(BaseModel):
     declared_aliases: List[str] = Field(default_factory=list)
     # Technology contract profile of the entity in this document.
     profile: Optional[Dict[str, Any]] = None
+
+
+class EvidenceSpan(BaseModel):
+    chunk_id: str
+    quote: str
+    start: int
+    end: int
+    supports_fields: List[str] = Field(default_factory=list)
 
 
 class Assertion(BaseModel):
@@ -398,7 +344,6 @@ class ExtractionResult(BaseModel):
     concepts: List[Concept] = Field(default_factory=list)
     assertions: List[Assertion] = Field(default_factory=list)
     resolutions: List[ResolutionDecision] = Field(default_factory=list)
-    entity_assessments: List[EntityAssessment] = Field(default_factory=list)
     economic_evidence: List[EconomicEvidence] = Field(default_factory=list)
     # Unit vectors of concept labels (semantic layer), keyed by concept_id;
     # stored on concept nodes for similarity search and taxonomy building.
@@ -430,38 +375,6 @@ def validate_extraction(
             raise ValueError(
                 f"embedded chunk {chunk_id} is not in the document"
             )
-
-    for concept in result.concepts:
-        if concept.kind == ConceptKind.TECHNOLOGY:
-            if concept.technology is None:
-                raise ValueError("Technology requires a reviewed definition")
-            if concept.definition != concept.technology.definition:
-                raise ValueError("Technology definition/profile mismatch")
-    for assessment in result.entity_assessments:
-        if assessment.document_version_id != document.document_version_id:
-            raise ValueError("entity assessment belongs to another document")
-        for span in assessment.evidence:
-            chunk = chunks.get(span.chunk_id)
-            if (
-                chunk is None
-                or not 0 <= span.start < span.end <= len(chunk.text)
-                or chunk.text[span.start : span.end] != span.quote
-            ):
-                raise ValueError("invalid entity assessment evidence anchor")
-    for concept in result.concepts:
-        profile = concept.technology
-        if (
-            profile
-            and profile.document_version_id == document.document_version_id
-        ):
-            for span in profile.evidence:
-                chunk = chunks.get(span.chunk_id)
-                if (
-                    chunk is None
-                    or not 0 <= span.start < span.end <= len(chunk.text)
-                    or chunk.text[span.start : span.end] != span.quote
-                ):
-                    raise ValueError("invalid technology definition anchor")
 
     for mention in result.mentions:
         chunk = chunks.get(mention.chunk_id)

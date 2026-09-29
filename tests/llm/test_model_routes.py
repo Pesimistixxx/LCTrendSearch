@@ -144,8 +144,7 @@ def test_schema_free_models_get_no_response_format_and_a_session():
     ultra, lite = server.chat
     # Constrained, 3-Ultra indents its JSON: 2-5x the output tokens (live,
     # 2026-09-29); unconstrained it writes the compact answer.
-    assert ultra["model"] == "GigaChat-3-Ultra"
-    assert "response_format" not in ultra
+    assert ultra["model"] == "GigaChat-3-Ultra" and "response_format" not in ultra
     # Long strict answers of GigaChat-2 models broke the JSON (live, 2026).
     assert lite["model"] == "GigaChat-2-Max" and "response_format" not in lite
     # One cached prompt prefix per model and system message.
@@ -181,9 +180,7 @@ def test_broken_answer_of_a_model_without_fallback_is_not_resent():
 
     server = GigaChatServer(balance=None, content='{"text": "cut')
     provider = gigachat(server, config=deepcopy(load_catalog("llm")))
-    provider.ladders = {
-        route: ["GigaChat-2-Max"] for route in provider.ladders
-    }
+    provider.ladders = {route: ["GigaChat-2-Max"] for route in provider.ladders}
     with pytest.raises(LLMError, match="invalid_schema"):
         asyncio.run(provider.generate(Answer, "s", {}))
     assert len(server.chat) == 1

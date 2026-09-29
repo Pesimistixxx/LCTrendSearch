@@ -87,7 +87,7 @@ def extracted(
             {
                 "local_id": "sensor",
                 "label": "Sensor S",
-                "kind": "Method",
+                "kind": "Technology",
                 "evidence": [{"chunk_id": chunk_id, "quote": "Sensor S"}],
             },
             {
@@ -195,10 +195,10 @@ def test_invalid_quote_is_not_sent_to_reviewer_and_has_an_audit_gate():
     doc = document()
     response = extracted(doc)
     response["claims"][0]["evidence"][0]["quote"] = "Invented source sentence."
-    provider = RecordingReplay([response, {"items": []}])
+    provider = RecordingReplay([response])
     result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert result.assertions == []
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 1
     assert any(
         item.get("item") == "claim:claim"
         and "quote_not_found" in item["reasons"]
@@ -518,7 +518,7 @@ def test_ambiguous_registry_identity_keeps_source_claim_out_of_compiled_assertio
         Concept(
             concept_id=f"existing:{index}",
             preferred_label="Sensor S",
-            kind=ConceptKind.METHOD,
+            kind=ConceptKind.TECHNOLOGY,
             status="accepted",
         )
         for index in range(2)
@@ -699,9 +699,9 @@ def test_nonfinite_numeric_value_is_gated_before_reviewer():
     response["claims"][0]["values"] = [
         {"value": float("nan"), "raw": "1 test"}
     ]
-    provider = ScriptProvider([response, {"items": []}])
+    provider = ScriptProvider([response])
     result = asyncio.run(process_document(doc, provider, settings=settings()))
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 1
     assert result.assertions == []
     assert any(
         "nonfinite_numeric_value" in item.get("reasons", [])
@@ -716,7 +716,7 @@ def test_typed_replay_response_cannot_sanitize_nonfinite_value_into_acceptance()
         {"value": float("nan"), "raw": "1 test"}
     ]
     provider = ReplayProvider(
-        [Extraction.model_validate(response), {"items": []}]
+        [Extraction.model_validate(response), reviewed()]
     )
     result = asyncio.run(process_document(doc, provider, settings=settings()))
     assert not any(claim.status == "accepted" for claim in result.assertions)
@@ -818,7 +818,7 @@ def test_technology_named_three_times_reaches_assertions_with_its_claims():
             {
                 "local_id": "e1",
                 "label": technology,
-                "kind": "Method",
+                "kind": "Technology",
                 "evidence": [{"chunk_id": "c1", "quote": technology}],
             },
             {
@@ -880,7 +880,9 @@ def test_technology_named_three_times_reaches_assertions_with_its_claims():
             doc, RecordingReplay([response, review]), settings=settings()
         )
     )
-    concept = next(c for c in result.concepts if c.kind == ConceptKind.METHOD)
+    concept = next(
+        c for c in result.concepts if c.kind == ConceptKind.TECHNOLOGY
+    )
     assert concept.preferred_label == technology
     assert len(result.assertions) == 2
     assert all(
@@ -935,7 +937,7 @@ class FullPacketProvider:
                 {
                     "local_id": f"t{number}",
                     "label": technology,
-                    "kind": "Method",
+                    "kind": "Technology",
                     "evidence": [{"chunk_id": chunk_id, "quote": technology}],
                 },
                 {
@@ -1003,7 +1005,7 @@ def test_claim_too_large_for_review_is_reported_as_budget_not_contract():
     limit = len(
         json.dumps(build_payload(doc, packet, tight), ensure_ascii=False)
     )
-    provider = RecordingReplay([extracted(doc), {"items": []}, {"items": []}])
+    provider = RecordingReplay([extracted(doc)])
     result = asyncio.run(
         process_document(
             doc, provider, settings=settings(max_payload_chars=limit)

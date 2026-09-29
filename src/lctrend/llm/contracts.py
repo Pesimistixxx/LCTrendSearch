@@ -49,8 +49,9 @@ def _known_fields(model: Type[BaseModel], value: Any) -> Any:
         nested = _item_model(field.annotation)
         if nested is not None and isinstance(item, list):
             item = [_known_fields(nested, element) for element in item]
-        elif isinstance(field.annotation, type) and issubclass(
-            field.annotation, BaseModel
+        elif (
+            isinstance(field.annotation, type)
+            and issubclass(field.annotation, BaseModel)
         ):
             item = _known_fields(field.annotation, item)
         cleaned[name] = item
@@ -130,20 +131,6 @@ class SupportSpan(SourceSpan):
     ] = Field(min_length=1)
 
 
-class DefinitionSpan(SourceSpan):
-    supports_fields: List[str] = Field(min_length=1)
-
-
-class LocalTechnology(LocalModel):
-    canonical_name: str
-    definition: str
-    function: str
-    mechanism: str
-    boundary: str
-    identity_scope: str
-    evidence: List[DefinitionSpan] = Field(min_length=1)
-
-
 class LocalEntity(LocalModel):
     local_id: str = Field(min_length=1)
     # For Technology and Method: the canonical name, which may summarize
@@ -154,17 +141,15 @@ class LocalEntity(LocalModel):
     definition: Optional[str] = None
     # Technology contract (Technology, Method): distinguishing principle,
     # performed operation, form of the technology, what it is not.
-    technical_mechanism: SkipJsonSchema[Optional[str]] = None
-    technical_function: SkipJsonSchema[Optional[str]] = None
-    technology_type: SkipJsonSchema[Optional[str]] = None
-    boundary: SkipJsonSchema[Optional[str]] = None
-    application_context: SkipJsonSchema[Optional[str]] = None
-    source_names: SkipJsonSchema[List[SourceName]] = Field(
-        default_factory=list
-    )
-    support: SkipJsonSchema[List[SupportSpan]] = Field(default_factory=list)
+    technical_mechanism: Optional[str] = None
+    technical_function: Optional[str] = None
+    technology_type: Optional[str] = None
+    boundary: Optional[str] = None
+    application_context: Optional[str] = None
+    source_names: List[SourceName] = Field(default_factory=list)
+    support: List[SupportSpan] = Field(default_factory=list)
     # Why the contract's conditions are not met, in the model's words.
-    uncertainty: SkipJsonSchema[Optional[str]] = None
+    uncertainty: Optional[str] = None
     # Set by validation only (hidden from the model's schema): validated,
     # or proposed with the unmet conditions.
     classification_status: SkipJsonSchema[Optional[str]] = None
@@ -195,7 +180,6 @@ class LocalEntity(LocalModel):
     # Other names the source itself equates with the label: an abbreviation
     # or code in parentheses, "also known as".
     aliases: List[str] = Field(default_factory=list)
-    technology: Optional[LocalTechnology] = None
     # ISO 3166-1 alpha-2 for Country entities only; it canonicalizes
     # "Germany"/"Германия"/"German" to one concept across documents.
     country_code: Optional[str] = None
@@ -260,22 +244,5 @@ class ReviewItem(LocalModel):
     reason: str = Field(min_length=1)
 
 
-class EntityReviewItem(LocalModel):
-    local_id: str
-    decision: Literal["accept", "reclassify", "unresolved"]
-    kind: ConceptKind
-    reason: str = Field(min_length=1)
-    canonical_name: Optional[str] = None
-    identity_scope: Optional[str] = None
-    supported_fields: List[str] = Field(default_factory=list)
-    # Check the entity, not only whether its name occurs in a quote.
-    coherent: bool = False
-    specific: bool = False
-    adaptation_or_base: bool = False
-    definition_only: bool = False
-    evidence: List[SourceSpan] = Field(default_factory=list)
-
-
 class Review(LocalModel):
-    entity_items: List[EntityReviewItem] = Field(default_factory=list)
     items: List[ReviewItem] = Field(default_factory=list)

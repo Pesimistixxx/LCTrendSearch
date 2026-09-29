@@ -31,7 +31,6 @@ GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search
     description, advantages: string[], cases: [{ title, text }],
     reports: [{ org, text }],         // только демо; в реальном ответе []
     quotes: [{ text, title, date, url }],   // 2–3 цитаты из accepted-утверждений графа
-    technologyDefinition: object | null, // определение и цитаты technology/1
     whyWeak: string,                  // почему прошла правило отбора на дату T
     confidenceReason: string,         // как получен скор
     sources: [{ title, url, date, type, lang, trust: 'high'|'medium'|'low',

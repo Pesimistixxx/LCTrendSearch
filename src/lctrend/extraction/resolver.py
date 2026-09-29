@@ -573,13 +573,9 @@ def _mention_kind(mention: Mention) -> ConceptKind:
 
 
 def _compatible(mention: Mention, concept: Concept) -> bool:
-    if concept.identity_scope:
-        return False
-    if kind_family(concept.kind) == "technology":
-        return concept.kind in mention.type_candidates
-    return kind_family(concept.kind) in {
-        kind_family(kind) for kind in mention.type_candidates
-    }
+    return ConceptKind.CANDIDATE in mention.type_candidates or kind_family(
+        concept.kind
+    ) in {kind_family(kind) for kind in mention.type_candidates}
 
 
 def _add_alias(
@@ -629,9 +625,7 @@ def concept_identity(
     group = _group(key, kind, groups or alias_groups())
     if group is None or kind == ConceptKind.CANDIDATE:
         return key, kind
-    return group.canonical, kind if kind_family(
-        kind
-    ) == "technology" else ConceptKind(group.kind)
+    return group.canonical, ConceptKind(group.kind)
 
 
 def _observe(
@@ -667,10 +661,7 @@ def _observe(
     concept.kind_counts = kinds
     key = concept.identity_key or identity_key(concept.preferred_label)
     # A curated synonym group fixes the kind.
-    if (
-        kind_family(kind) != "technology"
-        and _group(key, concept.kind, groups) is None
-    ):
+    if _group(key, concept.kind, groups) is None:
         concept.kind = ConceptKind(settled_kind(kinds, concept.kind))
 
 
@@ -683,11 +674,7 @@ def _new_concept(
     concurrent jobs; a curated synonym group fixes the kind and the key.
     """
     key, kind = concept_identity(text, _mention_kind(mention), groups)
-    concept_id = stable_id(
-        "concept",
-        kind.value if kind_family(kind) == "technology" else kind_family(kind),
-        key,
-    )
+    concept_id = stable_id("concept", kind_family(kind), key)
     name = observed_name(mention.surface_text, text)
     normalized = normalize_name(name)
     return Concept(
@@ -820,88 +807,7 @@ def resolve_mentions(
             # request per mention inside the loop; failures pause the layer.
             semantic.embed(names)
 
-    for original in mentions:
-        mention = original
-        assessment = mention.entity_assessment
-        if assessment is not None and (
-            assessment.technology
-            or assessment.identity_scope
-            or assessment.resolved_kind == ConceptKind.CANDIDATE
-        ):
-            # Reviewed meanings form their own identity namespace. A legacy
-            # alias (including ML) cannot override a contextual definition.
-            kind = assessment.resolved_kind
-            text = assessment.canonical_name or (
-                mention.canonical_text or mention.surface_text
-            )
-            scope = assessment.identity_scope
-            if assessment.decision == "unresolved" or not scope:
-                scope = "local:" + assessment.document_version_id
-            key = identity_key(text, kind)
-            concept_id = stable_id(
-                "concept-v3", kind.value, key, identity_key(scope)
-            )
-            concept = concepts.get(concept_id)
-            if concept is None and assessment.decision != "unresolved":
-                # Explicitly reviewed merges may keep a different stable ID.
-                # Only accepted names within the same meaning can redirect it.
-                equivalent = [
-                    item
-                    for item in {
-                        item.concept_id: item
-                        for name in [text, *mention.declared_aliases]
-                        for item in concepts.matches(name, [], kind)
-                    }.values()
-                    if item.kind == kind
-                    and item.identity_scope
-                    and identity_key(item.identity_scope)
-                    == identity_key(scope)
-                    and (kind != ConceptKind.TECHNOLOGY or item.technology)
-                ]
-                if len(equivalent) == 1:
-                    concept = equivalent[0]
-                    concept_id = concept.concept_id
-            if concept is None:
-                concept = Concept(
-                    concept_id=concept_id,
-                    kind=kind,
-                    preferred_label=text,
-                    identity_key=key,
-                    identity_scope=scope,
-                    status="accepted"
-                    if assessment.decision != "unresolved"
-                    else "provisional",
-                    technology=assessment.technology,
-                    profile=mention.profile,
-                    definition=assessment.technology.definition
-                    if assessment.technology
-                    else None,
-                )
-            _add_alias(concept, mention.surface_text)
-            if assessment.decision != "unresolved":
-                for alias in mention.declared_aliases:
-                    _add_alias(
-                        concept, alias, name_kind="declared",
-                        status="accepted",
-                    )
-            concepts.add(concept)
-            touched[concept_id] = concept
-            decisions.append(
-                ResolutionDecision(
-                    resolution_id=stable_id(
-                        "resolution", mention.mention_id, "meaning-v3"
-                    ),
-                    mention_id=mention.mention_id,
-                    concept_id=concept_id,
-                    status="accepted"
-                    if assessment.decision != "unresolved"
-                    else "provisional",
-                    method="reviewed_entity_meaning",
-                    basis=[assessment.assessment_id, assessment.reason],
-                    review_status="reviewed",
-                )
-            )
-            continue
+    for mention in mentions:
         canonical_text = mention.canonical_text or mention.surface_text
         deterministic = _matches(canonical_text, mention, concepts, groups)
         method = "normalized_lemma_or_explicit_alias"

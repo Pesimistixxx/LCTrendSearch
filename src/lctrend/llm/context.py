@@ -820,18 +820,7 @@ def review_batches(
 
     claims = list(extractiondict.get("claims", []))
     try:
-        return [
-            (
-                [c["claim_id"] for c in claims],
-                review_payload(
-                    document,
-                    extractiondict,
-                    visible,
-                    settings,
-                    related_context=related_context,
-                ),
-            )
-        ], []
+        return [([c["claim_id"] for c in claims], build(claims))], []
     except ContextBudgetError:
         pass
     batches: List[Tuple[List[str], Dict[str, Any]]] = []
@@ -853,23 +842,4 @@ def review_batches(
             payload, group = None, []
     if group:
         batches.append(([c["claim_id"] for c in group], payload))
-    covered = {
-        e["local_id"]
-        for _, payload in batches
-        for e in payload["extraction"]["entities"]
-    }
-    for entity in extractiondict.get("entities", []):
-        if entity["local_id"] in covered:
-            continue
-        try:
-            payload = review_payload(
-                document,
-                {"entities": [entity], "claims": []},
-                visible,
-                settings,
-                related_context=related_context,
-            )
-            batches.append(([], payload))
-        except ContextBudgetError:
-            unfit.append("entity:" + entity["local_id"])
     return batches, unfit

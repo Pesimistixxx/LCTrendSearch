@@ -3,8 +3,6 @@
 import asyncio
 import json
 
-import pytest
-
 from lctrend.core.models import (
     Chunk,
     Concept,
@@ -125,14 +123,27 @@ def test_identity_key_and_form_counts_are_stored_and_read_back():
     assert loaded.label_counts == {"graphene": 3, "Graphene": 1}
 
 
-def test_unreviewed_technology_cannot_relabel_a_stored_material():
-    with pytest.raises(ValueError, match="reviewed definition"):
-        write(ConceptKind.TECHNOLOGY, {"concept:graphene": ["Material"]})
+def test_a_higher_family_kind_relabels_the_stored_node():
+    queries = write(ConceptKind.TECHNOLOGY, {"concept:graphene": ["Material"]})
+    relabel = [query for query, _ in queries if "REMOVE c:Material" in query]
+    assert relabel and "SET c:Technology" in relabel[0]
+    merged = next(
+        query for query, _ in queries if "c.preferred_label" in query
+    )
+    assert "MERGE (c:Technology {concept_id" in merged
 
 
-def test_a_lower_family_kind_does_not_inherit_a_stored_technology_type():
-    with pytest.raises(ValueError, match="kind conflict"):
-        write(ConceptKind.MATERIAL, {"concept:graphene": ["Technology"]})
+def test_a_lower_family_kind_never_downgrades_the_stored_node():
+    queries = write(ConceptKind.MATERIAL, {"concept:graphene": ["Technology"]})
+    assert not [query for query, _ in queries if "REMOVE c:" in query]
+    merged = next(
+        query for query, _ in queries if "c.preferred_label" in query
+    )
+    assert "MERGE (c:Technology {concept_id" in merged
+    mentions = next(
+        query for query, _ in queries if "MERGE (chunk)-[r:MENTIONS" in query
+    )
+    assert "concept:Technology" in mentions
 
 
 def ambiguous_extraction():
@@ -210,7 +221,7 @@ def test_ambiguous_links_are_not_counted_as_mentions():
 
 
 def test_an_unchanged_vector_keeps_its_observation_date():
-    document, result = extraction(ConceptKind.MATERIAL)
+    document, result = extraction(ConceptKind.TECHNOLOGY)
     result.concept_embeddings = {"concept:graphene": [0.6, 0.8]}
     result.embedding_model = "EmbeddingsGigaR"
     tx = Transaction()
@@ -267,12 +278,36 @@ def write_voted(kind, own_votes, stored_votes):
     return tx.queries
 
 
-@pytest.mark.parametrize(
-    "stored_votes", [{"Technology": 1}, {"Technology": 3}]
-)
-def test_votes_cannot_retype_a_stored_technical_concept(stored_votes):
-    with pytest.raises(ValueError, match="Stored concept kind conflict"):
-        write_voted(ConceptKind.MATERIAL, {"Material": 3}, stored_votes)
+def test_most_votes_relabel_a_stored_technology_down_to_a_material():
+    queries = write_voted(
+        ConceptKind.MATERIAL, {"Material": 3}, {"Technology": 1}
+    )
+    relabel = [q for q, _ in queries if "REMOVE c:Technology" in q]
+    assert relabel and "SET c:Material" in relabel[0]
+    query, parameters = next(
+        item for item in queries if "c.preferred_label" in item[0]
+    )
+    assert "MERGE (c:Material {concept_id" in query
+    assert json.loads(parameters["rows"][0]["kind_counts_json"]) == {
+        "Material": 3,
+        "Technology": 1,
+    }
+
+
+def test_votes_another_job_stored_are_not_lost_by_a_stale_copy():
+    # This copy saw one Material mention; the graph already holds three
+    # Technology votes: the node stays a Technology with both counted.
+    queries = write_voted(
+        ConceptKind.MATERIAL, {"Material": 1}, {"Technology": 3}
+    )
+    assert not [q for q, _ in queries if "REMOVE c:" in q]
+    _, parameters = next(
+        item for item in queries if "c.preferred_label" in item[0]
+    )
+    assert json.loads(parameters["rows"][0]["kind_counts_json"]) == {
+        "Material": 1,
+        "Technology": 3,
+    }
 
 
 def test_a_definition_is_written_without_erasing_a_stored_one():
@@ -317,8 +352,6 @@ def test_a_reviewed_kind_is_not_re_voted():
     document, result = extraction(ConceptKind.MATERIAL)
     result.concepts[0].status = "accepted"
     result.concepts[0].kind_counts = {"Material": 1}
-    tx = VotingTransaction(
-        {"concept:graphene": ["Material"]}, {"Technology": 9}
-    )
+    tx = VotingTransaction({"concept:graphene": ["Material"]}, {"Technology": 9})
     asyncio.run(GraphStore._write_extraction(tx, document, result))
     assert not [q for q, _ in tx.queries if "REMOVE c:" in q]

@@ -12,7 +12,6 @@ from lctrend.core.models import (
 )
 from lctrend.graph.store import GraphStore
 from lctrend.ingest.adapters import parse_openalex
-from tests.technology_fixtures import define_test_sensors
 
 
 class Result:
@@ -338,7 +337,6 @@ def test_financial_graph_evidence_keeps_review_and_source_provenance():
             status="accepted",
         )
     ]
-    define_test_sensors(document, result)
     tx = Session()
     asyncio.run(GraphStore._write_extraction(tx, document, result))
     query, parameters = next(

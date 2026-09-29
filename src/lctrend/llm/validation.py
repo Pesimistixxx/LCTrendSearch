@@ -186,6 +186,8 @@ def _alias_issue(
         return "same_as_label"
     if len(tokens) > _ALIAS_MAX_TOKENS:
         return "too_long"
+    if family_kind in _DEFINED_KINDS and generic_technology(alias):
+        return "generic_term"
     if not _names_in([alias], windows):
         return "not_next_to_label"
     return None
@@ -359,31 +361,71 @@ def _check_technology_contract(
     contract: Dict[str, Any],
     notes: Optional[List[Dict[str, Any]]],
 ) -> None:
-    """Retain the older flat proposal for audit, never as acceptance.
+    """Conditions of docs/technology-contract.md, section 2.
 
-    The technology/1 dossier and independent entity reviewer are the
-    authoritative contract. Legacy ``enforce`` flags, abbreviation lists
-    and word counts cannot decide the entity's type or validate a profile.
+    A Technology/Method needs its definition fields, a mechanism and a
+    function backed by verbatim support quotes, an expanded abbreviation
+    and no uncertainty reported by the model. Otherwise the mention is kept
+    as a ConceptCandidate with the unmet conditions (classification_status
+    proposed): a vertex without them would state more than the source.
     """
     entity.classification_status = None
     entity.contract_issues = []
-    if entity.kind.value not in contract["kinds"] or entity.technology:
+    kind = entity.kind.value
+    if kind not in contract["kinds"]:
         return
-    issues = [
-        "missing:" + field
-        for field in contract["required_fields"]
-        if not str(getattr(entity, field) or "").strip()
-    ]
+    limit = int(contract["max_field_words"])
+    issues = []
+    for field in contract["required_fields"]:
+        value = " ".join(str(getattr(entity, field) or "").split())
+        if not value:
+            issues.append("missing:" + field)
+        elif len(value.split()) > limit:
+            issues.append("too_long:" + field)
+        setattr(entity, field, value or None)
+    if (
+        entity.technology_type
+        and entity.technology_type not in contract["technology_types"]
+    ):
+        issues.append("invalid_technology_type")
     supported = {field for span in entity.support for field in span.supports}
     issues.extend(
         "unsupported:" + field
         for field in contract["supported_fields"]
         if field not in supported
     )
+    abbreviation = contract["abbreviation_pattern"]
+    names = [entity.label, *(item.name for item in entity.source_names)]
+    if re.fullmatch(abbreviation, entity.label.strip()) and all(
+        re.fullmatch(abbreviation, name.strip()) for name in names
+    ):
+        # Point 5: the same letters may mean different technologies.
+        issues.append("abbreviation_not_expanded")
     if entity.uncertainty and entity.uncertainty.strip():
         issues.append("model_uncertainty")
-    entity.contract_issues = [*issues, "independent_entity_review_required"]
+    entity.contract_issues = issues
+    if not issues:
+        entity.classification_status = "validated"
+        return
     entity.classification_status = "proposed"
+    if not contract.get("enforce", True):
+        return
+    entity.kind = ConceptKind.CANDIDATE
+    if notes is not None:
+        notes.append(
+            {
+                "item": key,
+                "code": "technology_contract_unmet",
+                "from": kind,
+                "to": ConceptKind.CANDIDATE.value,
+                "reasons": issues,
+                **(
+                    {"uncertainty": entity.uncertainty.strip()}
+                    if entity.uncertainty
+                    else {}
+                ),
+            }
+        )
 
 
 def _entity_refs(value: Any) -> Iterable[Any]:
@@ -492,6 +534,13 @@ def generic_technology(label: str) -> bool:
 _ORGANIZATION_KINDS = {"company": "Company", "university": "University"}
 
 
+def _product_name(label: str, schema: Dict[str, Any]) -> bool:
+    names = schema.get("technology_contract", {}).get("product_names", [])
+    bare = re.sub(r"\([^()]*\)", " ", label)
+    key = " ".join(bare.casefold().split())
+    return key in {" ".join(name.casefold().split()) for name in names}
+
+
 def _normalize_kinds(
     extraction: Extraction,
     schema: Dict[str, Any],
@@ -501,11 +550,12 @@ def _normalize_kinds(
     """Deterministic kinds before any reference check; returns the kinds
     the model reported for the entities whose kind changed.
 
-    Technology kinds are assessed from evidence by the entity reviewer.
-    A named organization takes its kind from the organization catalog
-    (Samsung is a Company whatever the model guessed); a group or a person
+    An umbrella field is a Domain, not a technology of the radar. A named
+    organization takes its kind from the organization catalog (Samsung is
+    a Company whatever the model guessed); a group of people or a person
     is not an organization.
     """
+    technology_kinds = {"Technology", "Method", "Material"}
     organization_kinds = set(schema.get("organization_kinds", []))
     title = schema.get("person_title_pattern")
     reported: Dict[str, str] = {}
@@ -513,7 +563,12 @@ def _normalize_kinds(
         key = "entity:" + entity.local_id
         kind = entity.kind.value
         target = None
-        if kind in organization_kinds:
+        if kind in technology_kinds and generic_technology(entity.label):
+            target = "Domain"
+        elif kind in technology_kinds and _product_name(entity.label, schema):
+            # A language, library or tool implements technologies.
+            target = ConceptKind.CANDIDATE.value
+        elif kind in organization_kinds:
             label = entity.label.strip()
             cased = [
                 char
@@ -649,10 +704,6 @@ def validate_local_extraction(
         if (
             entity.kind.value in grounded_kinds
             and entity.label.strip()
-            and not (
-                entity.technology is not None
-                and entity.kind.value in {"Technology", "Method", "Material"}
-            )
             and not _names_in(
                 [
                     *alias_names(entity.label, entity.kind.value),
@@ -831,115 +882,3 @@ def validate_review(review: Review, expected_ids: Iterable[str]) -> Review:
     if any(not item.reason.strip() for item in result.items):
         raise ValueError("Reviewer must explain every decision")
     return result
-
-
-def assess_entity(document, entity, reviews, visible_ids, run_id):
-    """Compile an independent semantic verdict plus deterministic anchors.
-
-    No verdict, conflicting verdicts, or incomplete field support can mint a
-    Technology. Foreign chunks cannot complete a local definition.
-    """
-    from ..core.models import (
-        TECHNOLOGY_FIELDS,
-        ConceptKind,
-        EntityAssessment,
-        EvidenceSpan,
-        TechnologyProfile,
-        stable_id,
-    )
-
-    chunks = {c.chunk_id: c for c in document.chunks}
-    visible = set(visible_ids)
-    kind = entity.kind
-    technical = kind == ConceptKind.TECHNOLOGY or entity.technology is not None
-    resolved = ConceptKind.CANDIDATE if technical else kind
-    decision, reason = "unresolved", "Entity review unavailable"
-    profile = None
-    canonical_name = identity_scope = None
-    evidence = [EvidenceSpan(**s.model_dump()) for s in entity.evidence]
-    # Repeated reviews may cite different sentences or explain the same
-    # verdict in different words. Only substantive disagreement conflicts.
-    unique = {
-        r.model_dump_json(exclude={"reason", "evidence"}): r for r in reviews
-    }
-    if len(unique) > 1:
-        reason = "Conflicting entity reviews"
-    elif unique:
-        review = next(iter(unique.values()))
-        reason = review.reason
-        try:
-            reviewed_evidence = [
-                EvidenceSpan(**_anchor(s, chunks, visible)[0].model_dump())
-                for s in review.evidence
-            ]
-            if not reviewed_evidence:
-                raise ValueError("entity_review_evidence_missing")
-            evidence += reviewed_evidence
-            if review.decision == "unresolved":
-                resolved = ConceptKind.CANDIDATE
-            elif review.kind != ConceptKind.TECHNOLOGY:
-                if review.decision == "accept" and review.kind != kind:
-                    raise ValueError("entity_review_type_conflict")
-                resolved = review.kind
-                decision = review.decision
-                canonical_name = review.canonical_name
-                identity_scope = review.identity_scope
-            else:
-                proposal = entity.technology
-                if proposal is None:
-                    raise ValueError("technology_description_missing")
-                if not all(
-                    (
-                        review.coherent,
-                        review.specific,
-                        review.adaptation_or_base,
-                        review.definition_only,
-                    )
-                ):
-                    raise ValueError("technology_semantic_checks_failed")
-                if not TECHNOLOGY_FIELDS <= set(review.supported_fields):
-                    raise ValueError("technology_fields_not_reviewed")
-                if (
-                    review.canonical_name != proposal.canonical_name
-                    or review.identity_scope != proposal.identity_scope
-                ):
-                    raise ValueError("technology_identity_not_reviewed")
-                spans = []
-                for span in proposal.evidence:
-                    anchored, _ = _anchor(span, chunks, visible)
-                    spans.append(EvidenceSpan(**anchored.model_dump()))
-                profile = TechnologyProfile(
-                    **proposal.model_dump(exclude={"evidence"}),
-                    evidence=spans,
-                    document_version_id=document.document_version_id,
-                    review_reason=review.reason,
-                    run_id=run_id,
-                )
-                evidence += spans
-                resolved = ConceptKind.TECHNOLOGY
-                decision = "accept"
-                canonical_name = profile.canonical_name
-                identity_scope = profile.identity_scope
-        except ValueError as exc:
-            resolved = ConceptKind.CANDIDATE
-            profile = None
-            reason = f"{reason}; {exc}"
-    return EntityAssessment(
-        assessment_id=stable_id(
-            "entity-assessment",
-            run_id,
-            entity.local_id,
-            entity.model_dump_json(),
-        ),
-        local_id=entity.local_id,
-        document_version_id=document.document_version_id,
-        run_id=run_id,
-        proposed_kind=kind,
-        decision=decision,
-        resolved_kind=resolved,
-        reason=reason,
-        evidence=evidence,
-        technology=profile,
-        canonical_name=canonical_name,
-        identity_scope=identity_scope,
-    )

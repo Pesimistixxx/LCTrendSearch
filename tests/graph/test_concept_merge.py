@@ -42,13 +42,13 @@ SOURCE = concept(
 TARGET = concept(
     "concept:a",
     "квантовый отжиг",
-    kind=T,
+    kind=ConceptKind.METHOD,
     identity_key="квантов отжиг",
     label_counts={"квантовый отжиг": 1},
 )
 
 
-def test_merged_concept_adopts_names_and_counts_within_one_kind():
+def test_merged_concept_adopts_names_counts_and_the_higher_kind():
     merged = merged_concept(TARGET, SOURCE)
     assert merged.concept_id == "concept:a"
     assert merged.kind == T
@@ -146,7 +146,12 @@ def test_merge_moves_mentions_and_links_source_into_target():
     )
     assert summary["target_kind"] == "Technology"
     text = [query for query, _ in queries]
-    assert not any("REMOVE c:" in q for q in text)
+    # The target is relabeled to the family's higher kind first.
+    assert any(
+        "MATCH (c:Method {concept_id: $target})" in q
+        and "SET c:Technology" in q
+        for q in text
+    )
     move = next(q for q in text if "moved:MENTIONS" in q)
     assert "(s:Technology {concept_id: $source})<-[r:MENTIONS]-" in move
     assert "(t:Technology {concept_id: $target})" in move
@@ -222,8 +227,8 @@ def test_a_merge_sums_kind_votes_and_keeps_a_definition():
     target = concept(
         "concept:a",
         "ML-236B",
-        kind=ConceptKind.MATERIAL,
-        kind_counts={"Material": 1},
+        kind=ConceptKind.TECHNOLOGY,
+        kind_counts={"Technology": 1},
     )
     source = concept(
         "concept:b",
@@ -234,7 +239,7 @@ def test_a_merge_sums_kind_votes_and_keeps_a_definition():
     )
     merged = merged_concept(target, source)
     assert merged.kind == ConceptKind.MATERIAL
-    assert merged.kind_counts == {"Material": 5}
+    assert merged.kind_counts == {"Technology": 1, "Material": 4}
     assert merged.definition == "HMG-CoA reductase inhibitor"
 
 
@@ -276,20 +281,9 @@ def test_set_concept_kind_relabels_within_the_family_and_accepts():
         summary = asyncio.run(store.set_concept_kind("c:ml", "Material"))
         with pytest.raises(ValueError):
             asyncio.run(store.set_concept_kind("c:ml", "Company"))
-        with pytest.raises(ValueError, match="reviewed definition"):
-            asyncio.run(store.set_concept_kind("c:ml", "Technology"))
     finally:
         merge_module.read_concepts_by_id = original
     assert summary["to"] == "Material"
-    ((query, parameters),) = queries
+    (query, parameters), = queries
     assert "REMOVE c:Technology" in query and "SET c:Material" in query
     assert "c.status = 'accepted'" in query
-
-
-def test_merge_cannot_promote_method_or_join_different_meanings():
-    method = TARGET.model_copy(update={"kind": ConceptKind.METHOD})
-    with pytest.raises(ValueError, match="Different entity kinds"):
-        merged_concept(method, SOURCE)
-    other = SOURCE.model_copy(update={"identity_scope": "different meaning"})
-    with pytest.raises(ValueError, match="Different entity meanings"):
-        merged_concept(TARGET, other)

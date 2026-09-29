@@ -37,7 +37,7 @@ def test_extraction_requires_literal_anchors():
     doc = document()
     concept = Concept(
         concept_id="tech1",
-        kind=ConceptKind.CANDIDATE,
+        kind=ConceptKind.TECHNOLOGY,
         preferred_label="Сенсор S",
     )
     result = ExtractionResult(
@@ -55,7 +55,7 @@ def test_extraction_requires_literal_anchors():
                 surface_text="Сенсор S",
                 start=0,
                 end=8,
-                type_candidates=[ConceptKind.CANDIDATE],
+                type_candidates=[ConceptKind.TECHNOLOGY],
             )
         ],
         concepts=[concept],

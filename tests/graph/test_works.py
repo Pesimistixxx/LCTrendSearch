@@ -81,9 +81,7 @@ def title_key():
 
 def test_a_title_joins_a_preprint_and_its_journal_version():
     journal = FoundWork(
-        "work:j",
-        [WorkKey("doi:10.1/j", "doi"), title_key()],
-        {title_key().key},
+        "work:j", [WorkKey("doi:10.1/j", "doi"), title_key()], {title_key().key}
     )
     preprint_keys = [WorkKey("arxiv:2101.00001", "arxiv"), title_key()]
     plan = plan_work("document:p", preprint_keys, [journal])
@@ -92,9 +90,7 @@ def test_a_title_joins_a_preprint_and_its_journal_version():
 
 def test_a_title_never_joins_two_papers_with_different_dois():
     other = FoundWork(
-        "work:o",
-        [WorkKey("doi:10.1/o", "doi"), title_key()],
-        {title_key().key},
+        "work:o", [WorkKey("doi:10.1/o", "doi"), title_key()], {title_key().key}
     )
     plan = plan_work(
         "document:n", [WorkKey("doi:10.1/n", "doi"), title_key()], [other]

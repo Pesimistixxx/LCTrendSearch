@@ -193,10 +193,10 @@ OTHER_FAMILY_C5 = [
 
 
 @pytest.mark.parametrize("left,kind,right,right_kind", SAME_FAMILY_C5)
-def test_technology_method_material_do_not_promote_each_other(
+def test_technology_method_material_share_identity(
     left, kind, right, right_kind
 ):
-    assert not same_concept(left, right, kind, right_kind)
+    assert same_concept(left, right, kind, right_kind)
 
 
 @pytest.mark.parametrize("left,kind,right,right_kind", OTHER_FAMILY_C5)

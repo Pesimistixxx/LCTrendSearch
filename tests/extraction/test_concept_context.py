@@ -60,14 +60,9 @@ def test_one_technology_mention_does_not_relabel_a_compound_for_good():
         index = ConceptIndex()
         for position in order:
             resolve(index, mention(f"m{position}", "ML-236B", kinds[position]))
-        assert len(index) == 2
-        for concept in index:
-            results.add((
-                concept.kind, tuple(sorted(concept.kind_counts.items()))
-            ))
-    assert results == {
-        (MATERIAL, (("Material", 3),)), (T, (("Technology", 1),))
-    }
+        (concept,) = list(index)
+        results.add((concept.kind, tuple(sorted(concept.kind_counts.items()))))
+    assert results == {(MATERIAL, (("Material", 3), ("Technology", 1)))}
 
 
 def test_a_stored_concept_without_votes_counts_its_mentions_as_its_kind():
@@ -81,11 +76,8 @@ def test_a_stored_concept_without_votes_counts_its_mentions_as_its_kind():
     index = ConceptIndex([stored])
     resolve(index, mention("m1", "ML-236B", MATERIAL))
     concept = index.get("concept:ml")
-    assert concept.kind_counts == {}
+    assert concept.kind_counts == {"Technology": 5, "Material": 1}
     assert concept.kind == T
-    material = next(c for c in index if c.kind == MATERIAL)
-    assert material.concept_id != concept.concept_id
-    assert material.kind_counts == {"Material": 1}
 
 
 def test_a_quote_is_recorded_as_the_label_not_as_a_name():

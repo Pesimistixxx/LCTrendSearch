@@ -658,7 +658,9 @@ def _crawl_economic(
                 if cursor is None:
                     break
             crawl_run["exhaustive"] = (
-                complete and not state and crawl_run["search_failures"] == 0
+                complete
+                and not state
+                and crawl_run["search_failures"] == 0
             )
 
     asyncio.run(crawl())
@@ -1254,17 +1256,6 @@ def main() -> None:
         help="Recompute every vector, not only missing or other-model ones",
     )
 
-    technology_command = subparsers.add_parser(
-        "technology-dry-run",
-        help=(
-            "Plan Technology reprocessing from a local "
-            "snapshot; no graph writes"
-        ),
-    )
-    technology_command.add_argument("--input", type=Path, required=True)
-    technology_command.add_argument("--output", type=Path, required=True)
-    technology_command.add_argument("--replay", action="store_true")
-
     subparsers.add_parser("init-graph", help="Create Neo4j constraints")
     args = parser.parse_args()
     logger.debug("Command %s started, log file: %s", args.command, log_path)
@@ -1376,20 +1367,6 @@ def _taxonomy_tree(taxonomy) -> Dict[str, Any]:
 
 
 def _run(args: argparse.Namespace) -> None:
-    if args.command == "technology-dry-run":
-        from .graph.technology_migration import technology_dry_run
-
-        if args.input.resolve() == args.output.resolve():
-            raise ValueError("Dry run output must not overwrite its input")
-        snapshot = json.loads(args.input.read_text(encoding="utf-8"))
-        plan = asyncio.run(technology_dry_run(snapshot, replay=args.replay))
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        print(json.dumps(plan["summary"], ensure_ascii=False))
-        return
-
     if args.command == "init-graph":
         asyncio.run(_graph(_ensure_schema))
         return

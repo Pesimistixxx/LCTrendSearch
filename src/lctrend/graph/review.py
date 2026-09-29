@@ -132,9 +132,7 @@ def plan_review(
             and pair.score is not None
             and pair.score >= merge_above
         ):
-            action, reason = (
-                "merge", f"score {pair.score:.3f} >= {merge_above}"
-            )
+            action, reason = "merge", f"score {pair.score:.3f} >= {merge_above}"
         else:
             action, reason = "review", "semantic similarity only"
         decision = ReviewDecision(pair, action, reason)

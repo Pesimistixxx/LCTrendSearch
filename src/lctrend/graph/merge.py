@@ -70,17 +70,7 @@ def merged_concept(target: Concept, source: Concept) -> Concept:
             concept.kind_counts or {concept.kind.value: 1}
         ).items():
             kinds[kind] = kinds.get(kind, 0) + count
-    if kind_family(target.kind) == "technology" and source.kind != target.kind:
-        raise ValueError(
-            "Different entity kinds require semantic reprocessing"
-        )
-    if source.identity_scope != target.identity_scope:
-        raise ValueError("Different entity meanings cannot be merged")
-    kind = (
-        target.kind.value
-        if kind_family(target.kind) == "technology"
-        else settled_kind(kinds, target.kind)
-    )
+    kind = settled_kind(kinds, target.kind)
     return target.model_copy(
         update={
             "kind": ConceptKind(kind),

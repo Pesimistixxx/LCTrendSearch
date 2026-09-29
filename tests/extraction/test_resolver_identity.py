@@ -53,19 +53,19 @@ def test_document_order_does_not_change_key_kind_or_id():
     for order in permutations(DOCUMENTS):
         assert resolve_in_order(order) == expected
     concepts, labels, _ = expected
-    assert len(concepts) == 6
+    assert len(concepts) == 4
     kinds = {kind for _, kind, _ in concepts}
-    # Lexical proposals preserve their exact types. A lone type annotation
-    # cannot promote a method or material; publication needs a profile.
-    assert kinds == {T, METHOD, MATERIAL}
+    # One Technology family concept each for graphene and federated
+    # learning (curated as a Method), one LLM group, one quantum annealing.
+    assert kinds == {T, METHOD}
     assert "большие языковые модели" in labels.values()
 
 
-def test_concept_id_preserves_kind_instead_of_promoting():
-    # Conflicting type proposals stay separate until semantic review.
+def test_concept_id_is_derived_from_family_and_key():
+    # Separate jobs (a CLI run and a web job) create the same concept_id.
     first, _, _ = resolve_in_order([("a", [("квантовый отжиг", T)])])
     second, _, _ = resolve_in_order([("b", [("квантового отжига", METHOD)])])
-    assert {(key, cid) for key, _, cid in first} != {
+    assert {(key, cid) for key, _, cid in first} == {
         (key, cid) for key, _, cid in second
     }
 
