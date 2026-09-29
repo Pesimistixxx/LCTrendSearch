@@ -42,3 +42,5 @@ artifacts/full-subgraphs-2026-09-29.jsonl
 # Leftovers of test runs with a locked ACL (git cannot read them).
 artifacts/economic-review-tests-*/
 artifacts/test-*/
+# CatBoost writes its training log next to the working directory.
+catboost_info/
