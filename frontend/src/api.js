@@ -9,21 +9,25 @@ export const DEMO_DATA = MOCK
 /*
 Контракт бэкенда.
 
-Логика получения ответа (отбор кандидатов и ранжирование) пока НЕ сделана:
-lctrend.ranking — подготовленная заготовка, её выдача не является результатом анализа.
+Реальный поиск сочетает BM25 и косинусную близость GigaChat-эмбеддингов.
+Оценка слабого сигнала пока эвристическая, не обученная вероятность.
 
 GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search)
 {
   query: string,
   snapshot: 'YYYY-MM-DD',             // дата T: всё посчитано по данным ≤ T
   demo: bool,                         // true только у синтетики mock.js
-  scope: 'domain'|'label'|'all',      // чем запрос отобрал технологии
-  matched: string[],                  // найденные домены (scope = 'domain')
-  note: string|null,                  // пояснение, например «показан общий ТОП»
-  stats: { sourcesProcessed: number, candidates: number, confident: number },   // confident = score > 0.75
-  signals: [{                         // ТОП-15, отсортированы по score
+  scope: 'hybrid'|'lexical',          // семантика + BM25 либо только BM25
+  matched: string[],                  // упомянутые в запросе домены
+  note: string|null,                  // пояснение о недоступной семантике / пустом результате
+  stats: { sourcesProcessed: number, candidates: number, confident: number },   // confident = weakSignalScore > 0.75
+  signals: [{                         // ТОП-15, отсортированы по общему score
     id, title, domain,
-    score: 0..1,                      // скор: логистика от Σ вес × z-оценка (не вероятность)
+    score: 0..1,                      // 0.75 × relevanceScore + 0.25 × weakSignalScore
+    relevanceScore: 0..1,             // 0.65 × cosine + 0.35 × нормализованный BM25, при наличии обеих частей
+    weakSignalScore: 0..1,            // эвристика признаков графа, НЕ вероятность
+    semanticSimilarity: number|null,  // косинус запроса и названия технологии
+    bm25Score: number,                // BM25 названия и домена на дату T
     stage: string,                    // «прототипы» | «пилоты» | … | «не определена»
     summary: string,                  // одна строка для таблицы
     predictors: [{ name, weight, value: string }],   // топ-3 вклада: вес × z-оценка признака
@@ -49,7 +53,10 @@ GET /api/graph?q=<запрос>[&signal=<id>]  →  (из Neo4j; на бэкен
 
 async function get(path) {
   const r = await fetch(path)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  if (!r.ok) {
+    const body = await r.json().catch(() => null)
+    throw new Error(typeof body?.detail === 'string' ? body.detail : `${r.status} ${r.statusText}`)
+  }
   return r.json()
 }
 

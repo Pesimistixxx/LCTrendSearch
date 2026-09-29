@@ -494,6 +494,7 @@ class TemporalCorpus:
         self.definitions: Dict[str, str] = {}
         self.embeddings: Dict[str, List[float]] = {}
         self.embedding_dates: Dict[str, date] = {}
+        self.embedding_model: Optional[str] = None
         for row in data.get("technologies", []):
             technology_id = str(row["technology_id"])
             self.labels[technology_id] = str(
@@ -792,12 +793,13 @@ class TemporalCorpus:
                     str(row.get("embedding_model") or ""),
                     len(self.embeddings[technology_id]),
                 )
-        if len(set(spaces.values())) <= 1:
+        if not spaces:
             return
         counts: Dict[Tuple[str, int], int] = {}
         for space in spaces.values():
             counts[space] = counts.get(space, 0) + 1
         chosen = min(counts, key=lambda space: (-counts[space], space))
+        self.embedding_model = chosen[0] or None
         for technology_id, space in spaces.items():
             if space != chosen:
                 self.embeddings.pop(technology_id, None)

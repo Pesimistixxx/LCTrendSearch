@@ -1,20 +1,16 @@
-"""``GET /api/search`` response from the graph, in the frontend contract.
+"""Hybrid technology search: GigaChat cosine + BM25 + weak-signal score.
 
-The query selects a scope: domains whose names or aliases
-(``sources.json → domains``) match its words, with their child domains;
-otherwise technologies whose label words match; otherwise every candidate,
-with a note. Scores and z-scores always come from all candidates at T, so a
-technology keeps its score whatever the query.
-
-STATUS: draft. The answer logic is not done yet (see ``lctrend.ranking``);
-this is prepared functionality, not a finished result.
+The weak-signal score is a provisional heuristic, not a model probability.
+Only technologies visible in the dated graph snapshot may be returned.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
+import unicodedata
 from collections import Counter
 from datetime import date
 from typing import (
@@ -25,6 +21,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Sequence,
     Set,
 )
 
@@ -47,10 +44,30 @@ DOCUMENT_TYPES = {
     PACKAGE: "Пакет",
     PATENT: "Патент",
 }
+QUERY_STOPWORDS = frozenset(
+    "в во на для по из и или the a an of for in on and or "
+    "технология технологии решение решения перспективный перспективные "
+    "слабый слабые сигнал сигналы тренд тренды новый новые область "
+    "области сфера направление emerging technology technologies trend "
+    "trends weak signals new solutions field".split()
+)
+
+
+class EmbeddingIndexError(ValueError):
+    """Stored technology vectors cannot be queried with GigaChat."""
 
 
 def _words(text: str) -> List[str]:
     return re.findall(r"\w+", text.casefold().replace("ё", "е"))
+
+
+def _search_words(text: str) -> List[str]:
+    text = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
+    return [
+        word
+        for word in re.findall(r"[\w+#]+", text)
+        if word not in QUERY_STOPWORDS
+    ]
 
 
 def _word_match(query: str, name: str) -> bool:
@@ -98,7 +115,7 @@ def match_domains(query: str) -> Dict[str, str]:
 
 
 def _scope(view, query: str):
-    """(scope, matched names, technology ids) for a query at T."""
+    """Lexical scope for reports and query-relevant rejection reasons."""
     domains = match_domains(query)
     if domains:
         wanted = set(domains.values())
@@ -125,6 +142,131 @@ def _scope(view, query: str):
     if ids:
         return "label", [], ids
     return "all", [], set(view.technologies)
+
+
+def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    if (
+        len(left) != len(right)
+        or not left
+        or not all(math.isfinite(value) for value in (*left, *right))
+    ):
+        return 0.0
+    a = math.sqrt(sum(value * value for value in left))
+    b = math.sqrt(sum(value * value for value in right))
+    if not a or not b:
+        return 0.0
+    result = sum(x * y for x, y in zip(left, right)) / (a * b)
+    return max(-1.0, min(1.0, result))
+
+
+def _hybrid_matches(corpus, view, candidates, query, query_embedding, config):
+    """Rank matches; a high signal score cannot create relevance."""
+    settings = config["search"]
+    domain_catalog = load_catalog("sources")["domains"]
+    domain_text = {
+        stable_id("domain", domain["name"]): " ".join(
+            [domain["name"], *domain.get("aliases", [])]
+        )
+        for domain in domain_catalog
+    }
+    documents = {}
+    for item in candidates:
+        technology_id = item["technology_id"]
+        technology = view.technologies[technology_id]
+        domains = {
+            domain
+            for document in technology.documents
+            for domain in document.version.domains
+        }
+        # The name is more precise than a broad domain or source title.
+        # Definitions are not versioned; using them at a historical T
+        # would leak later text into the search result.
+        text = " ".join(
+            [technology.label] * 3
+            + [domain_text.get(domain, "") for domain in sorted(domains)]
+        )
+        documents[technology_id] = Counter(_search_words(text))
+    query_terms = set(_search_words(query))
+    # A named domain can be inflected ("финтехе") or abbreviated in the
+    # query; its canonical name is a safe lexical expansion.
+    for name in match_domains(query):
+        query_terms.update(_search_words(name))
+    if not query_terms:
+        return []
+    document_frequency = Counter(
+        word for tokens in documents.values() for word in tokens
+    )
+    size = len(documents)
+    average_length = sum(
+        map(lambda tokens: sum(tokens.values()), documents.values())
+    ) / max(size, 1)
+    k1, b = 1.2, 0.75
+    lexical = {}
+    for technology_id, tokens in documents.items():
+        length = sum(tokens.values())
+        score = 0.0
+        for word in query_terms:
+            frequency = tokens[word]
+            if frequency:
+                idf = math.log1p(
+                    (size - document_frequency[word] + 0.5)
+                    / (document_frequency[word] + 0.5)
+                )
+                score += (
+                    idf
+                    * frequency
+                    * (k1 + 1)
+                    / (frequency + k1 * (1 - b + b * length / average_length))
+                )
+        lexical[technology_id] = score
+    lexical_max = max(lexical.values(), default=0.0)
+    vectors = corpus.embeddings_at(view.cutoff)
+    matches = []
+    for item in candidates:
+        technology_id = item["technology_id"]
+        vector = vectors.get(technology_id)
+        cosine = (
+            _cosine(query_embedding, vector)
+            if query_embedding and vector
+            else 0.0
+        )
+        bm25 = lexical[technology_id]
+        if bm25 <= 0 and cosine < settings["min_cosine"]:
+            continue
+        semantic = max(0.0, cosine)
+        lexical_score = bm25 / lexical_max if lexical_max else 0.0
+        available = (
+            settings["cosine_weight"] if vector and query_embedding else 0
+        ) + (settings["bm25_weight"] if bm25 else 0)
+        relevance = (
+            settings["cosine_weight"]
+            * semantic
+            * bool(vector and query_embedding)
+            + settings["bm25_weight"] * lexical_score
+        ) / available
+        final = (
+            settings["relevance_weight"] * relevance
+            + settings["signal_weight"] * item["score"]
+        )
+        matches.append(
+            {
+                **item,
+                "search_score": final,
+                "relevance_score": relevance,
+                "semantic_similarity": cosine
+                if vector and query_embedding
+                else None,
+                "bm25_score": bm25,
+            }
+        )
+    matches.sort(
+        key=lambda item: (
+            -item["search_score"],
+            -item["relevance_score"],
+            item["technology_id"],
+        )
+    )
+    return matches
 
 
 def _trend(technology, cutoff: date, quarters: int) -> List[int]:
@@ -206,7 +348,15 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
         "id": item["technology_id"],
         "title": item["technology"],
         "domain": domains.most_common(1)[0][0] if domains else "—",
-        "score": item["score"],
+        "score": round(item["search_score"], 4),
+        "relevanceScore": round(item["relevance_score"], 4),
+        "weakSignalScore": round(item["score"], 4),
+        "semanticSimilarity": (
+            round(item["semantic_similarity"], 4)
+            if item["semantic_similarity"] is not None
+            else None
+        ),
+        "bm25Score": round(item["bm25_score"], 4),
         "stage": stage,
         "summary": " · ".join(
             f"{feature['label']}: {_value(feature['value'])}"
@@ -242,10 +392,12 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
             f"источника за {rules['window_months']} мес., стадия: {stage}."
         ),
         "confidenceReason": (
-            "Скор — взвешенная сумма z-оценок признаков среди всех "
-            "кандидатов (веса в ranking.json), сжатая в 0..1 логистической "
-            f"функцией; это порядок, а не вероятность. Сумма: "
-            f"{item['raw_score']:+.2f}."
+            f"Итоговый скор {item['search_score']:.2f} = релевантность "
+            f"{item['relevance_score']:.2f} × "
+            f"{config['search']['relevance_weight']:.2f} + скор слабого "
+            f"сигнала {item['score']:.2f} × "
+            f"{config['search']['signal_weight']:.2f}. Последний рассчитан "
+            "из признаков графа, а не обученной моделью; это не вероятность."
         ),
         "sources": _sources(
             corpus,
@@ -262,6 +414,7 @@ def search_response(
     snapshot: date,
     config: Optional[Mapping[str, Any]] = None,
     ranking: Optional[Ranking] = None,
+    query_embedding: Optional[Sequence[float]] = None,
 ) -> Dict[str, Any]:
     """TOP-K weak signals at T for the query, in the frontend contract.
 
@@ -271,14 +424,15 @@ def search_response(
     config = config or load_catalog("ranking")
     ranking = ranking or _rank_snapshot(corpus, snapshot, config)
     view = corpus.view(snapshot)
-    scope, matched, ids = _scope(view, query)
+    matched = sorted(match_domains(query))
+    rejected_scope, _, rejected_ids = _scope(view, query)
     domain_names = {
         stable_id("domain", domain["name"]): domain["name"]
         for domain in load_catalog("sources")["domains"]
     }
-    chosen = [
-        item for item in ranking.candidates if item["technology_id"] in ids
-    ]
+    chosen = _hybrid_matches(
+        corpus, view, ranking.candidates, query, query_embedding, config
+    )
     signals = [
         _signal(corpus, view, item, config, domain_names)
         for item in chosen[: int(config["top_k"])]
@@ -290,25 +444,28 @@ def search_response(
             "reason": item["reason"],
         }
         for item in ranking.rejected
-        if item["technology_id"] in ids
+        if rejected_scope != "all" and item["technology_id"] in rejected_ids
     ][: int(config["top_k"])]
     notes: Set[str] = set()
-    if scope == "all":
-        notes.add(
-            "Запрос не совпал ни с доменом, ни с названием технологии: "
-            "показан общий ТОП по всем кандидатам."
-        )
+    if not _search_words(query):
+        notes.add("Уточните технологию или предметную область запроса.")
+    elif not query_embedding:
+        notes.add("Семантический поиск недоступен: использован только BM25.")
+    if not chosen:
+        notes.add("По запросу не найдено подходящих технологий.")
     return {
         "query": query,
         "snapshot": snapshot.isoformat(),
         "demo": False,
-        "scope": scope,
+        "scope": "hybrid" if query_embedding else "lexical",
         "matched": matched,
         "note": " ".join(sorted(notes)) or None,
         "stats": {
             "sourcesProcessed": len(view.documents),
             "candidates": len(chosen),
-            "confident": sum(item["score"] > 0.75 for item in chosen),
+            "confident": sum(
+                item["score"] > 0.75 for item in chosen[: int(config["top_k"])]
+            ),
         },
         "signals": signals,
         "rejected": rejected,
@@ -328,10 +485,15 @@ class SearchService:
         read_data: Callable[[], Awaitable[Dict[str, Any]]],
         config: Optional[Mapping[str, Any]] = None,
         clock: Callable[[], float] = time.monotonic,
+        embed_query: Optional[
+            Callable[[str, str], Awaitable[Sequence[float]]]
+        ] = None,
     ) -> None:
         self._read = read_data
         self._config = config or load_catalog("ranking")
         self._clock = clock
+        self._embed_query = embed_query
+        self._embedder = None
         self._loaded_at: Optional[float] = None
         self._corpus: Optional[TemporalCorpus] = None
         self._rankings: Dict[date, Ranking] = {}
@@ -358,6 +520,39 @@ class SearchService:
                     _rank_snapshot, self._corpus, snapshot, self._config
                 )
             corpus, ranking = self._corpus, self._rankings[snapshot]
+        vector = None
+        if (
+            ranking.candidates
+            and _search_words(query)
+            and corpus.embeddings_at(snapshot)
+        ):
+            model = corpus.embedding_model
+            if not model or not model.startswith("EmbeddingsGiga"):
+                raise EmbeddingIndexError(
+                    "Векторы технологий не совместимы с GigaChat: "
+                    "перестройте эмбеддинги технологий"
+                )
+            if self._embed_query is not None:
+                vector = await self._embed_query(query, model)
+            else:
+                if self._embedder is None:
+                    from ..llm.client import JsonLLM
+
+                    self._embedder = JsonLLM.from_environment(
+                        provider="gigachat"
+                    )
+                vector = (await self._embedder.embed([query], model))[0]
+            dimensions = len(next(iter(corpus.embeddings.values())))
+            if len(vector) != dimensions:
+                raise EmbeddingIndexError(
+                    "Размерность эмбеддинга запроса не совпала с графом"
+                )
         return await asyncio.to_thread(
-            search_response, corpus, query, snapshot, self._config, ranking
+            search_response,
+            corpus,
+            query,
+            snapshot,
+            self._config,
+            ranking,
+            vector,
         )

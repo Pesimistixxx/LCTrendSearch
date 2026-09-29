@@ -563,11 +563,20 @@ def create_app(
             app.state.search = SearchService(_read_graph)
         try:
             return await app.state.search.search(query, cutoff)
-        except Exception:
+        except Exception as exc:
             # Connection errors name hosts; keep them in the server log.
             logger.exception("Search %r failed", query)
+            from lctrend.llm.client import LLMError
+            from lctrend.ranking.search import EmbeddingIndexError
+
+            if isinstance(exc, LLMError):
+                detail = "GigaChat недоступен: проверьте ключ и подключение"
+            elif isinstance(exc, EmbeddingIndexError):
+                detail = "Эмбеддинги технологий несовместимы с поиском"
+            else:
+                detail = "Граф недоступен: проверьте подключение к Neo4j"
             raise HTTPException(
-                503, "Граф недоступен: проверьте подключение к Neo4j"
+                503, detail
             ) from None
 
     @app.get("/api/health")
@@ -885,6 +894,9 @@ def create_app(
                 values["LLM_MODEL"] or "<default>",
                 body.api_key is not None and bool(body.api_key.strip()),
             )
+            if search_service is None:
+                # A running search must not keep embedding with the old key.
+                app.state.search = None
         return readiness()
 
     @app.post("/api/ingest/sources/settings")

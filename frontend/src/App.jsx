@@ -81,7 +81,7 @@ function Header({ q, compact, ingestion }) {
         </a>
         {q && !ingestion && <SearchBox initial={q} />}
         <nav className="top-nav" aria-label="Разделы">
-          <a href="#" aria-current={!ingestion ? 'page' : undefined}>Демо поиска</a>
+          <a href="#" aria-current={!ingestion ? 'page' : undefined}>{DEMO_DATA ? 'Демо поиска' : 'Поиск сигналов'}</a>
           <a href="#view=ingest" aria-current={ingestion ? 'page' : undefined}>Сбор материалов</a>
         </nav>
       </div>
@@ -174,7 +174,7 @@ function Results({ res }) {
   const [onlyConfident, setOnly] = useState(false)
   const [g, setG] = useState(null)
   useEffect(() => { graph(res.query).then(setG, () => setG(false)) }, [res.query])
-  const list = onlyConfident ? res.signals.filter((s) => s.score > 0.75) : res.signals
+  const list = onlyConfident ? res.signals.filter((s) => (s.weakSignalScore ?? s.score) > 0.75) : res.signals
 
   return (
     <section className="results">
@@ -187,7 +187,7 @@ function Results({ res }) {
 
       <div className="stats">
         <div className="stat card">
-          <span className="stat-k">Обработано источников</span>
+          <span className="stat-k">{DEMO_DATA ? 'Обработано источников' : 'Документов в графе'}</span>
           <b className="stat-v"><CountUp to={res.stats.sourcesProcessed} /></b>
           <span className="stat-sub">патенты · статьи · отчёты · реестры</span>
         </div>
@@ -197,7 +197,7 @@ function Results({ res }) {
           <span className="stat-sub">→ к ТОП-15</span>
         </button>
         <button className={`stat card stat-btn ${onlyConfident ? 'is-on' : ''}`} onClick={() => { setOnly(!onlyConfident); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }) }}>
-          <span className="stat-k">{DEMO_DATA ? 'Уверенность модели' : 'Скор'} &gt; 75%</span>
+          <span className="stat-k">{DEMO_DATA ? 'Уверенность модели' : 'Скор сигнала'} &gt; 75%</span>
           <b className="stat-v c-cyan"><CountUp to={res.stats.confident} /></b>
           <span className="stat-sub">{onlyConfident ? '✓ фильтр включён' : '→ показать только их'}</span>
         </button>
@@ -206,7 +206,7 @@ function Results({ res }) {
       <div className="card list" id="list">
         <div className="list-head">
           <h2>ТОП-{list.length} слабых сигналов</h2>
-          <span className="muted">{DEMO_DATA ? 'Отсортировано по уверенности модели' : 'Отсортировано по скору: Σ вес × z-оценка'}</span>
+          <span className="muted">{DEMO_DATA ? 'Отсортировано по уверенности модели' : 'Порядок: релевантность запросу 75% · скор сигнала 25%'}</span>
         </div>
         <div className="row row-h" aria-hidden="true">
           <span>#</span><span>Технология</span><span>Скоринг</span><span>Ключевые предикторы</span><span>Динамика</span><span />
@@ -214,7 +214,7 @@ function Results({ res }) {
         {list.map((s, i) => (
           <a key={s.id} className="row" href={`#${new URLSearchParams({ q: res.query, s: s.id })}`} style={{ '--i': i }}>
             <span className="row-n mono">{String(i + 1).padStart(2, '0')}</span>
-            <span className="row-t"><b>{s.title}</b><small>{s.domain} · стадия: {s.stage}</small></span>
+            <span className="row-t"><b>{s.title}</b><small>{s.domain} · стадия: {s.stage}{!DEMO_DATA && s.weakSignalScore != null ? ` · скор сигнала ${pct(s.weakSignalScore)}%` : ''}</small></span>
             <span><Score v={s.score} /></span>
             <span className="row-p">{s.summary}</span>
             <span><Spark data={s.trend} /></span>
@@ -267,7 +267,7 @@ function Score({ v, big }) {
     <div className={`ring lv-${l}`} style={{ '--p': pct(v) }}>
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" className="ring-bg" /><circle cx="60" cy="60" r="52" className="ring-fg" pathLength="100" /></svg>
       <b><CountUp to={pct(v)} /><small>%</small></b>
-      <span>{DEMO_DATA ? 'уверенность' : 'скор'}</span>
+      <span>{DEMO_DATA ? 'уверенность' : 'общий скор'}</span>
     </div>
   )
   return (
@@ -310,7 +310,7 @@ function Insight({ s, q }) {
           <div className="doc-meta">
             <span className="pill">Стадия: {s.stage}</span>
             <span className="pill">Источников: {s.sources.length}</span>
-            <span className="pill">Статус: слабый сигнал</span>
+            <span className="pill">{DEMO_DATA ? 'Статус: слабый сигнал' : 'Статус: кандидат в слабые сигналы'}</span>
           </div>
         </div>
         <Score v={s.score} big />
@@ -346,7 +346,10 @@ function Insight({ s, q }) {
             </div>
             <p className="muted small">{DEMO_DATA ? 'Вклад признаков в решение модели: вправо — за слабый сигнал, влево — против (признаки зрелости или хайпа).' : 'Топ-3 вклада в скор: вес признака × его z-оценка среди всех кандидатов; вправо — за слабый сигнал, влево — против.'}</p>
           </Section>
-          <Section n="06" t={DEMO_DATA ? 'Почему такая уверенность' : 'Как получен скор'}><p>{s.confidenceReason}</p></Section>
+          <Section n="06" t={DEMO_DATA ? 'Почему такая уверенность' : 'Как получен скор'}>
+            {!DEMO_DATA && s.relevanceScore != null && <p>Релевантность запросу: {pct(s.relevanceScore)}%; скор слабого сигнала: {pct(s.weakSignalScore)}%{s.semanticSimilarity != null ? `; косинусная близость: ${s.semanticSimilarity.toFixed(3)}` : ''}; BM25: {s.bm25Score?.toFixed(3)}.</p>}
+            <p>{s.confidenceReason}</p>
+          </Section>
           <Section n="07" t="Источники">
             <div className="srcs">
               {s.sources.map((src, i) => (

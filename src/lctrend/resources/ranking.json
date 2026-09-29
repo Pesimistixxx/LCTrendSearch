@@ -2,6 +2,14 @@
   "schema_version": 1,
   "note": "Transparent TOP-15 until the dataset has both label classes: a rule selects candidates at T, a weighted sum of z-scored export-features columns ranks them. A feature's contribution is its weight times its z-score.",
   "top_k": 15,
+  "search": {
+    "note": "BM25 and GigaChat cosine rank query relevance; the provisional weak-signal score influences ordering but cannot create an unrelated match.",
+    "min_cosine": 0.4,
+    "cosine_weight": 0.65,
+    "bm25_weight": 0.35,
+    "relevance_weight": 0.75,
+    "signal_weight": 0.25
+  },
   "include_novelty": true,
   "candidates": {
     "note": "Rules at snapshot T. Unknown maturity passes; a known stage above max_stage_rank does not.",

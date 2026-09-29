@@ -3,10 +3,16 @@
 import copy
 from datetime import date
 
+import pytest
+
 from lctrend.core.config import load_catalog
 from lctrend.core.models import stable_id
 from lctrend.graph.temporal import TemporalCorpus
-from lctrend.ranking.search import match_domains, search_response
+from lctrend.ranking.search import (
+    _search_words,
+    match_domains,
+    search_response,
+)
 
 T = date(2021, 1, 1)
 FINTECH = stable_id("domain", "Fintech")
@@ -18,6 +24,10 @@ SIGNAL_KEYS = {
     "title",
     "domain",
     "score",
+    "relevanceScore",
+    "weakSignalScore",
+    "semanticSimilarity",
+    "bm25Score",
     "stage",
     "summary",
     "predictors",
@@ -110,28 +120,38 @@ def test_query_words_match_domain_aliases_and_child_domains():
     assert "Machine learning" in match_domains(
         "artificial intelligence trends"
     )
+    assert "Machine learning" in match_domains("технологии в ИИ")
     assert "Cybersecurity" in match_domains(
         "слабые сигналы в кибербезопасности"
     )
     assert match_domains("что-то непонятное") == {}
 
 
+def test_search_tokens_drop_generic_request_words_but_keep_cplusplus():
+    assert _search_words("Слабые сигналы для C++") == ["c++"]
+
+
 def test_search_returns_the_frontend_contract_for_a_domain():
     response = search_response(corpus(), "решения в финтехе", T, settings())
     assert response["demo"] is False
     assert response["snapshot"] == "2021-01-01"
-    assert response["scope"] == "domain"
+    assert response["scope"] == "lexical"
     assert [signal["id"] for signal in response["signals"]] == ["pay", "kyc"]
     assert response["stats"] == {
         "sourcesProcessed": 10,
         "candidates": 2,
         "confident": sum(
-            signal["score"] > 0.75 for signal in response["signals"]
+            signal["weakSignalScore"] > 0.75
+            for signal in response["signals"]
         ),
     }
     signal = response["signals"][0]
     assert set(signal) >= SIGNAL_KEYS
     assert 0 < signal["score"] < 1
+    assert signal["relevanceScore"] > 0
+    assert signal["weakSignalScore"] > 0
+    assert signal["semanticSimilarity"] is None
+    assert signal["bm25Score"] > 0
     assert signal["domain"] == "Fintech"
     assert signal["stage"] == "не определена"
     assert len(signal["predictors"]) == 3
@@ -167,21 +187,76 @@ def test_search_returns_the_frontend_contract_for_a_domain():
     assert len(response["signals"]) <= settings()["top_k"]
 
 
-def test_unmatched_query_falls_back_to_all_candidates_and_says_so():
+def test_unmatched_query_does_not_show_unrelated_top_candidates():
     response = search_response(corpus(), "что-то непонятное", T, settings())
-    assert response["scope"] == "all"
+    assert response["scope"] == "lexical"
     assert response["note"]
-    assert {signal["id"] for signal in response["signals"]} == {
-        "pay",
-        "kyc",
-        "arm",
-    }
+    assert response["signals"] == []
+
+
+def test_generic_query_requires_an_area_or_technology():
+    response = search_response(corpus(), "слабые сигналы", T, settings())
+    assert response["signals"] == []
+    assert "Уточните" in response["note"]
 
 
 def test_label_words_select_technologies_without_a_domain_match():
     response = search_response(corpus(), "soft grippers", T, settings())
-    assert response["scope"] == "label"
+    assert response["scope"] == "lexical"
     assert [signal["id"] for signal in response["signals"]] == ["arm"]
+
+
+def test_exact_mature_technology_shows_its_rejection_reason():
+    response = search_response(
+        corpus(), "double-entry ledger", T, settings()
+    )
+    assert response["signals"] == []
+    assert response["rejected"][0]["category"] == "mature"
+
+
+def test_semantic_query_finds_technology_without_shared_words():
+    sample = corpus()
+    sample.embeddings = {"pay": [1.0, 0.0], "kyc": [0.0, 1.0]}
+    sample.embedding_model = "EmbeddingsGigaR"
+    response = search_response(
+        sample, "orbital humming", T, settings(),
+        query_embedding=[1.0, 0.0],
+    )
+    assert response["scope"] == "hybrid"
+    assert [signal["id"] for signal in response["signals"]] == ["pay"]
+    assert response["signals"][0]["semanticSimilarity"] == 1.0
+
+
+def test_relevance_and_signal_score_are_separate_and_top_k_applies():
+    sample = corpus()
+    sample.embeddings = {"pay": [1.0, 0.0], "kyc": [0.8, 0.6]}
+    sample.embedding_model = "EmbeddingsGigaR"
+    config = settings()
+    config["top_k"] = 1
+    response = search_response(
+        sample, "fintech", T, config, query_embedding=[1.0, 0.0]
+    )
+    assert len(response["signals"]) == 1
+    first = response["signals"][0]
+    assert first["id"] == "pay"
+    assert first["score"] == round(
+        0.75 * first["relevanceScore"] + 0.25 * first["weakSignalScore"],
+        4,
+    )
+
+
+def test_search_returns_at_most_fifteen_of_many_matching_technologies():
+    data = {"versions": [], "mentions": [], "technologies": []}
+    for index in range(20):
+        technology(
+            data, f"pay-{index}", f"Programmable payments {index}",
+            FINTECH, [("2020-01-01", "a"), ("2020-10-01", "b")],
+        )
+    response = search_response(
+        TemporalCorpus(data), "fintech", T, settings()
+    )
+    assert response["stats"]["candidates"] == 20
+    assert len(response["signals"]) == 15
 
 
 def test_search_service_reads_the_graph_once_per_cache_period():
@@ -232,3 +307,63 @@ def test_search_service_reads_the_graph_once_per_cache_period():
     assert first["snapshot"] == "2021-01-01"
     assert first["stats"]["sourcesProcessed"] == 1
     assert len(reads) == 2
+
+
+def test_search_service_embeds_query_in_the_graphs_gigachat_space():
+    import asyncio
+
+    from lctrend.ranking.search import SearchService
+
+    data = {"versions": [], "mentions": [], "technologies": []}
+    docs = [("2020-01-01", "a"), ("2020-10-01", "b")]
+    technology(data, "pay", "Programmable payments", FINTECH, docs)
+    technology(data, "arm", "Soft grippers", ROBOTICS, docs)
+    for row in data["technologies"]:
+        row["embedding_model"] = "EmbeddingsGigaR"
+        row["embedding"] = (
+            [1.0, 0.0] if row["technology_id"] == "pay" else [0.0, 1.0]
+        )
+    calls = []
+
+    async def embed(query, model):
+        calls.append((query, model))
+        return [1.0, 0.0]
+
+    async def read():
+        return data
+
+    result = asyncio.run(
+        SearchService(read, settings(), embed_query=embed).search(
+            "orbital humming", T
+        )
+    )
+    assert calls == [("orbital humming", "EmbeddingsGigaR")]
+    assert [signal["id"] for signal in result["signals"]] == ["pay"]
+
+
+def test_search_rejects_vectors_from_a_different_embedding_model():
+    import asyncio
+
+    from lctrend.ranking.search import EmbeddingIndexError, SearchService
+
+    data = {"versions": [], "mentions": [], "technologies": []}
+    technology(
+        data, "pay", "Programmable payments", FINTECH,
+        [("2020-01-01", "a"), ("2020-10-01", "b")],
+    )
+    data["technologies"][0].update(
+        embedding=[1.0, 0.0], embedding_model="other-model"
+    )
+
+    async def read():
+        return data
+
+    async def embed(query, model):
+        pytest.fail("An incompatible model must not be queried")
+
+    with pytest.raises(EmbeddingIndexError):
+        asyncio.run(
+            SearchService(read, settings(), embed_query=embed).search(
+                "payments", T
+            )
+        )
