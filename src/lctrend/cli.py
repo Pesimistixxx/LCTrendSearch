@@ -157,10 +157,6 @@ class _NoLock:
         return False
 
 
-def _write_ingested(*args, **kwargs) -> None:
-    asyncio.run(_write_ingested_async(*args, **kwargs))
-
-
 def _ingest(
     document,
     extract: bool,

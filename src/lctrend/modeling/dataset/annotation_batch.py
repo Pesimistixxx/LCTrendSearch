@@ -1,6 +1,6 @@
 """Expert annotation batch: historical slices plus the organisers' list.
 
-The batch (first built by ``artifacts/annotation_batch_data.py``) gives
+The batch gives
 people what the LLM labels cannot: a checked, independent set of labels.
 It is a workbook of three sheets:
 

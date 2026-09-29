@@ -242,16 +242,6 @@ def build_training_rows(
     return rows
 
 
-def write_training_rows(path: Path, rows: Iterable[Dict[str, object]]) -> int:
-    values = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(values)
-    return len(values)
-
-
 def build_feature_rows(
     mentions: Iterable[Dict[str, object]],
     documents: Iterable[Dict[str, object]],
@@ -383,17 +373,6 @@ def build_feature_rows(
     return rows
 
 
-def write_feature_rows(path: Path, rows: Iterable[Dict[str, object]]) -> int:
-    values = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=FEATURE_FIELDS)
-        writer.writeheader()
-        writer.writerows(values)
-    return len(values)
-
-
-# The functions above remain import-compatible for consumers of legacy files.
 # Both CLI exports below use the same point-in-time feature builder.
 IDENTITY_FIELDS = [
     "technology_id",

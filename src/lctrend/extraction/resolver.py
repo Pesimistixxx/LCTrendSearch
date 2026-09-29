@@ -53,10 +53,6 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def lemmatize_name(value: str) -> str:
-    return lexical_key(value)
-
-
 def context_text(label: str, definition: Optional[str] = None) -> str:
     """The text a concept is embedded and compared as: its name and, when a
     source says what it is, that definition. A bare code ("ML-236B") says

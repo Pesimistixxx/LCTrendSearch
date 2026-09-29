@@ -374,16 +374,6 @@ def predict_logits(model, graphs, batch_size=256):
     return np.concatenate(result) if result else np.zeros(0)
 
 
-def _predict(model, samples, names, scaler, technology_rows=None):
-    return predict_logits(
-        model,
-        [
-            hgt_data(sample, names, scaler, technology_rows)
-            for sample in samples
-        ],
-    )
-
-
 def fit_hgt(
     train,
     in_features,
