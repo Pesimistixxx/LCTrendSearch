@@ -184,6 +184,71 @@ def test_label_words_select_technologies_without_a_domain_match():
     assert [signal["id"] for signal in response["signals"]] == ["arm"]
 
 
+def test_model_labels_order_signals_and_reject_noise():
+    labels = {
+        "kyc": {
+            "probability": 0.82,
+            "flag": True,
+            "model": "stacked.cbm",
+            "snapshot": "2020-10-01",
+            "verdict": "success",
+            "is_technology": True,
+            "llm_score": 0.2,
+            "rationale": "Rising from niche papers to pilots.",
+        },
+        "pay": {
+            "probability": 0.0,
+            "is_technology": True,
+        },
+        "arm": {
+            "verdict": "junk",
+            "is_technology": False,
+            "rationale": "A product feature, not a technology.",
+        },
+    }
+    response = search_response(
+        corpus(), "что-то непонятное", T, settings(), labels=labels
+    )
+    assert response["ranking"] == "model"
+    # kyc by its probability, then pay (probability 0), noise removed.
+    assert [signal["id"] for signal in response["signals"]] == ["kyc", "pay"]
+    kyc, pay = response["signals"]
+    assert kyc["score"] == 0.82 and pay["score"] == 0.0
+    assert kyc["model"]["verdict"] == "состоялась"
+    assert kyc["model"]["flag"] is True
+    assert "Rising from niche papers" in kyc["whyWeak"]
+    assert "82%" in kyc["confidenceReason"]
+    assert response["stats"]["candidates"] == 2
+    assert response["stats"]["confident"] == 1
+    assert response["rejected"][0] == {
+        "title": "Soft grippers",
+        "category": "noise",
+        "reason": "LLM: не технология. A product feature, not a technology.",
+    }
+
+
+def test_without_labels_the_rule_score_is_kept():
+    response = search_response(corpus(), "решения в финтехе", T, settings())
+    assert response["ranking"] == "rule"
+    assert all(signal["model"] is None for signal in response["signals"])
+
+
+def test_search_service_falls_back_when_labels_fail():
+    import asyncio
+
+    from lctrend.ranking.search import SearchService
+
+    async def read():
+        return {"versions": [], "mentions": [], "technologies": []}
+
+    async def broken():
+        raise ConnectionError("graph down")
+
+    service = SearchService(read, settings(), read_labels=broken)
+    response = asyncio.run(service.search("anything", T))
+    assert response["ranking"] == "rule"
+
+
 def test_search_service_reads_the_graph_once_per_cache_period():
     import asyncio
 

@@ -1,0 +1,36 @@
+# Light stack: only the weak-signal search, reading the shared Neo4j.
+# No ingestion, no LLM key, no model downloads; builds in a few minutes.
+#
+#   docker compose -f compose.search.yaml up -d --build
+#
+# .env needs only NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD; for a public
+# domain also LCTREND_DOMAIN and FRONTEND_HOST=0.0.0.0.
+services:
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_SEARCH_ONLY: "1"
+    image: lctrend-search-web
+    environment:
+      LCTREND_DOMAIN: ${LCTREND_DOMAIN:-}
+    ports:
+      - "${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5188}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Named backend: the web image's nginx proxies /api/ to backend:8000.
+  backend:
+    build:
+      context: .
+      dockerfile: docker/search/Dockerfile
+    image: lctrend-search-api
+    # Only what the search reads; ingestion and LLM keys stay out.
+    environment:
+      NEO4J_URI: ${NEO4J_URI:?set NEO4J_URI in .env}
+      NEO4J_USER: ${NEO4J_USER:?set NEO4J_USER in .env}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}
+      LCTREND_DOMAIN: ${LCTREND_DOMAIN:-}
+    restart: unless-stopped

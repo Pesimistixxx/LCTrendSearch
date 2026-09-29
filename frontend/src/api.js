@@ -20,10 +20,17 @@ GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search
   scope: 'domain'|'label'|'all',      // чем запрос отобрал технологии
   matched: string[],                  // найденные домены (scope = 'domain')
   note: string|null,                  // пояснение, например «показан общий ТОП»
+  ranking: 'model'|'rule',            // model: порядок по вероятности обученной модели
+                                      // (узлы графа, ноутбук 05); rule: скор-заготовка
   stats: { sourcesProcessed: number, candidates: number, confident: number },   // confident = score > 0.75
   signals: [{                         // ТОП-15, отсортированы по score
     id, title, domain,
-    score: 0..1,                      // скор: логистика от Σ вес × z-оценка (не вероятность)
+    score: 0..1,                      // ranking=model: калиброванная вероятность слабого сигнала;
+                                      // rule: логистика от Σ вес × z-оценка (не вероятность)
+    model: null | {                   // оценки с узла Technology (signal_*, llm_*)
+      probability, flag, name, snapshot,          // модель
+      verdict, llmScore, hype, maturity, rationale // LLM-разметка траектории
+    },
     stage: string,                    // «прототипы» | «пилоты» | … | «не определена»
     summary: string,                  // одна строка для таблицы
     predictors: [{ name, weight, value: string }],   // топ-3 вклада: вес × z-оценка признака
@@ -36,7 +43,7 @@ GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search
     sources: [{ title, url, date, type, lang, trust: 'high'|'medium'|'low',
                 summaryRu?: string, generated?: bool }]   // generated = автоперевод/LLM-резюме
   }],
-  rejected: [{ title, category: 'mature'|'hype'|'standard'|'noise', reason }]
+  rejected: [{ title, category: 'mature'|'hype'|'standard'|'noise', reason }]   // noise: LLM «не технология»
 }
 
 GET /api/graph?q=<запрос>[&signal=<id>]  →  (из Neo4j; на бэкенде пока нет —

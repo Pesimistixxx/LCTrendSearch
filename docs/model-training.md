@@ -30,9 +30,9 @@ HGT не выдаёт «метаданные» для CatBoost; его вект�
 только out-of-fold, иначе метка утечёт через вектор.
 
 ```bash
-python -m lctrend.modeling enrich-neighbors --run 2026-09-29 \
-  --dataset artifacts/full-history-2026-09-29.csv \
-  --subgraphs artifacts/full-training-dataset-2026-09-29.zip
+python -m lctrend.modeling enrich-neighbors --run 2026-09-29-dedup \
+  --dataset artifacts/modeling/2026-09-29-dedup/dataset/history.csv \
+  --subgraphs artifacts/modeling/2026-09-29-dedup/dataset/subgraphs.jsonl
 ```
 
 ### Лаборатория: ноутбуки по шагам
@@ -44,6 +44,8 @@ python -m lctrend.modeling enrich-neighbors --run 2026-09-29 \
 | `notebooks/03_dataset.ipynb` | сборка выборки по шагам: соседи, семейства, метки, разбиение, отбор признаков |
 | `notebooks/04_training.ipynb` | CatBoost, HGT, стекинг: метрики с интервалами, кривая точность/полнота, калибровка, важность признаков, объяснение оценки, финальная разметка |
 | `notebooks/05_graph.ipynb` | запись в узлы `Technology`: вероятность модели (`signal_*`) и разметка LLM (`llm_*`, в том числе флаг шума); запись и отмена — явными ячейками |
+| `notebooks/06_research.ipynb` | граф против таблицы: базовые уровни, CatBoost и HGT на нескольких зёрнах, контроль на перемешанных метках |
+| `notebooks/07_benchmark.ipynb` | внешняя проверка на «Списке 100» организаторов и устройство обученных моделей |
 
 Общая настройка — `notebooks/lab.py` (пути запуска из `training.json`,
 стиль графиков). Зависимости: `pip install -e ".[models,notebook]"`.

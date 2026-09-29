@@ -159,6 +159,30 @@ def best_f1_threshold(labels, probabilities):
     )
 
 
+TOP_K = (15, 50, 100)
+
+
+def top_k_metrics(labels, probabilities, k):
+    """The search shows a TOP list, not a threshold: of the k highest
+    scores, how many are signals (precision), what share of all signals
+    they catch (recall) and how many times the positive rate that is
+    (lift; 1 = no better than a random list)."""
+    labels = np.asarray(labels, dtype=int)
+    k = min(int(k), len(labels))
+    if not k:
+        return {"k": 0, "precision": 0.0, "recall": 0.0, "lift": 0.0}
+    # Stable sort: ties keep row order, so the result is reproducible.
+    order = np.argsort(-np.asarray(probabilities, dtype=float), kind="stable")
+    hits = int(labels[order[:k]].sum())
+    rate = labels.mean()
+    return {
+        "k": k,
+        "precision": hits / k,
+        "recall": hits / labels.sum() if labels.sum() else 0.0,
+        "lift": (hits / k) / rate if rate else 0.0,
+    }
+
+
 def _metrics(labels, probs, weights, threshold=None):
     """Ranking, calibration and threshold metrics of one part.
 
@@ -170,6 +194,7 @@ def _metrics(labels, probs, weights, threshold=None):
         accuracy_score,
         average_precision_score,
         brier_score_loss,
+        log_loss,
         roc_auc_score,
     )
 
@@ -187,7 +212,21 @@ def _metrics(labels, probs, weights, threshold=None):
         "brier": float(
             brier_score_loss(labels, probabilities, sample_weight=weights)
         ),
+        "top_k": {
+            str(k): top_k_metrics(labels, probabilities, k) for k in TOP_K
+        },
+        "top_decile": top_k_metrics(
+            labels, probabilities, max(1, round(len(labels) / 10))
+        ),
     }
+    if len(set(labels)) == 2:
+        values["log_loss"] = float(
+            log_loss(
+                labels,
+                np.clip(probabilities, 1e-6, 1 - 1e-6),
+                sample_weight=weights,
+            )
+        )
     total = float(sum(weights))
     calibration_error = 0.0
     for bucket in range(10):

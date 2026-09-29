@@ -2241,6 +2241,30 @@ class GraphStore:
         async with self._driver.session(database=self._database) as session:
             return [_data(record) for record in await _records(session, query)]
 
+    async def read_technology_labels(self) -> Dict[str, Dict[str, Any]]:
+        """Model scores and LLM labels written by
+        ``modeling.labeling.graph_labels``, by technology id."""
+        query = """
+            MATCH (t:Technology)
+            WHERE coalesce(t.status, '') <> 'merged'
+              AND (t.signal_probability IS NOT NULL
+                   OR t.llm_verdict IS NOT NULL)
+            RETURN t.concept_id AS technology_id,
+                   t.signal_probability AS probability,
+                   t.signal_flag AS flag, t.signal_model AS model,
+                   t.signal_snapshot AS snapshot,
+                   t.llm_verdict AS verdict,
+                   t.llm_is_technology AS is_technology,
+                   t.llm_score AS llm_score, t.llm_hype AS hype,
+                   t.llm_maturity AS maturity,
+                   t.llm_rationale AS rationale
+        """
+        async with self._driver.session(database=self._database) as session:
+            return {
+                row["technology_id"]: row
+                for row in map(_data, await _records(session, query))
+            }
+
     async def read_related_chunks(
         self,
         query: str,
