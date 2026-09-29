@@ -168,7 +168,7 @@ async def clear_labels(store: Any) -> int:
 
 
 def main(argv=None) -> Dict[str, Any]:
-    from ...cli import _graph
+    from ...session import with_graph
 
     parser = argparse.ArgumentParser(
         prog="python -m lctrend.modeling.labeling.graph_labels",
@@ -181,13 +181,15 @@ def main(argv=None) -> Dict[str, Any]:
     )
     args = parser.parse_args(argv)
     if args.clear:
-        result = {"cleared": asyncio.run(_graph(clear_labels))}
+        result = {"cleared": asyncio.run(with_graph(clear_labels))}
     else:
         rows = graph_rows(
             read_scores(args.scores) if args.scores else [],
             read_answers(args.llm) if args.llm else {},
         )
-        result = asyncio.run(_graph(lambda store: write_labels(store, rows)))
+        result = asyncio.run(
+            with_graph(lambda store: write_labels(store, rows))
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return result
 

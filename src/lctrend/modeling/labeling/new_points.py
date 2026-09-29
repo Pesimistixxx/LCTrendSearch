@@ -177,13 +177,13 @@ async def run(
     rescore_all: bool = False,
     dedup: bool = True,
 ) -> Dict[str, Any]:
-    from ...cli import _embed_concepts, _temporal_data
+    from ...session import embed_concepts, temporal_corpus
     from ..dataset.deduplication import ConceptDeduplicator
     from ..storage import RunLayout
     from .graph_labels import graph_rows, write_labels
 
     layout = RunLayout.at(config["run"])
-    embedded = await _embed_concepts(store)
+    embedded = await embed_concepts(store)
     merged = None
     if dedup:
         family = ConceptDeduplicator(["Technology", "Method", "Material"])
@@ -201,7 +201,7 @@ async def run(
             "scored": 0,
             "written": 0,
         }
-    corpus = await _temporal_data(store)
+    corpus = await temporal_corpus(store)
     rows, samples, index = await asyncio.to_thread(feature_rows, corpus, ids)
     scores = await asyncio.to_thread(
         score, rows, samples, index, layout.models
@@ -228,8 +228,8 @@ async def run(
 
 
 def main(argv=None) -> Dict[str, Any]:
-    from ...cli import _graph
     from ...core.config import load_environment
+    from ...session import with_graph
     from ..config import load_config
 
     parser = argparse.ArgumentParser(
@@ -254,7 +254,7 @@ def main(argv=None) -> Dict[str, Any]:
         )
     config = load_config()
     result = asyncio.run(
-        _graph(
+        with_graph(
             lambda store: run(
                 store, config, args.write, args.all, not args.no_dedup
             )

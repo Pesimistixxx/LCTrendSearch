@@ -19,10 +19,8 @@ from .core.config import load_catalog, load_environment
 from .core.logging_config import setup_logging
 from .core.models import stable_id
 from .extraction.processing import process_material, seed_semantic
-from .extraction.resolver import ConceptRegistry, context_text
-from .graph.store import GraphStore
+from .extraction.resolver import ConceptRegistry
 from .graph.subgraphs import sample_subgraph, write_subgraph_rows
-from .graph.temporal import TemporalCorpus
 from .graph.training import (
     build_dataset_rows,
     build_snapshot_rows,
@@ -47,6 +45,11 @@ from .ingest.fulltext import attach_openalex_fulltext, require_pdf_support
 from .ingest.processed import covers, known_fulltexts, prior_inputs
 from .ingest.snapshots import persist_snapshot as _snapshot
 from .linking.reconcile import reconcile_quietly
+from .session import embed_concepts as _embed_concepts
+from .session import open_store as _store
+from .session import opened as _opened
+from .session import temporal_corpus as _temporal_data
+from .session import with_graph
 from .taxonomy import (
     TaxonomyConcept,
     build_taxonomy,
@@ -78,26 +81,6 @@ def _parse(kind: str, path: Path):
         payload = json.loads(raw)
         document = PARSERS[kind](payload, raw=raw)
     return _snapshot(document, raw)
-
-
-def _store() -> GraphStore:
-    load_environment()
-    return GraphStore(
-        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        os.getenv("NEO4J_USER", "neo4j"),
-        os.getenv("NEO4J_PASSWORD", "change-me-now"),
-    )
-
-
-@asynccontextmanager
-async def _opened(store):
-    """Open a graph store; offline test doubles may be synchronous."""
-    if hasattr(store, "__aenter__"):
-        async with store as opened:
-            yield opened
-    else:
-        with store as opened:
-            yield opened
 
 
 async def _write_ingested_async(
@@ -1275,55 +1258,12 @@ def main() -> None:
 
 
 async def _graph(action):
-    async with _opened(_store()) as store:
-        return await action(store)
+    # ``_store`` is looked up per call, so tests can replace it.
+    return await with_graph(action, _store)
 
 
 async def _ensure_schema(store):
     await resolve(store.ensure_schema())
-
-
-async def _embed_concepts(store, force=False):
-    """Backfill label vectors, e.g. for documents processed while the
-    embedding endpoint was unavailable. A vector is dated by its concept's
-    first appearance in snapshots, so a late backfill changes no history.
-    """
-    from .extraction.processing import _semantic_deduplicator
-
-    semantic = _semantic_deduplicator()
-    model = semantic.embedding_model_name
-    kinds = list(load_catalog("resolver")["semantic"]["embedded_kinds"])
-    pending = await resolve(store.read_concepts_to_embed(kinds, model, force))
-    written = 0
-    for start in range(0, len(pending), semantic.batch_size):
-        batch = pending[start : start + semantic.batch_size]
-        texts = [
-            context_text(row["label"], row.get("definition")) for row in batch
-        ]
-        vectors = await asyncio.to_thread(semantic.embed, texts)
-        if vectors is None:
-            raise RuntimeError(
-                "Embedding endpoint unavailable "
-                f"({semantic.failure}); {written} vectors written"
-            )
-        await resolve(
-            store.write_concept_embeddings(
-                [
-                    {**row, "vector": vector, "text": text}
-                    for row, vector, text in zip(batch, vectors, texts)
-                ],
-                model,
-            )
-        )
-        written += len(batch)
-        logger.info("Embedded %d/%d concepts", written, len(pending))
-    return {"model": model, "pending": len(pending), "embedded": written}
-
-
-async def _temporal_data(store, as_known=False):
-    return TemporalCorpus(
-        await resolve(store.read_temporal_data()), as_known=as_known
-    )
 
 
 async def _taxonomy_data(store, snapshot=None):

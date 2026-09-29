@@ -214,15 +214,9 @@ def default_workers() -> int:
 
 
 def _store_factory():
-    from lctrend.core.config import load_environment
-    from lctrend.graph.store import GraphStore
+    from lctrend.session import open_store
 
-    load_environment()
-    return GraphStore(
-        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        os.getenv("NEO4J_USER", "neo4j"),
-        os.getenv("NEO4J_PASSWORD", "change-me-now"),
-    )
+    return open_store()
 
 
 def _provider_factory():

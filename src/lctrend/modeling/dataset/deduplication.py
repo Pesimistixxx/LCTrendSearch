@@ -754,8 +754,8 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def main(argv=None) -> Dict[str, Any]:
-    from ...cli import _embed_concepts, _graph
     from ...core.config import load_catalog, load_environment
+    from ...session import embed_concepts, with_graph
 
     parser = argparse.ArgumentParser(
         prog="python -m lctrend.modeling.dataset.deduplication",
@@ -792,7 +792,7 @@ def main(argv=None) -> Dict[str, Any]:
 
     async def work(store):
         # Missing vectors first: a concept without one cannot be compared.
-        embedded = await _embed_concepts(store)
+        embedded = await embed_concepts(store)
         log = await deduplicate_graph(
             store,
             embedded["model"],
@@ -806,7 +806,7 @@ def main(argv=None) -> Dict[str, Any]:
         log["embedded_missing"] = embedded["embedded"]
         return log
 
-    log = asyncio.run(_graph(work))
+    log = asyncio.run(with_graph(work))
     write_json(args.log, log)
     result = summary(log) | {"log": str(args.log)}
     print(json.dumps(result, ensure_ascii=False, indent=2))

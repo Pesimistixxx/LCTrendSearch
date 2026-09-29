@@ -20,8 +20,6 @@ from typing import Iterable, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
-from lctrend.core.config import load_environment
-
 logger = logging.getLogger(__name__)
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
@@ -44,14 +42,9 @@ def allowed_hosts(configured: Optional[Iterable[str]] = None) -> list:
 
 
 def _store():
-    from lctrend.graph.store import GraphStore
+    from lctrend.session import open_store
 
-    load_environment()
-    return GraphStore(
-        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        os.getenv("NEO4J_USER", "neo4j"),
-        os.getenv("NEO4J_PASSWORD", "change-me-now"),
-    )
+    return open_store()
 
 
 async def read_graph() -> dict:

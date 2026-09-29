@@ -227,14 +227,10 @@ def _neo4j_ready() -> dict:
         return dict(cached[1])
     neo = {"available": False, "message": "Neo4j недоступен"}
     try:
-        from lctrend.graph.store import GraphStore
+        from lctrend.session import open_store
 
         async def check():
-            async with GraphStore(
-                os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-                os.getenv("NEO4J_USER", "neo4j"),
-                os.getenv("NEO4J_PASSWORD", "change-me-now"),
-            ) as store:
+            async with open_store() as store:
                 await store.verify_connectivity()
 
         # Sync endpoints run in a worker thread without an event loop.

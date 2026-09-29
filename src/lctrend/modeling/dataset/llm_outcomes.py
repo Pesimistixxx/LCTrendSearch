@@ -624,9 +624,9 @@ def main(argv=None) -> Dict[str, Any]:
             / "certs/gigachat-ca-bundle.pem"
         )
     if args.from_graph:
-        from ...cli import _graph, _temporal_data
+        from ...session import temporal_corpus, with_graph
 
-        corpus = asyncio.run(_graph(_temporal_data))
+        corpus = asyncio.run(with_graph(temporal_corpus))
         items = packets_from_corpus(corpus)
         history = None
         logger.info("%d technologies to label from the graph", len(items))

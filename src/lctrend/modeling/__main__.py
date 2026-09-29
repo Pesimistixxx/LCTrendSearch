@@ -150,10 +150,10 @@ def main(argv=None):
     _run_arguments(score)
     args = parser.parse_args(argv)
     if args.command == "pilot":
-        from ..cli import _graph, _temporal_data
+        from ..session import temporal_corpus, with_graph
 
         corpus = asyncio.run(
-            _graph(lambda store: _temporal_data(store, args.as_known))
+            with_graph(lambda store: temporal_corpus(store, args.as_known))
         )
         rows = build_pilot_queue(corpus, args.technologies)
         print(
@@ -163,10 +163,10 @@ def main(argv=None):
             )
         )
     elif args.command == "export-pilot":
-        from ..cli import _graph, _temporal_data
+        from ..session import temporal_corpus, with_graph
 
         corpus = asyncio.run(
-            _graph(lambda store: _temporal_data(store, args.as_known))
+            with_graph(lambda store: temporal_corpus(store, args.as_known))
         )
         count = export_pilot_features(
             corpus,
@@ -177,10 +177,10 @@ def main(argv=None):
         )
         print(json.dumps({"rows": count}, ensure_ascii=False))
     elif args.command == "export-full":
-        from ..cli import _graph, _temporal_data
+        from ..session import temporal_corpus, with_graph
 
         corpus = asyncio.run(
-            _graph(lambda store: _temporal_data(store, args.as_known))
+            with_graph(lambda store: temporal_corpus(store, args.as_known))
         )
         report = export_full_history(
             corpus,

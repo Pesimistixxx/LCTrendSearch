@@ -174,9 +174,9 @@ def write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 
 
 def main(argv=None) -> Dict[str, Any]:
-    from ...cli import _graph
     from ...core.config import load_environment
     from ...extraction.processing import _semantic_deduplicator
+    from ...session import with_graph
     from ..config import load_config
     from ..dataset.annotation_batch import read_list
     from ..storage import RunLayout
@@ -202,7 +202,7 @@ def main(argv=None) -> Dict[str, Any]:
     items = read_list(args.list)
     model = _semantic_deduplicator().embedding_model_name
     matches = asyncio.run(
-        _graph(lambda store: match_list(store, items, model))
+        with_graph(lambda store: match_list(store, items, model))
     )
     scores_path = layout.labeling / "scores.csv"
     rows = attach_scores(
