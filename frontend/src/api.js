@@ -17,17 +17,24 @@ GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search
   query: string,
   snapshot: 'YYYY-MM-DD',             // дата T: всё посчитано по данным ≤ T
   demo: bool,                         // true только у синтетики mock.js
-  scope: 'hybrid'|'lexical',          // семантика + BM25 либо только BM25
+  scope: 'hybrid'|'lexical',          // семантика + BM25 либо только BM25 (GigaChat недоступен)
   matched: string[],                  // упомянутые в запросе домены
   note: string|null,                  // пояснение о недоступной семантике / пустом результате
+  ranking: 'model'|'rule',            // model: сигнальная часть — вероятность обученной модели
+                                      // (узлы графа, ноутбук 05); rule: эвристика признаков графа
   stats: { sourcesProcessed: number, candidates: number, confident: number },   // confident = weakSignalScore > 0.75
   signals: [{                         // ТОП-15, отсортированы по общему score
     id, title, domain,
     score: 0..1,                      // 0.75 × relevanceScore + 0.25 × weakSignalScore
     relevanceScore: 0..1,             // 0.65 × cosine + 0.35 × нормализованный BM25, при наличии обеих частей
-    weakSignalScore: 0..1,            // эвристика признаков графа, НЕ вероятность
+    weakSignalScore: 0..1,            // вероятность модели (ranking=model) либо эвристика правила
+    ruleScore: 0..1,                  // эвристика правила (для сравнения)
     semanticSimilarity: number|null,  // косинус запроса и названия технологии
     bm25Score: number,                // BM25 названия и домена на дату T
+    model: null | {                   // оценки с узла Technology (signal_*, llm_*)
+      probability, flag, name, snapshot,          // модель
+      verdict, llmScore, hype, maturity, rationale // LLM-разметка траектории
+    },
     stage: string,                    // «прототипы» | «пилоты» | … | «не определена»
     summary: string,                  // одна строка для таблицы
     predictors: [{ name, weight, value: string }],   // топ-3 вклада: вес × z-оценка признака
@@ -40,7 +47,7 @@ GET /api/search?q=<запрос>[&date=YYYY-MM-DD]  →  (lctrend.ranking.search
     sources: [{ title, url, date, type, lang, trust: 'high'|'medium'|'low',
                 summaryRu?: string, generated?: bool }]   // generated = автоперевод/LLM-резюме
   }],
-  rejected: [{ title, category: 'mature'|'hype'|'standard'|'noise', reason }]
+  rejected: [{ title, category: 'mature'|'hype'|'standard'|'noise', reason }]   // noise: LLM «не технология»
 }
 
 GET /api/graph?q=<запрос>[&signal=<id>]  →  (из Neo4j; на бэкенде пока нет —

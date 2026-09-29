@@ -399,3 +399,23 @@ def test_platt_calibration_moves_the_prior_back():
     probabilities = calibrated(logits, temperature, intercept)
     assert abs(probabilities.mean() - labels.mean()) < 0.01
     assert intercept < 0
+
+
+def test_top_k_metrics_measure_the_shown_list():
+    from lctrend.modeling.training.catboost_model import (
+        _metrics,
+        top_k_metrics,
+    )
+
+    labels = [1, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+    scores = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    top = top_k_metrics(labels, scores, 3)
+    assert top["precision"] == 2 / 3
+    assert top["recall"] == 1.0
+    # 2/3 of the list against a 20 % positive rate.
+    assert round(top["lift"], 6) == round((2 / 3) / 0.2, 6)
+    assert top_k_metrics(labels, scores, 100)["k"] == 10
+    values = _metrics(labels, scores, [1.0] * 10)
+    assert set(values["top_k"]) == {"15", "50", "100"}
+    assert values["top_decile"]["k"] == 1
+    assert values["log_loss"] > 0

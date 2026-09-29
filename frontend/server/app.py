@@ -13,7 +13,6 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from datetime import date
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from tempfile import NamedTemporaryFile
 from threading import RLock
@@ -40,6 +39,8 @@ from lctrend.core import aio
 from lctrend.core.config import load_catalog, load_environment
 
 from .jobs import MAX_WORKERS, _provider_factory, default_workers
+from .search_api import add_search_route
+from .search_api import allowed_hosts as _search_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -123,17 +124,9 @@ class TopicRequest(BaseModel):
 # The UI is local: a request naming another host is a DNS-rebinding or
 # proxy trick. Origin checks compare with the Host header, so the Host
 # itself must be trusted first.
-DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
-
-
 def _allowed_hosts(configured=None) -> list:
-    if configured is None:
-        configured = [
-            item.strip()
-            for item in os.getenv("LCTREND_ALLOWED_HOSTS", "").split(",")
-            if item.strip()
-        ]
-    return list(dict.fromkeys([*DEFAULT_ALLOWED_HOSTS, *configured]))
+    # Local names, LCTREND_DOMAIN and LCTREND_ALLOWED_HOSTS.
+    return _search_hosts(configured)
 
 
 def _llm_endpoint(provider: str, base_url: str = "") -> tuple:
@@ -216,19 +209,6 @@ def _source_status() -> dict:
             ),
         },
     }
-
-
-async def _read_graph() -> dict:
-    """The whole dated graph for the search ranking."""
-    from lctrend.graph.store import GraphStore
-
-    load_environment()
-    async with GraphStore(
-        os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        os.getenv("NEO4J_USER", "neo4j"),
-        os.getenv("NEO4J_PASSWORD", "change-me-now"),
-    ) as store:
-        return await store.read_temporal_data()
 
 
 # The page polls readiness every few seconds; a fresh Neo4j driver per poll
@@ -545,39 +525,7 @@ def create_app(
             if temporary:
                 temporary.unlink(missing_ok=True)
 
-    @app.get("/api/search")
-    async def search_signals(
-        q: str = Query(max_length=200),
-        snapshot: Optional[str] = Query(default=None, alias="date"),
-    ):
-        query = q.strip()
-        if not query:
-            raise HTTPException(422, "Введите запрос")
-        try:
-            cutoff = date.fromisoformat(snapshot) if snapshot else None
-        except ValueError:
-            raise HTTPException(422, "date: ожидается YYYY-MM-DD") from None
-        if app.state.search is None:
-            from lctrend.ranking.search import SearchService
-
-            app.state.search = SearchService(_read_graph)
-        try:
-            return await app.state.search.search(query, cutoff)
-        except Exception as exc:
-            # Connection errors name hosts; keep them in the server log.
-            logger.exception("Search %r failed", query)
-            from lctrend.llm.client import LLMError
-            from lctrend.ranking.search import EmbeddingIndexError
-
-            if isinstance(exc, LLMError):
-                detail = "GigaChat недоступен: проверьте ключ и подключение"
-            elif isinstance(exc, EmbeddingIndexError):
-                detail = "Эмбеддинги технологий несовместимы с поиском"
-            else:
-                detail = "Граф недоступен: проверьте подключение к Neo4j"
-            raise HTTPException(
-                503, detail
-            ) from None
+    add_search_route(app)
 
     @app.get("/api/health")
     def health():
@@ -673,9 +621,7 @@ def create_app(
         partial ones."""
         with settings_lock:
             if partial:
-                return known(
-                    get_crawls().retry_failed, crawl_id, partial=True
-                )
+                return known(get_crawls().retry_failed, crawl_id, partial=True)
             return known(get_crawls().retry_failed, crawl_id)
 
     @app.get("/api/ingest/crawls/{crawl_id}/materials")

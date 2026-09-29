@@ -2,8 +2,11 @@ services:
   frontend:
     build:
       context: ./frontend
+    environment:
+      # Public domain of the UI (empty = only localhost); see README.
+      LCTREND_DOMAIN: ${LCTREND_DOMAIN:-}
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-5188}:80"
+      - "${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5188}:80"
     depends_on:
       backend:
         condition: service_healthy

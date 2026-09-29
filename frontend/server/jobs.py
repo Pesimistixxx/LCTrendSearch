@@ -147,9 +147,7 @@ async def _settle(tasks) -> None:
         if isinstance(outcome, BaseException) and not isinstance(
             outcome, asyncio.CancelledError
         ):
-            logger.error(
-                "Document task ended with %s", type(outcome).__name__
-            )
+            logger.error("Document task ended with %s", type(outcome).__name__)
 
 
 def _error(exc: Exception, stage: str) -> dict[str, str]:
@@ -1375,11 +1373,7 @@ class JobManager:
                     writer = self._snapshot_writer
                 document = await aio.call(writer, document, raw)
                 prior = await self._prior_inputs(job, document, store)
-                if (
-                    prior
-                    and not job["fulltext"]
-                    and covers(prior, document)
-                ):
+                if prior and not job["fulltext"] and covers(prior, document):
                     await self._record_metrics(document, store)
                     await self._skip(job_id, doc_id, document)
                     return

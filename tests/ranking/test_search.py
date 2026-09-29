@@ -141,8 +141,7 @@ def test_search_returns_the_frontend_contract_for_a_domain():
         "sourcesProcessed": 10,
         "candidates": 2,
         "confident": sum(
-            signal["weakSignalScore"] > 0.75
-            for signal in response["signals"]
+            signal["weakSignalScore"] > 0.75 for signal in response["signals"]
         ),
     }
     signal = response["signals"][0]
@@ -207,9 +206,7 @@ def test_label_words_select_technologies_without_a_domain_match():
 
 
 def test_exact_mature_technology_shows_its_rejection_reason():
-    response = search_response(
-        corpus(), "double-entry ledger", T, settings()
-    )
+    response = search_response(corpus(), "double-entry ledger", T, settings())
     assert response["signals"] == []
     assert response["rejected"][0]["category"] == "mature"
 
@@ -219,7 +216,10 @@ def test_semantic_query_finds_technology_without_shared_words():
     sample.embeddings = {"pay": [1.0, 0.0], "kyc": [0.0, 1.0]}
     sample.embedding_model = "EmbeddingsGigaR"
     response = search_response(
-        sample, "orbital humming", T, settings(),
+        sample,
+        "orbital humming",
+        T,
+        settings(),
         query_embedding=[1.0, 0.0],
     )
     assert response["scope"] == "hybrid"
@@ -249,14 +249,100 @@ def test_search_returns_at_most_fifteen_of_many_matching_technologies():
     data = {"versions": [], "mentions": [], "technologies": []}
     for index in range(20):
         technology(
-            data, f"pay-{index}", f"Programmable payments {index}",
-            FINTECH, [("2020-01-01", "a"), ("2020-10-01", "b")],
+            data,
+            f"pay-{index}",
+            f"Programmable payments {index}",
+            FINTECH,
+            [("2020-01-01", "a"), ("2020-10-01", "b")],
         )
-    response = search_response(
-        TemporalCorpus(data), "fintech", T, settings()
-    )
+    response = search_response(TemporalCorpus(data), "fintech", T, settings())
     assert response["stats"]["candidates"] == 20
     assert len(response["signals"]) == 15
+
+
+def test_model_probability_replaces_the_rule_score_and_noise_is_rejected():
+    labels = {
+        "kyc": {
+            "probability": 0.82,
+            "flag": True,
+            "model": "stacked.cbm",
+            "snapshot": "2020-10-01",
+            "verdict": "success",
+            "is_technology": True,
+            "llm_score": 0.2,
+            "rationale": "Rising from niche papers to pilots.",
+        },
+        "pay": {
+            "verdict": "junk",
+            "is_technology": False,
+            "rationale": "A product feature, not a technology.",
+        },
+    }
+    response = search_response(
+        corpus(), "решения в финтехе", T, settings(), labels=labels
+    )
+    assert response["ranking"] == "model"
+    # pay is noise: out of the list, into the rejected with the reason.
+    assert [signal["id"] for signal in response["signals"]] == ["kyc"]
+    kyc = response["signals"][0]
+    assert kyc["weakSignalScore"] == 0.82
+    assert kyc["ruleScore"] != 0.82
+    assert kyc["model"]["verdict"] == "состоялась"
+    assert kyc["model"]["flag"] is True
+    assert "Rising from niche papers" in kyc["whyWeak"]
+    assert "82%" in kyc["confidenceReason"]
+    assert any(
+        item["category"] == "noise"
+        and item["reason"].endswith("A product feature, not a technology.")
+        for item in response["rejected"]
+    )
+
+
+def test_without_labels_the_rule_score_is_kept():
+    response = search_response(corpus(), "решения в финтехе", T, settings())
+    assert response["ranking"] == "rule"
+    assert all(signal["model"] is None for signal in response["signals"])
+
+
+def test_search_service_keeps_the_rule_score_when_labels_fail():
+    import asyncio
+
+    from lctrend.ranking.search import SearchService
+
+    async def read():
+        return {"versions": [], "mentions": [], "technologies": []}
+
+    async def broken():
+        raise ConnectionError("graph down")
+
+    service = SearchService(read, settings(), read_labels=broken)
+    response = asyncio.run(service.search("финтех", T))
+    assert response["ranking"] == "rule"
+
+
+def test_search_falls_back_to_bm25_when_gigachat_is_unavailable():
+    import asyncio
+
+    from lctrend.llm.client import LLMError
+    from lctrend.ranking.search import SearchService
+
+    data = {"versions": [], "mentions": [], "technologies": []}
+    docs = [("2020-01-01", "a"), ("2020-10-01", "b")]
+    technology(data, "pay", "Programmable payments", FINTECH, docs)
+    for row in data["technologies"]:
+        row["embedding_model"] = "EmbeddingsGigaR"
+        row["embedding"] = [1.0, 0.0]
+
+    async def read():
+        return data
+
+    async def embed(query, model):
+        raise LLMError("transport_error", "no key")
+
+    service = SearchService(read, settings(), embed_query=embed)
+    response = asyncio.run(service.search("programmable payments", T))
+    assert response["scope"] == "lexical"
+    assert "BM25" in response["note"]
 
 
 def test_search_service_reads_the_graph_once_per_cache_period():
@@ -348,7 +434,10 @@ def test_search_rejects_vectors_from_a_different_embedding_model():
 
     data = {"versions": [], "mentions": [], "technologies": []}
     technology(
-        data, "pay", "Programmable payments", FINTECH,
+        data,
+        "pay",
+        "Programmable payments",
+        FINTECH,
         [("2020-01-01", "a"), ("2020-10-01", "b")],
     )
     data["technologies"][0].update(

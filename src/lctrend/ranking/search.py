@@ -1,12 +1,18 @@
 """Hybrid technology search: GigaChat cosine + BM25 + weak-signal score.
 
-The weak-signal score is a provisional heuristic, not a model probability.
-Only technologies visible in the dated graph snapshot may be returned.
+Relevance to the query comes from the cosine of stored technology vectors
+and BM25 over names and domains. The weak-signal part is the trained
+model's calibrated probability written on the Technology nodes
+(``modeling.labeling.graph_labels``); a technology without one keeps the
+rule score of ``ranking.scoring``. Names the LLM judged not to be
+technologies are rejected as noise. Only technologies visible in the
+dated graph snapshot may be returned.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 import time
@@ -51,6 +57,39 @@ QUERY_STOPWORDS = frozenset(
     "области сфера направление emerging technology technologies trend "
     "trends weak signals new solutions field".split()
 )
+
+
+logger = logging.getLogger(__name__)
+
+VERDICTS = {
+    "success": "состоялась",
+    "niche": "ниша",
+    "faded": "угасла",
+    "junk": "не технология",
+    "mainstream": "мейнстрим",
+    "unclear": "неясно",
+}
+
+
+def _probability(label: Optional[Mapping[str, Any]]) -> Optional[float]:
+    value = (label or {}).get("probability")
+    return None if value is None else float(value)
+
+
+def _model_block(label: Mapping[str, Any]) -> Dict[str, Any]:
+    """What the trained model and the LLM say, for the insight card."""
+    verdict = label.get("verdict")
+    return {
+        "probability": _probability(label),
+        "flag": bool(label.get("flag")),
+        "name": label.get("model"),
+        "snapshot": label.get("snapshot"),
+        "verdict": VERDICTS.get(verdict, verdict),
+        "llmScore": label.get("llm_score"),
+        "hype": label.get("hype"),
+        "maturity": label.get("maturity"),
+        "rationale": label.get("rationale"),
+    }
 
 
 class EmbeddingIndexError(ValueError):
@@ -344,6 +383,29 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
     sources = independent_sources(
         technology, months_before(view.cutoff, rules["window_months"])
     )
+    label = item.get("label")
+    probability = _probability(label)
+    why_weak = (
+        f"Прошла правило отбора на {view.cutoff.isoformat()}: возраст "
+        f"{row.get('technology_age_days')} дн. (не больше "
+        f"{rules['max_age_years']} лет), {sources} независимых "
+        f"источника за {rules['window_months']} мес., стадия: {stage}."
+    )
+    if label and label.get("rationale"):
+        why_weak += f" Оценка LLM по траектории: {label['rationale']}"
+    if probability is None:
+        signal_part = (
+            f"скор слабого сигнала {item['score']:.2f} (рассчитан из "
+            "признаков графа правилом, это не вероятность)"
+        )
+    else:
+        model = label.get("model") or "CatBoost"
+        at = label.get("snapshot") or "последнюю дату"
+        signal_part = (
+            f"вероятность слабого сигнала {probability:.0%} — оценка "
+            f"обученной модели ({model}) по истории технологии на {at}, "
+            "откалиброванная на отложенной выборке"
+        )
     return {
         "id": item["technology_id"],
         "title": item["technology"],
@@ -351,6 +413,7 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
         "score": round(item["search_score"], 4),
         "relevanceScore": round(item["relevance_score"], 4),
         "weakSignalScore": round(item["score"], 4),
+        "ruleScore": round(item.get("rule_score", item["score"]), 4),
         "semanticSimilarity": (
             round(item["semantic_similarity"], 4)
             if item["semantic_similarity"] is not None
@@ -385,20 +448,14 @@ def _signal(corpus, view, item, config, domain_names) -> Dict[str, Any]:
         "quotes": evidence_quotes(
             corpus, technology, int(explanation["max_quotes"])
         ),
-        "whyWeak": (
-            f"Прошла правило отбора на {view.cutoff.isoformat()}: возраст "
-            f"{row.get('technology_age_days')} дн. (не больше "
-            f"{rules['max_age_years']} лет), {sources} независимых "
-            f"источника за {rules['window_months']} мес., стадия: {stage}."
-        ),
+        "whyWeak": why_weak,
         "confidenceReason": (
             f"Итоговый скор {item['search_score']:.2f} = релевантность "
             f"{item['relevance_score']:.2f} × "
-            f"{config['search']['relevance_weight']:.2f} + скор слабого "
-            f"сигнала {item['score']:.2f} × "
-            f"{config['search']['signal_weight']:.2f}. Последний рассчитан "
-            "из признаков графа, а не обученной моделью; это не вероятность."
+            f"{config['search']['relevance_weight']:.2f} + "
+            f"{config['search']['signal_weight']:.2f} × {signal_part}."
         ),
+        "model": _model_block(label) if label else None,
         "sources": _sources(
             corpus,
             technology,
@@ -415,12 +472,17 @@ def search_response(
     config: Optional[Mapping[str, Any]] = None,
     ranking: Optional[Ranking] = None,
     query_embedding: Optional[Sequence[float]] = None,
+    labels: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """TOP-K weak signals at T for the query, in the frontend contract.
 
     ``ranking`` may be a cached :func:`rank_snapshot` result of the same
-    corpus and date.
+    corpus and date. ``labels`` are the model scores and LLM labels on the
+    graph nodes (``GraphStore.read_technology_labels``): the model's
+    probability replaces the rule score where it exists, and names the
+    LLM calls not a technology are rejected as noise.
     """
+    labels = labels or {}
     config = config or load_catalog("ranking")
     ranking = ranking or _rank_snapshot(corpus, snapshot, config)
     view = corpus.view(snapshot)
@@ -430,22 +492,51 @@ def search_response(
         stable_id("domain", domain["name"]): domain["name"]
         for domain in load_catalog("sources")["domains"]
     }
+    candidates, noise = [], []
+    for item in ranking.candidates:
+        label = labels.get(item["technology_id"])
+        if label and label.get("is_technology") is False:
+            noise.append(item)
+            continue
+        probability = _probability(label)
+        candidates.append(
+            {
+                **item,
+                "rule_score": item["score"],
+                "score": item["score"] if probability is None else probability,
+                "label": label,
+            }
+        )
     chosen = _hybrid_matches(
-        corpus, view, ranking.candidates, query, query_embedding, config
+        corpus, view, candidates, query, query_embedding, config
     )
     signals = [
         _signal(corpus, view, item, config, domain_names)
         for item in chosen[: int(config["top_k"])]
     ]
-    rejected: List[Dict[str, str]] = [
-        {
-            "title": item["technology"],
-            "category": item["category"],
-            "reason": item["reason"],
-        }
-        for item in ranking.rejected
-        if rejected_scope != "all" and item["technology_id"] in rejected_ids
-    ][: int(config["top_k"])]
+    in_scope = rejected_scope != "all"
+    rejected: List[Dict[str, str]] = (
+        [
+            {
+                "title": item["technology"],
+                "category": "noise",
+                "reason": "LLM: не технология. "
+                + str(labels[item["technology_id"]].get("rationale") or ""),
+            }
+            for item in noise
+            if in_scope and item["technology_id"] in rejected_ids
+        ]
+        + [
+            {
+                "title": item["technology"],
+                "category": item["category"],
+                "reason": item["reason"],
+            }
+            for item in ranking.rejected
+            if in_scope and item["technology_id"] in rejected_ids
+        ]
+    )[: int(config["top_k"])]
+    top = chosen[: int(config["top_k"])]
     notes: Set[str] = set()
     if not _search_words(query):
         notes.add("Уточните технологию или предметную область запроса.")
@@ -460,12 +551,16 @@ def search_response(
         "scope": "hybrid" if query_embedding else "lexical",
         "matched": matched,
         "note": " ".join(sorted(notes)) or None,
+        # model: the signal part is the trained model; rule: the draft score.
+        "ranking": (
+            "model"
+            if any(_probability(item.get("label")) is not None for item in top)
+            else "rule"
+        ),
         "stats": {
             "sourcesProcessed": len(view.documents),
             "candidates": len(chosen),
-            "confident": sum(
-                item["score"] > 0.75 for item in chosen[: int(config["top_k"])]
-            ),
+            "confident": sum(item["score"] > 0.75 for item in top),
         },
         "signals": signals,
         "rejected": rejected,
@@ -477,7 +572,8 @@ class SearchService:
 
     Reading the whole dated graph and ranking a snapshot are the slow
     parts; both run once per cache period (ranking once per date), off the
-    event loop.
+    event loop. ``read_labels`` supplies the model scores and LLM labels
+    on the graph nodes; if it fails, the search keeps the rule score.
     """
 
     def __init__(
@@ -488,8 +584,13 @@ class SearchService:
         embed_query: Optional[
             Callable[[str, str], Awaitable[Sequence[float]]]
         ] = None,
+        read_labels: Optional[
+            Callable[[], Awaitable[Dict[str, Dict[str, Any]]]]
+        ] = None,
     ) -> None:
         self._read = read_data
+        self._read_labels = read_labels
+        self._labels: Dict[str, Dict[str, Any]] = {}
         self._config = config or load_catalog("ranking")
         self._clock = clock
         self._embed_query = embed_query
@@ -513,6 +614,7 @@ class SearchService:
             ):
                 data = await self._read()
                 self._corpus = await asyncio.to_thread(TemporalCorpus, data)
+                self._labels = await self._load_labels()
                 self._rankings = {}
                 self._loaded_at = self._clock()
             if snapshot not in self._rankings:
@@ -520,6 +622,7 @@ class SearchService:
                     _rank_snapshot, self._corpus, snapshot, self._config
                 )
             corpus, ranking = self._corpus, self._rankings[snapshot]
+            labels = self._labels
         vector = None
         if (
             ranking.candidates
@@ -532,16 +635,18 @@ class SearchService:
                     "Векторы технологий не совместимы с GigaChat: "
                     "перестройте эмбеддинги технологий"
                 )
-            if self._embed_query is not None:
-                vector = await self._embed_query(query, model)
-            else:
-                if self._embedder is None:
-                    from ..llm.client import JsonLLM
-
-                    self._embedder = JsonLLM.from_environment(
-                        provider="gigachat"
-                    )
-                vector = (await self._embedder.embed([query], model))[0]
+            vector = await self._query_vector(query, model)
+            if vector is None:
+                return await asyncio.to_thread(
+                    search_response,
+                    corpus,
+                    query,
+                    snapshot,
+                    self._config,
+                    ranking,
+                    None,
+                    labels,
+                )
             dimensions = len(next(iter(corpus.embeddings.values())))
             if len(vector) != dimensions:
                 raise EmbeddingIndexError(
@@ -555,4 +660,31 @@ class SearchService:
             self._config,
             ranking,
             vector,
+            labels,
         )
+
+    async def _query_vector(self, query: str, model: str):
+        """The query's embedding, or None when GigaChat is unavailable:
+        the search then answers by BM25 alone and says so in its note."""
+        from ..llm.client import LLMError
+
+        try:
+            if self._embed_query is not None:
+                return await self._embed_query(query, model)
+            if self._embedder is None:
+                from ..llm.client import JsonLLM
+
+                self._embedder = JsonLLM.from_environment(provider="gigachat")
+            return (await self._embedder.embed([query], model))[0]
+        except LLMError:
+            logger.warning("Query embedding unavailable; BM25 only")
+            return None
+
+    async def _load_labels(self) -> Dict[str, Dict[str, Any]]:
+        if self._read_labels is None:
+            return {}
+        try:
+            return await self._read_labels()
+        except Exception:
+            logger.exception("Technology labels unavailable; rule score used")
+            return {}

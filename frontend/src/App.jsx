@@ -1,14 +1,21 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { search, graph, DEMO_DATA } from './api.js'
 import Graph from './Graph.jsx'
-import Ingestion from './ingest/App.jsx'
 import './ingest/styles.css'
+
+// VITE_SEARCH_ONLY=1 — лёгкая сборка только с поиском: раздела сбора
+// материалов нет, его код не попадает в бандл.
+const SEARCH_ONLY = import.meta.env.VITE_SEARCH_ONLY === '1'
+const Ingestion = SEARCH_ONLY ? null : lazy(() => import('./ingest/App.jsx'))
 
 const EXAMPLES = ['технологии в ИИ', 'перспективные решения в финтехе', 'слабые сигналы в кибербезопасности', 'новые материалы', 'энергетика будущего']
 const STEPS = ['Сбор открытых источников', 'Парсинг патентов, статей, отчётов', 'NLP: извлечение сущностей', 'Инференс и скоринг', 'Фильтрация мейнстрима и хайпа']
 const TRUST = { high: 'Высокая', medium: 'Средняя', low: 'Пониженная' }
 const REJECT = { mature: 'Зрелая технология', hype: 'Маркетинговый хайп', standard: 'Отраслевой стандарт', noise: 'Инфошум' }
 const pct = (x) => Math.round(x * 100)
+// Подпись оценки: в демо — «уверенность», по модели — «вероятность», по правилу — «скор».
+// The card's big number is the search score: relevance plus the signal part.
+const scoreWord = () => (DEMO_DATA ? 'уверенность' : 'общий скор')
 const level = (s) => (s >= 0.85 ? 'hi' : s >= 0.75 ? 'mid' : 'lo')
 
 // ─── маршрутизация через hash: #q=<запрос>&s=<id сигнала> ───
@@ -19,7 +26,7 @@ export default function App() {
   const [route, setRoute] = useState(readHash)
   const [res, setRes] = useState(null)
   const [err, setErr] = useState(null)
-  const ingestion = route.view === 'ingest'
+  const ingestion = !SEARCH_ONLY && route.view === 'ingest'
 
   useEffect(() => {
     const on = () => setRoute(readHash())
@@ -44,12 +51,12 @@ export default function App() {
       <div className="sky" aria-hidden="true" />
       <Header q={route.q} compact={!!route.q || ingestion} ingestion={ingestion} />
       <main className="wrap">
-        {ingestion ? <Ingestion /> : <>
+        {ingestion ? <Suspense fallback={null}><Ingestion /></Suspense> : <>
           {!route.q && <Home />}
           {route.q && err && <div className="error card">Не удалось выполнить поиск: {err}</div>}
           {route.q && !res && !err && <Scanning q={route.q} />}
           {route.q && res && !route.s && <Results res={res} />}
-          {route.q && res && signal && <Insight s={signal} q={res.query} />}
+          {route.q && res && signal && <Insight s={signal} q={res.query} ranking={res.ranking} />}
         </>}
       </main>
       <footer className="foot wrap">
@@ -82,7 +89,7 @@ function Header({ q, compact, ingestion }) {
         {q && !ingestion && <SearchBox initial={q} />}
         <nav className="top-nav" aria-label="Разделы">
           <a href="#" aria-current={!ingestion ? 'page' : undefined}>{DEMO_DATA ? 'Демо поиска' : 'Поиск сигналов'}</a>
-          <a href="#view=ingest" aria-current={ingestion ? 'page' : undefined}>Сбор материалов</a>
+          {!SEARCH_ONLY && <a href="#view=ingest" aria-current={ingestion ? 'page' : undefined}>Сбор материалов</a>}
         </nav>
       </div>
     </header>
@@ -107,7 +114,7 @@ function Home() {
       <div className="chips">
         {EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => go({ q: e })}>{e}</button>)}
       </div>
-      <p className="lead small">{DEMO_DATA ? 'Поиск показывает демонстрационные данные. ' : 'ТОП-15 считается по графу знаний на текущую дату. '}<a className="ingestion-link" href="#view=ingest">Перейти к сбору и проверке материалов →</a></p>
+      <p className="lead small">{DEMO_DATA ? 'Поиск показывает демонстрационные данные. ' : 'ТОП-15 считается по графу знаний на текущую дату. '}{!SEARCH_ONLY && <a className="ingestion-link" href="#view=ingest">Перейти к сбору и проверке материалов →</a>}</p>
     </section>
   )
 }
@@ -197,7 +204,7 @@ function Results({ res }) {
           <span className="stat-sub">→ к ТОП-15</span>
         </button>
         <button className={`stat card stat-btn ${onlyConfident ? 'is-on' : ''}`} onClick={() => { setOnly(!onlyConfident); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }) }}>
-          <span className="stat-k">{DEMO_DATA ? 'Уверенность модели' : 'Скор сигнала'} &gt; 75%</span>
+          <span className="stat-k">{DEMO_DATA ? 'Уверенность модели' : res.ranking === 'model' ? 'Сигнал по модели' : 'Скор сигнала'} &gt; 75%</span>
           <b className="stat-v c-cyan"><CountUp to={res.stats.confident} /></b>
           <span className="stat-sub">{onlyConfident ? '✓ фильтр включён' : '→ показать только их'}</span>
         </button>
@@ -206,7 +213,7 @@ function Results({ res }) {
       <div className="card list" id="list">
         <div className="list-head">
           <h2>ТОП-{list.length} слабых сигналов</h2>
-          <span className="muted">{DEMO_DATA ? 'Отсортировано по уверенности модели' : 'Порядок: релевантность запросу 75% · скор сигнала 25%'}</span>
+          <span className="muted">{DEMO_DATA ? 'Отсортировано по уверенности модели' : res.ranking === 'model' ? 'Порядок: релевантность запросу 75% · вероятность слабого сигнала по модели 25%' : 'Порядок: релевантность запросу 75% · скор сигнала 25%'}</span>
         </div>
         <div className="row row-h" aria-hidden="true">
           <span>#</span><span>Технология</span><span>Скоринг</span><span>Ключевые предикторы</span><span>Динамика</span><span />
@@ -214,8 +221,8 @@ function Results({ res }) {
         {list.map((s, i) => (
           <a key={s.id} className="row" href={`#${new URLSearchParams({ q: res.query, s: s.id })}`} style={{ '--i': i }}>
             <span className="row-n mono">{String(i + 1).padStart(2, '0')}</span>
-            <span className="row-t"><b>{s.title}</b><small>{s.domain} · стадия: {s.stage}{!DEMO_DATA && s.weakSignalScore != null ? ` · скор сигнала ${pct(s.weakSignalScore)}%` : ''}</small></span>
-            <span><Score v={s.score} /></span>
+            <span className="row-t"><b>{s.title}</b><small>{s.domain} · стадия: {s.stage}{!DEMO_DATA && s.weakSignalScore != null ? ` · ${s.model?.probability != null ? 'вероятность модели' : 'скор сигнала'} ${pct(s.weakSignalScore)}%` : ''}</small></span>
+            <span><Score v={s.score} flag={s.model?.flag} /></span>
             <span className="row-p">{s.summary}</span>
             <span><Spark data={s.trend} /></span>
             <span className="row-go">Инсайт →</span>
@@ -261,19 +268,20 @@ const Legend = () => (
   </div>
 )
 
-function Score({ v, big }) {
+function Score({ v, big, word, flag }) {
   const l = level(v)
   if (big) return (
     <div className={`ring lv-${l}`} style={{ '--p': pct(v) }}>
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" className="ring-bg" /><circle cx="60" cy="60" r="52" className="ring-fg" pathLength="100" /></svg>
       <b><CountUp to={pct(v)} /><small>%</small></b>
-      <span>{DEMO_DATA ? 'уверенность' : 'общий скор'}</span>
+      <span>{word}</span>
     </div>
   )
   return (
     <span className={`score lv-${l}`}>
       <span className="score-bar"><i style={{ width: `${pct(v)}%` }} /></span>
       <b className="mono">{pct(v)}%</b>
+      {flag && <i className="score-flag" title="Выше порога модели, подобранного на valid">сигнал</i>}
     </span>
   )
 }
@@ -290,7 +298,7 @@ function Spark({ data }) {
   )
 }
 
-function Insight({ s, q }) {
+function Insight({ s, q, ranking }) {
   const [g, setG] = useState(null)
   useEffect(() => { setG(null); graph(q, s.id).then(setG, () => setG(false)) }, [s.id])
   const maxW = Math.max(1e-9, ...s.predictors.map((p) => Math.abs(p.weight)))
@@ -313,7 +321,7 @@ function Insight({ s, q }) {
             <span className="pill">{DEMO_DATA ? 'Статус: слабый сигнал' : 'Статус: кандидат в слабые сигналы'}</span>
           </div>
         </div>
-        <Score v={s.score} big />
+        <Score v={s.score} big word={scoreWord(ranking)} />
       </header>
 
       <div className="doc-body">
@@ -333,7 +341,8 @@ function Insight({ s, q }) {
               <blockquote key={i}><p>«{c.text}»</p><cite>{c.url ? <a href={c.url} target="_blank" rel="noreferrer">{c.title}</a> : c.title} · {c.date}</cite></blockquote>
             ))}
           </Section>}
-          <Section n="05" t="Почему это слабый сигнал">
+          {s.model && <Section n="05" t="Оценка модели и LLM"><ModelVerdict m={s.model} /></Section>}
+          <Section n="06" t="Почему это слабый сигнал">
             <p>{s.whyWeak}</p>
             <div className="preds">
               {s.predictors.map((p) => (
@@ -346,11 +355,11 @@ function Insight({ s, q }) {
             </div>
             <p className="muted small">{DEMO_DATA ? 'Вклад признаков в решение модели: вправо — за слабый сигнал, влево — против (признаки зрелости или хайпа).' : 'Топ-3 вклада в скор: вес признака × его z-оценка среди всех кандидатов; вправо — за слабый сигнал, влево — против.'}</p>
           </Section>
-          <Section n="06" t={DEMO_DATA ? 'Почему такая уверенность' : 'Как получен скор'}>
-            {!DEMO_DATA && s.relevanceScore != null && <p>Релевантность запросу: {pct(s.relevanceScore)}%; скор слабого сигнала: {pct(s.weakSignalScore)}%{s.semanticSimilarity != null ? `; косинусная близость: ${s.semanticSimilarity.toFixed(3)}` : ''}; BM25: {s.bm25Score?.toFixed(3)}.</p>}
+          <Section n="07" t={DEMO_DATA ? 'Почему такая уверенность' : 'Как получен скор'}>
+            {!DEMO_DATA && s.relevanceScore != null && <p>Релевантность запросу: {pct(s.relevanceScore)}%; {s.model?.probability != null ? 'вероятность слабого сигнала по модели' : 'скор слабого сигнала'}: {pct(s.weakSignalScore)}%{s.semanticSimilarity != null ? `; косинусная близость: ${s.semanticSimilarity.toFixed(3)}` : ''}; BM25: {s.bm25Score?.toFixed(3)}.</p>}
             <p>{s.confidenceReason}</p>
           </Section>
-          <Section n="07" t="Источники">
+          <Section n="08" t="Источники">
             <div className="srcs">
               {s.sources.map((src, i) => (
                 <div key={i} className="src">
@@ -392,3 +401,21 @@ const Section = ({ n, t, children }) => (
     {children}
   </section>
 )
+
+const share = (x) => (x == null ? '—' : `${pct(x)}%`)
+
+// Что о технологии говорят обученная модель и LLM-разметка траектории.
+function ModelVerdict({ m }) {
+  return (
+    <>
+      <div className="verdict">
+        <div><span>Вероятность слабого сигнала</span><b className="mono">{share(m.probability)}</b><small>{m.flag ? 'выше порога модели' : 'ниже порога модели'}</small></div>
+        <div><span>Вердикт LLM по траектории</span><b>{m.verdict ?? '—'}</b><small>итог к последнему году</small></div>
+        <div><span>Оценка LLM за последний год</span><b className="mono">{m.llmScore ?? '—'}</b><small>0 — слабый сигнал, 1 — нет</small></div>
+        <div><span>Перегретость / зрелость</span><b className="mono">{m.hype ?? '—'} / {m.maturity ?? '—'}</b><small>по оценке LLM, 0…1</small></div>
+      </div>
+      {m.rationale && <blockquote><p>{m.rationale}</p><cite>Обоснование LLM</cite></blockquote>}
+      <p className="muted small">Модель: {m.name ?? 'CatBoost'}{m.snapshot ? `, данные на ${m.snapshot}` : ''}. Модель и LLM — независимые мнения: если они расходятся, технологию стоит проверить вручную.</p>
+    </>
+  )
+}

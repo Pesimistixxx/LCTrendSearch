@@ -53,7 +53,9 @@ async def _hydrate(item):
 
         # A search item has a snippet; the card has the description.
         payload = item.get("payload") or {"id": item["source_id"]}
-        return payload if "description" in payload else await hydrate_hh(payload)
+        return (
+            payload if "description" in payload else await hydrate_hh(payload)
+        )
     return item["payload"]
 
 
@@ -376,9 +378,10 @@ materials(material_id,canonical_id,title,source,source_id,url,status,updated_at)
             )
             for domain in domains:
                 seen = set()
-                queries = [domain["name"], *domain.get(
-                    "search_aliases", domain.get("aliases", [])
-                )]
+                queries = [
+                    domain["name"],
+                    *domain.get("search_aliases", domain.get("aliases", [])),
+                ]
                 for query in queries:
                     if query.strip().casefold() in seen:
                         continue

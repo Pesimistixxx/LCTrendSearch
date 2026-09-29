@@ -1,0 +1,906 @@
+{
+  "target": "signal_llm",
+  "dataset": "artifacts\\modeling\\2026-09-29-dedup\\dataset\\dataset.json",
+  "split": {
+    "valid_start": "2021-11-25",
+    "test_start": "2023-07-12",
+    "embargo": "none",
+    "horizon_months": 36
+  },
+  "rows": {
+    "train": 5300,
+    "valid": 1116,
+    "test": 1336
+  },
+  "positive_families": {
+    "train": 248,
+    "valid": 59,
+    "test": 44
+  },
+  "models": {
+    "catboost": {
+      "temperature_valid_only": 0.4618430344193506,
+      "threshold_valid_f1": 0.4759,
+      "metrics": {
+        "valid": {
+          "rows": 1116,
+          "positive": 192,
+          "positive_rate": 0.17204301075268819,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 228,
+            "precision": 0.35964912280701755,
+            "recall": 0.4270833333333333,
+            "f1": 0.39047619047619053
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 91,
+            "precision": 0.5054945054945055,
+            "recall": 0.23958333333333334,
+            "f1": 0.3250883392226148
+          },
+          "accuracy_0_5": 0.7706093189964157,
+          "brier": 0.1712864446742981,
+          "ece_10_bins": 0.16585306500459598,
+          "pr_auc": 0.3635256145251829,
+          "roc_auc": 0.6920742018398267,
+          "at_valid_f1_threshold": {
+            "threshold": 0.4759,
+            "called": 249,
+            "precision": 0.3654618473895582,
+            "recall": 0.4739583333333333,
+            "f1": 0.4126984126984127
+          },
+          "pr_auc_family_ci95": [
+            0.24364805917316254,
+            0.4934959063221406
+          ]
+        },
+        "test": {
+          "rows": 1336,
+          "positive": 144,
+          "positive_rate": 0.10778443113772455,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 230,
+            "precision": 0.24782608695652175,
+            "recall": 0.3958333333333333,
+            "f1": 0.3048128342245989
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 62,
+            "precision": 0.3064516129032258,
+            "recall": 0.13194444444444445,
+            "f1": 0.18446601941747573
+          },
+          "accuracy_0_5": 0.8053892215568862,
+          "brier": 0.14824922862365555,
+          "ece_10_bins": 0.21193348052308716,
+          "pr_auc": 0.24227919544748797,
+          "roc_auc": 0.7300347222222222,
+          "at_valid_f1_threshold": {
+            "threshold": 0.4759,
+            "called": 253,
+            "precision": 0.23715415019762845,
+            "recall": 0.4166666666666667,
+            "f1": 0.30226700251889166
+          },
+          "pr_auc_family_ci95": [
+            0.1551399866560306,
+            0.3855592073488573
+          ]
+        }
+      },
+      "features": [
+        "technology_age_days",
+        "document_count_snapshot_pct",
+        "documents_last_year_snapshot_pct",
+        "mention_growth_3m",
+        "mention_growth_12m",
+        "mention_growth_24m",
+        "growth_acceleration",
+        "burst_score",
+        "growth_persistence",
+        "active_month_ratio",
+        "decline_rate",
+        "time_since_last_signal_days",
+        "source_type_diversity",
+        "independence_group_diversity",
+        "source_entropy",
+        "independence_group_entropy",
+        "recent_source_convergence",
+        "evidence_chain_length",
+        "country_count",
+        "company_count_snapshot_pct",
+        "university_count",
+        "domain_count",
+        "unique_author_count_snapshot_pct",
+        "new_author_rate",
+        "returning_author_rate",
+        "organization_entropy",
+        "organization_hhi",
+        "new_company_rate",
+        "developer_count",
+        "user_count",
+        "task_count",
+        "commercial_user_count",
+        "reliability_weighted_mentions",
+        "accepted_mention_ratio",
+        "supported_claim_ratio",
+        "independent_evidence_family_count",
+        "speculative_claim_ratio",
+        "duplicate_content_ratio",
+        "claim_to_evidence_gap",
+        "attention_evidence_gap",
+        "economic_evidence_count",
+        "grant_count_snapshot_pct",
+        "grant_amount_usd_real_snapshot_pct",
+        "max_maturity_rank",
+        "max_maturity_rank_missing",
+        "maturity_growth",
+        "implementation_count",
+        "market_concentration",
+        "fulltext_coverage",
+        "repository_source_covered",
+        "new_relation_count",
+        "semantic_novelty",
+        "nearest_known_distance",
+        "branch_new_share",
+        "degree_delta_12m",
+        "pagerank_delta_12m",
+        "community_crossing_count",
+        "neighbor_domain_entropy",
+        "structural_hole_score",
+        "bridge_score",
+        "recombination_surprise",
+        "data_completeness_score",
+        "nb_related_count",
+        "nb_comentioned_count",
+        "nb_related_documents_last_year_snapshot_pct_mean",
+        "nb_related_documents_last_year_snapshot_pct_max",
+        "nb_related_mention_growth_12m_mean",
+        "nb_related_mention_growth_12m_max",
+        "nb_related_burst_score_mean",
+        "nb_related_burst_score_max",
+        "nb_related_new_author_rate_mean",
+        "nb_related_new_author_rate_max",
+        "nb_related_semantic_novelty_mean",
+        "nb_related_technology_age_days_mean",
+        "nb_related_technology_age_days_max",
+        "nb_related_decline_rate_mean",
+        "nb_related_decline_rate_max",
+        "nb_comentioned_documents_last_year_snapshot_pct_mean",
+        "nb_comentioned_documents_last_year_snapshot_pct_max",
+        "nb_comentioned_mention_growth_12m_mean",
+        "nb_comentioned_mention_growth_12m_max",
+        "nb_comentioned_burst_score_mean",
+        "nb_comentioned_burst_score_max",
+        "nb_comentioned_new_author_rate_mean",
+        "nb_comentioned_new_author_rate_max",
+        "nb_comentioned_semantic_novelty_mean",
+        "nb_comentioned_semantic_novelty_max",
+        "nb_comentioned_technology_age_days_mean",
+        "nb_comentioned_technology_age_days_max",
+        "nb_comentioned_decline_rate_mean",
+        "nb_comentioned_decline_rate_max",
+        "nb_growing_share",
+        "nb_organization_count",
+        "nb_company_share"
+      ],
+      "best_iteration": 15,
+      "baseline_medians_train_only": {
+        "technology_age_days": 306.0,
+        "document_count_snapshot_pct": 0.46794871794871795,
+        "documents_last_year_snapshot_pct": 0.8260590500641849,
+        "mention_growth_3m": 0.0,
+        "mention_growth_12m": 0.6931471805599453,
+        "mention_growth_24m": 0.6931471805599453,
+        "growth_acceleration": -0.25277428333257346,
+        "burst_score": -0.13363062095621217,
+        "growth_persistence": 0.14285714285714285,
+        "active_month_ratio": 0.125,
+        "decline_rate": 0.0,
+        "time_since_last_signal_days": 141.0,
+        "source_type_diversity": 1.0,
+        "independence_group_diversity": 1.0,
+        "source_entropy": 0.0,
+        "independence_group_entropy": 0.0,
+        "recent_source_convergence": 1.0,
+        "evidence_chain_length": 0.0,
+        "country_count": 2.0,
+        "company_count_snapshot_pct": 0.3957356076759062,
+        "university_count": 3.0,
+        "domain_count": 3.0,
+        "unique_author_count_snapshot_pct": 0.7435622317596566,
+        "new_author_rate": 1.0,
+        "returning_author_rate": 0.0,
+        "organization_entropy": 1.7478680974667573,
+        "organization_hhi": 0.20000000000000004,
+        "new_company_rate": 1.0,
+        "developer_count": 0.0,
+        "user_count": 0.0,
+        "task_count": 0.0,
+        "commercial_user_count": 0.0,
+        "reliability_weighted_mentions": 2.0,
+        "accepted_mention_ratio": 0.5,
+        "supported_claim_ratio": 1.0,
+        "independent_evidence_family_count": 0.0,
+        "speculative_claim_ratio": 0.0,
+        "duplicate_content_ratio": 0.0,
+        "claim_to_evidence_gap": 0.0,
+        "attention_evidence_gap": 1.0986122886681098,
+        "economic_evidence_count": 0.0,
+        "grant_count_snapshot_pct": 0.5676691729323309,
+        "grant_amount_usd_real_snapshot_pct": 0.5674846625766872,
+        "max_maturity_rank": 2.0,
+        "max_maturity_rank_missing": 1.0,
+        "maturity_growth": 1.0,
+        "implementation_count": 0.0,
+        "market_concentration": 0.5,
+        "fulltext_coverage": 0.0,
+        "repository_source_covered": 0.0,
+        "new_relation_count": 5.0,
+        "semantic_novelty": 0.131747,
+        "nearest_known_distance": 0.11640970904263592,
+        "branch_new_share": 0.25,
+        "degree_delta_12m": 3.0,
+        "pagerank_delta_12m": 0.00040197187182509404,
+        "community_crossing_count": 0.0,
+        "neighbor_domain_entropy": 2.3151912660778113,
+        "structural_hole_score": 0.6035665294924555,
+        "bridge_score": 1.227526981201611,
+        "recombination_surprise": 5.643733846747627,
+        "data_completeness_score": 0.6709677419354838,
+        "nb_related_count": 0.0,
+        "nb_comentioned_count": 4.0,
+        "nb_related_documents_last_year_snapshot_pct_mean": 0.7900207900207901,
+        "nb_related_documents_last_year_snapshot_pct_max": 0.8196216065396998,
+        "nb_related_mention_growth_12m_mean": 0.5493061443340549,
+        "nb_related_mention_growth_12m_max": 0.6931471805599453,
+        "nb_related_burst_score_mean": -0.13363062095621217,
+        "nb_related_burst_score_max": -0.13363062095621217,
+        "nb_related_new_author_rate_mean": 1.0,
+        "nb_related_new_author_rate_max": 1.0,
+        "nb_related_semantic_novelty_mean": 0.12532175,
+        "nb_related_technology_age_days_mean": 820.0,
+        "nb_related_technology_age_days_max": 911.5,
+        "nb_related_decline_rate_mean": 0.23076923076923075,
+        "nb_related_decline_rate_max": 0.3076923076923077,
+        "nb_comentioned_documents_last_year_snapshot_pct_mean": 0.8024691358024691,
+        "nb_comentioned_documents_last_year_snapshot_pct_max": 0.9914529914529915,
+        "nb_comentioned_mention_growth_12m_mean": 0.5476544917787118,
+        "nb_comentioned_mention_growth_12m_max": 1.0986122886681098,
+        "nb_comentioned_burst_score_mean": -0.08251725479947036,
+        "nb_comentioned_burst_score_max": 0.8017837257372732,
+        "nb_comentioned_new_author_rate_mean": 1.0,
+        "nb_comentioned_new_author_rate_max": 1.0,
+        "nb_comentioned_semantic_novelty_mean": 0.1406658025210084,
+        "nb_comentioned_semantic_novelty_max": 0.20332,
+        "nb_comentioned_technology_age_days_mean": 806.0,
+        "nb_comentioned_technology_age_days_max": 1737.0,
+        "nb_comentioned_decline_rate_mean": 0.16666666666666669,
+        "nb_comentioned_decline_rate_max": 0.5,
+        "nb_growing_share": 0.75,
+        "nb_organization_count": 6.0,
+        "nb_company_share": 0.0
+      },
+      "importance": {
+        "domain_count": 11.948006798875756,
+        "nb_comentioned_technology_age_days_max": 9.738774263985125,
+        "independent_evidence_family_count": 7.183226025998808,
+        "recombination_surprise": 6.865368581820554,
+        "unique_author_count_snapshot_pct": 6.0961035208057615,
+        "nb_comentioned_semantic_novelty_mean": 5.498848956984589,
+        "supported_claim_ratio": 5.369018480865895,
+        "structural_hole_score": 5.134944154755098,
+        "nb_comentioned_documents_last_year_snapshot_pct_max": 4.8928640857309205,
+        "nearest_known_distance": 4.204038253754815,
+        "new_company_rate": 3.374262754922757,
+        "semantic_novelty": 3.110898716635813,
+        "technology_age_days": 2.9263781784242147,
+        "claim_to_evidence_gap": 2.6621848149449794,
+        "nb_comentioned_semantic_novelty_max": 2.640926812540893,
+        "pagerank_delta_12m": 2.3961847637648694,
+        "nb_comentioned_mention_growth_12m_max": 1.9723644849304736,
+        "organization_hhi": 1.85979722790494,
+        "documents_last_year_snapshot_pct": 1.8364438172052364,
+        "organization_entropy": 1.4247273571368146
+      }
+    },
+    "hgt": {
+      "temperature_valid_only": 0.9226808345905881,
+      "threshold_valid_f1": 0.6193,
+      "metrics": {
+        "valid": {
+          "rows": 1116,
+          "positive": 192,
+          "positive_rate": 0.17204301075268819,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 292,
+            "precision": 0.3184931506849315,
+            "recall": 0.484375,
+            "f1": 0.384297520661157
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 100,
+            "precision": 0.39,
+            "recall": 0.203125,
+            "f1": 0.2671232876712329
+          },
+          "accuracy_0_5": 0.7329749103942652,
+          "brier": 0.18430838280449977,
+          "ece_10_bins": 0.2067850058898379,
+          "pr_auc": 0.3696137765242893,
+          "roc_auc": 0.7179608585858587,
+          "at_valid_f1_threshold": {
+            "threshold": 0.6193,
+            "called": 203,
+            "precision": 0.41379310344827586,
+            "recall": 0.4375,
+            "f1": 0.4253164556962026
+          },
+          "pr_auc_family_ci95": [
+            0.25210335162645775,
+            0.4918490241021825
+          ]
+        },
+        "test": {
+          "rows": 1336,
+          "positive": 144,
+          "positive_rate": 0.10778443113772455,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 434,
+            "precision": 0.1912442396313364,
+            "recall": 0.5763888888888888,
+            "f1": 0.28719723183391
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 87,
+            "precision": 0.367816091954023,
+            "recall": 0.2222222222222222,
+            "f1": 0.27705627705627706
+          },
+          "accuracy_0_5": 0.6916167664670658,
+          "brier": 0.1959587006473719,
+          "ece_10_bins": 0.2992482436104069,
+          "pr_auc": 0.25111528333004124,
+          "roc_auc": 0.7199326528709917,
+          "at_valid_f1_threshold": {
+            "threshold": 0.6193,
+            "called": 246,
+            "precision": 0.21138211382113822,
+            "recall": 0.3611111111111111,
+            "f1": 0.26666666666666666
+          },
+          "pr_auc_family_ci95": [
+            0.1568329173427857,
+            0.40313681457666284
+          ]
+        }
+      },
+      "features": [
+        "technology_age_days",
+        "document_count_snapshot_pct",
+        "documents_last_year_snapshot_pct",
+        "mention_growth_3m",
+        "mention_growth_12m",
+        "mention_growth_24m",
+        "growth_acceleration",
+        "burst_score",
+        "growth_persistence",
+        "active_month_ratio",
+        "decline_rate",
+        "time_since_last_signal_days",
+        "source_type_diversity",
+        "independence_group_diversity",
+        "source_entropy",
+        "independence_group_entropy",
+        "recent_source_convergence",
+        "evidence_chain_length",
+        "country_count",
+        "company_count_snapshot_pct",
+        "university_count",
+        "domain_count",
+        "unique_author_count_snapshot_pct",
+        "new_author_rate",
+        "returning_author_rate",
+        "organization_entropy",
+        "organization_hhi",
+        "new_company_rate",
+        "developer_count",
+        "user_count",
+        "task_count",
+        "commercial_user_count",
+        "reliability_weighted_mentions",
+        "accepted_mention_ratio",
+        "supported_claim_ratio",
+        "independent_evidence_family_count",
+        "speculative_claim_ratio",
+        "duplicate_content_ratio",
+        "claim_to_evidence_gap",
+        "attention_evidence_gap",
+        "economic_evidence_count",
+        "grant_count_snapshot_pct",
+        "grant_amount_usd_real_snapshot_pct",
+        "max_maturity_rank",
+        "max_maturity_rank_missing",
+        "maturity_growth",
+        "implementation_count",
+        "market_concentration",
+        "fulltext_coverage",
+        "repository_source_covered",
+        "new_relation_count",
+        "semantic_novelty",
+        "nearest_known_distance",
+        "branch_new_share",
+        "degree_delta_12m",
+        "pagerank_delta_12m",
+        "community_crossing_count",
+        "neighbor_domain_entropy",
+        "structural_hole_score",
+        "bridge_score",
+        "recombination_surprise",
+        "data_completeness_score"
+      ],
+      "scaler_train_only": {
+        "technology_age_days": {
+          "center": 306.0,
+          "scale": 1232.0
+        },
+        "document_count_snapshot_pct": {
+          "center": 0.46794871794871795,
+          "scale": 1.0
+        },
+        "documents_last_year_snapshot_pct": {
+          "center": 0.8260590500641849,
+          "scale": 1.0
+        },
+        "mention_growth_3m": {
+          "center": 0.0,
+          "scale": 1.3862943611198906
+        },
+        "mention_growth_12m": {
+          "center": 0.6931471805599453,
+          "scale": 1.0
+        },
+        "mention_growth_24m": {
+          "center": 0.6931471805599453,
+          "scale": 1.0
+        },
+        "growth_acceleration": {
+          "center": -0.25277428333257346,
+          "scale": 2.0794415416798357
+        },
+        "burst_score": {
+          "center": -0.13363062095621217,
+          "scale": 1.053760041076758
+        },
+        "growth_persistence": {
+          "center": 0.14285714285714285,
+          "scale": 1.0
+        },
+        "active_month_ratio": {
+          "center": 0.125,
+          "scale": 1.0
+        },
+        "decline_rate": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "time_since_last_signal_days": {
+          "center": 141.0,
+          "scale": 185.0
+        },
+        "source_type_diversity": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "independence_group_diversity": {
+          "center": 1.0,
+          "scale": 2.0
+        },
+        "source_entropy": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "independence_group_entropy": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "recent_source_convergence": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "evidence_chain_length": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "country_count": {
+          "center": 2.0,
+          "scale": 3.0
+        },
+        "company_count_snapshot_pct": {
+          "center": 0.3957356076759062,
+          "scale": 1.0
+        },
+        "university_count": {
+          "center": 3.0,
+          "scale": 5.0
+        },
+        "domain_count": {
+          "center": 3.0,
+          "scale": 3.0
+        },
+        "unique_author_count_snapshot_pct": {
+          "center": 0.7435622317596566,
+          "scale": 1.0
+        },
+        "new_author_rate": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "returning_author_rate": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "organization_entropy": {
+          "center": 1.7478680974667573,
+          "scale": 1.299282984130261
+        },
+        "organization_hhi": {
+          "center": 0.20000000000000004,
+          "scale": 1.0
+        },
+        "new_company_rate": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "developer_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "user_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "task_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "commercial_user_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "reliability_weighted_mentions": {
+          "center": 2.0,
+          "scale": 4.0
+        },
+        "accepted_mention_ratio": {
+          "center": 0.5,
+          "scale": 1.0
+        },
+        "supported_claim_ratio": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "independent_evidence_family_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "speculative_claim_ratio": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "duplicate_content_ratio": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "claim_to_evidence_gap": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "attention_evidence_gap": {
+          "center": 1.0986122886681098,
+          "scale": 1.0986122886681096
+        },
+        "economic_evidence_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "grant_count_snapshot_pct": {
+          "center": 0.5676691729323309,
+          "scale": 1.0
+        },
+        "grant_amount_usd_real_snapshot_pct": {
+          "center": 0.5674846625766872,
+          "scale": 1.0
+        },
+        "max_maturity_rank": {
+          "center": 2.0,
+          "scale": 2.0
+        },
+        "max_maturity_rank_missing": {
+          "center": 1.0,
+          "scale": 1.0
+        },
+        "maturity_growth": {
+          "center": 1.0,
+          "scale": 3.0
+        },
+        "implementation_count": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "market_concentration": {
+          "center": 0.5,
+          "scale": 1.0
+        },
+        "fulltext_coverage": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "repository_source_covered": {
+          "center": 0.0,
+          "scale": 1.0
+        },
+        "new_relation_count": {
+          "center": 5.0,
+          "scale": 5.0
+        },
+        "semantic_novelty": {
+          "center": 0.131747,
+          "scale": 1.0
+        },
+        "nearest_known_distance": {
+          "center": 0.11640970904263592,
+          "scale": 1.0
+        },
+        "branch_new_share": {
+          "center": 0.25,
+          "scale": 1.0
+        },
+        "degree_delta_12m": {
+          "center": 3.0,
+          "scale": 5.0
+        },
+        "pagerank_delta_12m": {
+          "center": 0.00040197187182509404,
+          "scale": 1.0
+        },
+        "community_crossing_count": {
+          "center": 0.0,
+          "scale": 2.0
+        },
+        "neighbor_domain_entropy": {
+          "center": 2.3151912660778113,
+          "scale": 1.8590837989099203
+        },
+        "structural_hole_score": {
+          "center": 0.6035665294924555,
+          "scale": 1.0
+        },
+        "bridge_score": {
+          "center": 1.227526981201611,
+          "scale": 2.1397328842158343
+        },
+        "recombination_surprise": {
+          "center": 5.643733846747627,
+          "scale": 1.7027975447701937
+        },
+        "data_completeness_score": {
+          "center": 0.6709677419354838,
+          "scale": 1.0
+        }
+      },
+      "best_epoch": 3,
+      "valid_pr_auc_by_epoch": [
+        0.3675,
+        0.35727,
+        0.36961,
+        0.36269,
+        0.32618,
+        0.28997,
+        0.32813,
+        0.29411,
+        0.31885,
+        0.31412,
+        0.31487,
+        0.32034,
+        0.3143
+      ]
+    },
+    "stacked": {
+      "temperature_valid_only": 0.4261337164478962,
+      "threshold_valid_f1": 0.5368,
+      "metrics": {
+        "valid": {
+          "rows": 1116,
+          "positive": 192,
+          "positive_rate": 0.17204301075268819,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 236,
+            "precision": 0.3601694915254237,
+            "recall": 0.4427083333333333,
+            "f1": 0.397196261682243
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 114,
+            "precision": 0.4824561403508772,
+            "recall": 0.2864583333333333,
+            "f1": 0.35947712418300654
+          },
+          "accuracy_0_5": 0.7688172043010753,
+          "brier": 0.17151599206662957,
+          "ece_10_bins": 0.17060733146601387,
+          "pr_auc": 0.3927262081572469,
+          "roc_auc": 0.7064901244588745,
+          "at_valid_f1_threshold": {
+            "threshold": 0.5368,
+            "called": 208,
+            "precision": 0.39903846153846156,
+            "recall": 0.4322916666666667,
+            "f1": 0.41500000000000004
+          },
+          "pr_auc_family_ci95": [
+            0.2740247951076108,
+            0.5327181469709844
+          ]
+        },
+        "test": {
+          "rows": 1336,
+          "positive": 144,
+          "positive_rate": 0.10778443113772455,
+          "at_0_5": {
+            "threshold": 0.5,
+            "called": 286,
+            "precision": 0.24475524475524477,
+            "recall": 0.4861111111111111,
+            "f1": 0.32558139534883723
+          },
+          "at_0_75": {
+            "threshold": 0.75,
+            "called": 117,
+            "precision": 0.23931623931623933,
+            "recall": 0.19444444444444445,
+            "f1": 0.21455938697318008
+          },
+          "accuracy_0_5": 0.7829341317365269,
+          "brier": 0.16716798413069697,
+          "ece_10_bins": 0.24436854627705,
+          "pr_auc": 0.26173090191716564,
+          "roc_auc": 0.6927228980238628,
+          "at_valid_f1_threshold": {
+            "threshold": 0.5368,
+            "called": 261,
+            "precision": 0.2567049808429119,
+            "recall": 0.4652777777777778,
+            "f1": 0.33086419753086416
+          },
+          "pr_auc_family_ci95": [
+            0.15690338692557915,
+            0.41223093446960146
+          ]
+        }
+      },
+      "features": [
+        "technology_age_days",
+        "document_count_snapshot_pct",
+        "documents_last_year_snapshot_pct",
+        "mention_growth_3m",
+        "mention_growth_12m",
+        "mention_growth_24m",
+        "growth_acceleration",
+        "burst_score",
+        "growth_persistence",
+        "active_month_ratio",
+        "decline_rate",
+        "time_since_last_signal_days",
+        "source_type_diversity",
+        "independence_group_diversity",
+        "source_entropy",
+        "independence_group_entropy",
+        "recent_source_convergence",
+        "evidence_chain_length",
+        "country_count",
+        "company_count_snapshot_pct",
+        "university_count",
+        "domain_count",
+        "unique_author_count_snapshot_pct",
+        "new_author_rate",
+        "returning_author_rate",
+        "organization_entropy",
+        "organization_hhi",
+        "new_company_rate",
+        "developer_count",
+        "user_count",
+        "task_count",
+        "commercial_user_count",
+        "reliability_weighted_mentions",
+        "accepted_mention_ratio",
+        "supported_claim_ratio",
+        "independent_evidence_family_count",
+        "speculative_claim_ratio",
+        "duplicate_content_ratio",
+        "claim_to_evidence_gap",
+        "attention_evidence_gap",
+        "economic_evidence_count",
+        "grant_count_snapshot_pct",
+        "grant_amount_usd_real_snapshot_pct",
+        "max_maturity_rank",
+        "max_maturity_rank_missing",
+        "maturity_growth",
+        "implementation_count",
+        "market_concentration",
+        "fulltext_coverage",
+        "repository_source_covered",
+        "new_relation_count",
+        "semantic_novelty",
+        "nearest_known_distance",
+        "branch_new_share",
+        "degree_delta_12m",
+        "pagerank_delta_12m",
+        "community_crossing_count",
+        "neighbor_domain_entropy",
+        "structural_hole_score",
+        "bridge_score",
+        "recombination_surprise",
+        "data_completeness_score",
+        "nb_related_count",
+        "nb_comentioned_count",
+        "nb_related_documents_last_year_snapshot_pct_mean",
+        "nb_related_documents_last_year_snapshot_pct_max",
+        "nb_related_mention_growth_12m_mean",
+        "nb_related_mention_growth_12m_max",
+        "nb_related_burst_score_mean",
+        "nb_related_burst_score_max",
+        "nb_related_new_author_rate_mean",
+        "nb_related_new_author_rate_max",
+        "nb_related_semantic_novelty_mean",
+        "nb_related_technology_age_days_mean",
+        "nb_related_technology_age_days_max",
+        "nb_related_decline_rate_mean",
+        "nb_related_decline_rate_max",
+        "nb_comentioned_documents_last_year_snapshot_pct_mean",
+        "nb_comentioned_documents_last_year_snapshot_pct_max",
+        "nb_comentioned_mention_growth_12m_mean",
+        "nb_comentioned_mention_growth_12m_max",
+        "nb_comentioned_burst_score_mean",
+        "nb_comentioned_burst_score_max",
+        "nb_comentioned_new_author_rate_mean",
+        "nb_comentioned_new_author_rate_max",
+        "nb_comentioned_semantic_novelty_mean",
+        "nb_comentioned_semantic_novelty_max",
+        "nb_comentioned_technology_age_days_mean",
+        "nb_comentioned_technology_age_days_max",
+        "nb_comentioned_decline_rate_mean",
+        "nb_comentioned_decline_rate_max",
+        "nb_growing_share",
+        "nb_organization_count",
+        "nb_company_share",
+        "hgt_oof_probability"
+      ],
+      "folds": 5,
+      "fold_epochs": 3,
+      "hgt_feature_importance": 24.857381310878893,
+      "hgt_feature_rank": 1
+    }
+  },
+  "winner": {
+    "model": "stacked",
+    "rule": "highest valid PR-AUC, fixed before looking at test",
+    "valid_pr_auc": {
+      "catboost": 0.3635256145251829,
+      "hgt": 0.3696137765242893,
+      "stacked": 0.3927262081572469
+    }
+  },
+  "warning": "Labels come from each technology's own future in our corpus (auto_future_outcome); silence in the corpus is not proof of silence in the world. Few positive families make every metric wide: read the family bootstrap intervals."
+}

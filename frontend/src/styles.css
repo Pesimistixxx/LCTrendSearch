@@ -380,3 +380,11 @@ cite { font: 600 12px var(--mono); color: var(--violet); font-style: normal; }
 /* мини-граф в боковой колонке рисуется мельче — увеличиваем подписи */
 .side-card .graph-label { font-size: 20px; stroke-width: 6px; }
 .side-card .graph-tip { font-size: 18px; }
+
+/* Оценка модели и LLM в карточке технологии */
+.verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 14px; }
+.verdict > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: rgba(127, 127, 127, .08); }
+.verdict span { font-size: 12px; opacity: .7; }
+.verdict b { font-size: 20px; }
+.verdict small { font-size: 11px; opacity: .6; }
+.score-flag { margin-left: 6px; font-style: normal; font-size: 10px; padding: 1px 6px; border-radius: 99px; border: 1px solid currentColor; opacity: .8; }
