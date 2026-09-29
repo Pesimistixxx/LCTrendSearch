@@ -510,9 +510,15 @@ def search_response(
     chosen = _hybrid_matches(
         corpus, view, candidates, query, query_embedding, config
     )
+    top_k = int(config["top_k"])
+    # Past the TOP-K, every match the model flags as a weak signal is
+    # listed too, with the same evidence (quotes, sources).
+    flagged = [
+        item for item in chosen[top_k:] if (item.get("label") or {}).get("flag")
+    ][: int(config.get("max_weak_signals", 200))]
     signals = [
         _signal(corpus, view, item, config, domain_names)
-        for item in chosen[: int(config["top_k"])]
+        for item in chosen[:top_k] + flagged
     ]
     in_scope = rejected_scope != "all"
     rejected: List[Dict[str, str]] = (
@@ -557,10 +563,14 @@ def search_response(
             if any(_probability(item.get("label")) is not None for item in top)
             else "rule"
         ),
+        "topK": top_k,
         "stats": {
             "sourcesProcessed": len(view.documents),
             "candidates": len(chosen),
             "confident": sum(item["score"] > 0.75 for item in top),
+            "weakSignals": sum(
+                bool((item.get("label") or {}).get("flag")) for item in chosen
+            ),
         },
         "signals": signals,
         "rejected": rejected,

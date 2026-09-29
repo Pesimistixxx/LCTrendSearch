@@ -143,7 +143,9 @@ def test_search_returns_the_frontend_contract_for_a_domain():
         "confident": sum(
             signal["weakSignalScore"] > 0.75 for signal in response["signals"]
         ),
+        "weakSignals": 0,
     }
+    assert response["topK"] == settings()["top_k"]
     signal = response["signals"][0]
     assert set(signal) >= SIGNAL_KEYS
     assert 0 < signal["score"] < 1
@@ -258,6 +260,39 @@ def test_search_returns_at_most_fifteen_of_many_matching_technologies():
     response = search_response(TemporalCorpus(data), "fintech", T, settings())
     assert response["stats"]["candidates"] == 20
     assert len(response["signals"]) == 15
+
+
+def test_flagged_weak_signals_past_the_top_k_are_listed_too():
+    data = {"versions": [], "mentions": [], "technologies": []}
+    for index in range(20):
+        technology(
+            data,
+            f"pay-{index}",
+            f"Programmable payments {index}",
+            FINTECH,
+            [("2020-01-01", "a"), ("2020-10-01", "b")],
+        )
+    labels = {
+        f"pay-{index}": {"probability": 0.1, "flag": False, "is_technology": True}
+        for index in range(20)
+    }
+    # Low probability ranks them last, past the TOP-15.
+    for index in (3, 7):
+        labels[f"pay-{index}"] = {
+            "probability": 0.0,
+            "flag": True,
+            "is_technology": True,
+        }
+    config = settings()
+    config["max_weak_signals"] = 1
+    response = search_response(
+        TemporalCorpus(data), "fintech", T, config, labels=labels
+    )
+    assert response["stats"]["weakSignals"] == 2
+    assert len(response["signals"]) == 16
+    extra = response["signals"][15]
+    assert extra["model"]["flag"] is True
+    assert "quotes" in extra and "sources" in extra
 
 
 def test_model_probability_replaces_the_rule_score_and_noise_is_rejected():

@@ -181,7 +181,10 @@ function Results({ res }) {
   const [onlyConfident, setOnly] = useState(false)
   const [g, setG] = useState(null)
   useEffect(() => { graph(res.query).then(setG, () => setG(false)) }, [res.query])
-  const list = onlyConfident ? res.signals.filter((s) => (s.weakSignalScore ?? s.score) > 0.75) : res.signals
+  const top = res.signals.slice(0, res.topK ?? res.signals.length)
+  const list = onlyConfident ? top.filter((s) => (s.weakSignalScore ?? s.score) > 0.75) : top
+  // Все технологии, которые модель отметила как слабый сигнал, — и из ТОП-15, и за его пределами.
+  const weak = res.signals.filter((s) => s.model?.flag)
 
   return (
     <section className="results">
@@ -230,6 +233,8 @@ function Results({ res }) {
         ))}
       </div>
 
+      {!DEMO_DATA && <WeakTable q={res.query} rows={weak} total={res.stats.weakSignals ?? weak.length} />}
+
       <div className="grid2">
         <div className="card graph-card">
           <div className="list-head">
@@ -256,6 +261,46 @@ function Results({ res }) {
         </div>
       </div>
     </section>
+  )
+}
+
+// Таблица всех слабых сигналов по запросу: вероятность модели и доказательства.
+function WeakTable({ q, rows, total }) {
+  return (
+    <div className="card list weak" id="weak">
+      <div className="list-head">
+        <h2>Все слабые сигналы по запросу: {rows.length}</h2>
+        <span className="muted">{total > rows.length ? `показано ${rows.length} из ${total} · ` : ''}технологии выше порога модели, с цитатами и источниками</span>
+      </div>
+      {rows.length === 0 ? <p className="muted weak-empty">Модель не отметила ни одной технологии по этому запросу как слабый сигнал.</p> : (
+        <div className="weak-scroll">
+          <table className="weak-table">
+            <thead>
+              <tr><th>#</th><th>Технология</th><th>Вероятность</th><th>Стадия</th><th>Доказательство</th><th>Источники</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((s, i) => {
+                const quote = s.quotes?.[0]
+                return (
+                  <tr key={s.id}>
+                    <td className="mono muted">{String(i + 1).padStart(2, '0')}</td>
+                    <td><a href={`#${new URLSearchParams({ q, s: s.id })}`}><b>{s.title}</b></a><small>{s.domain}{s.model?.verdict ? ` · LLM: ${s.model.verdict}` : ''}</small></td>
+                    <td className="mono">{share(s.model?.probability)}</td>
+                    <td>{s.stage}</td>
+                    <td className="weak-ev">{quote
+                      ? <><q>{quote.text}</q><small>{quote.url ? <a href={quote.url} target="_blank" rel="noreferrer">{quote.title}</a> : quote.title}{quote.date ? ` · ${quote.date}` : ''}</small></>
+                      : <span className="muted">{s.whyWeak}</span>}</td>
+                    <td className="weak-src">{s.sources.length === 0 ? <span className="muted">—</span> : s.sources.slice(0, 3).map((src, k) => (
+                      <span key={k}>{src.url ? <a href={src.url} target="_blank" rel="noreferrer">{src.title}</a> : src.title}<small className={`trust trust-${src.trust}`}>{src.type}{src.date ? ` · ${src.date}` : ''}</small></span>
+                    ))}{s.sources.length > 3 && <small className="muted">ещё {s.sources.length - 3}</small>}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
